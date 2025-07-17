@@ -1,763 +1,511 @@
 import React, { useState, useEffect } from 'react';
-import { collection, addDoc, query, onSnapshot, serverTimestamp, doc, setDoc, deleteDoc, getDoc } from 'firebase/firestore';
+import { collection, query, onSnapshot, doc } from 'firebase/firestore';
+import SunriseTemplate from './BillTemplates';
 
-const Sales = ({ db, userId, isAuthReady, appId }) => {
-    // State for the current bill being created or edited
-    const [billDate, setBillDate] = useState(new Date().toISOString().split('T')[0]);
-    const [selectedCustomerId, setSelectedCustomerId] = useState('');
-    const [customerFirmName, setCustomerFirmName] = useState('');
-    const [customerPersonName, setCustomerPersonName] = useState('');
-    const [customerAddress, setCustomerAddress] = useState('');
-    const [customerContact, setCustomerContact] = useState('');
-    const [customerEmail, setCustomerEmail] = useState('');
-    const [customerWhatsapp, setCustomerWhatsapp] = useState('');
-    const [customerGSTIN, setCustomerGSTIN] = useState('');
+const initialItemRow = {
+  item: '',
+  nos: 1,
+  length: 0,
+  height: 0,
+  area: 0,
+  rate: 0,
+  amount: 0,
+  sgst: 0,
+  cgst: 0,
+  igst: 0,
+  total: 0,
+};
 
-    const [workProgress, setWorkProgress] = useState('Ordered');
-    const [paymentProgress, setPaymentProgress] = useState('Payment Pending');
-    const [paymentAmount, setPaymentAmount] = useState('');
-    const [billRemark, setBillRemark] = useState('');
-    const [billItems, setBillItems] = useState([]);
+const areaUnits = [
+  'Sq. Ft.', 'Sq. Inch', 'Sq. Yard', 'Square Meter', 'Cubic Feet', 'Cubic Meter', 'Cu. Inch', 'Cu. Yard'
+];
 
-    // States for adding items to sales bill
-    const [selectedSalesItemId, setSelectedSalesItemId] = useState('');
-    const [currentNos, setCurrentNos] = useState('');
-    const [currentLength, setCurrentLength] = useState('');
-    const [currentHeight, setCurrentHeight] = useState('');
-    const [currentRate, setCurrentRate] = useState('');
-    const [currentArea, setCurrentArea] = useState(0);
-    const [currentItemAmount, setCurrentItemAmount] = useState(0);
+function getFinancialYear(date) {
+  const d = new Date(date);
+  const year = d.getFullYear();
+  const month = d.getMonth() + 1;
+  if (month >= 4) {
+    return `${year}-${(year + 1).toString().slice(-2)}`;
+  } else {
+    return `${year - 1}-${year.toString().slice(-2)}`;
+  }
+}
 
-    // State for displaying messages
-    const [message, setMessage] = useState('');
-    // State for fetched sales bills
+function Sales({ db, userId, isAuthReady, appId }) {
+  const [invoiceNumber, setInvoiceNumber] = useState('');
+  const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);
+  const [party, setParty] = useState('');
+  const [paymentStatus, setPaymentStatus] = useState('Pending');
+  const [notes, setNotes] = useState('');
+  const [rows, setRows] = useState([{ ...initialItemRow }]);
+  // Remove template selection, always use SunriseTemplate
+  const [showPrint, setShowPrint] = useState(false);
+
+  // Live data states
+  const [parties, setParties] = useState([]);
+  const [items, setItems] = useState([]);
     const [salesBills, setSalesBills] = useState([]);
-    // State for available buyers from Parties module
-    const [buyersList, setBuyersList] = useState([]);
-    // State for available items from Items module
-    const [itemsList, setItemsList] = useState([]);
+  const [purchases, setPurchases] = useState([]);
+  const [stockMap, setStockMap] = useState({}); // { itemId: stockQty }
+  const [company, setCompany] = useState({});
 
-    // State for editing mode
-    const [editingBillId, setEditingBillId] = useState(null);
-
-
-    // Fetch buyers from Parties module and items from Items module
+  // Fetch parties
     useEffect(() => {
         if (db && userId && isAuthReady) {
             const partiesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/parties`);
-            const unsubscribeParties = onSnapshot(partiesCollectionRef, (snapshot) => {
-                const buyers = [];
+      const unsubscribe = onSnapshot(partiesCollectionRef, (snapshot) => {
+        const partiesArr = [];
                 snapshot.forEach((doc) => {
-                    const partyData = doc.data();
-                    if (partyData.partyType === 'Buyer' || partyData.partyType === 'Both') {
-                        buyers.push({ id: doc.id, ...partyData });
-                    }
-                });
-                buyers.sort((a, b) => a.firmName.localeCompare(b.firmName));
-                setBuyersList(buyers);
-            }, (error) => {
-                console.error("Error fetching buyers:", error);
-            });
+          partiesArr.push({ id: doc.id, ...doc.data() });
+        });
+        partiesArr.sort((a, b) => (a.firmName || '').localeCompare(b.firmName || ''));
+        setParties(partiesArr);
+      });
+      return () => unsubscribe();
+    }
+  }, [db, userId, isAuthReady, appId]);
 
+  // Fetch items
+  useEffect(() => {
+    if (db && userId && isAuthReady) {
             const itemsCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/items`);
-            const unsubscribeItems = onSnapshot(itemsCollectionRef, (snapshot) => {
-                const items = [];
+      const unsubscribe = onSnapshot(itemsCollectionRef, (snapshot) => {
+        const itemsArr = [];
                 snapshot.forEach((doc) => {
-                    items.push({ id: doc.id, ...doc.data() });
-                });
-                items.sort((a, b) => a.itemName.localeCompare(b.itemName));
-                setItemsList(items);
-            }, (error) => {
-                console.error("Error fetching items for sales module:", error);
-            });
-
-            return () => {
-                unsubscribeParties();
-                unsubscribeItems();
-            };
+          itemsArr.push({ id: doc.id, ...doc.data() });
+        });
+        itemsArr.sort((a, b) => (a.itemName || '').localeCompare(b.itemName || ''));
+        setItems(itemsArr);
+      });
+      return () => unsubscribe();
         }
     }, [db, userId, isAuthReady, appId]);
 
-    // Handle item selection from dropdown
-    const handleSalesItemSelect = (e) => {
-        const itemId = e.target.value;
-        setSelectedSalesItemId(itemId);
-        const selectedItem = itemsList.find(item => item.id === itemId);
-        if (selectedItem) {
-            setCurrentRate(selectedItem.defaultRate || '');
-        } else {
-            setCurrentRate('');
-        }
-    };
-
-    // Calculate Area and Item Amount for the current item
-    useEffect(() => {
-        const numNos = parseFloat(currentNos) || 0;
-        const numLength = parseFloat(currentLength) || 0;
-        const numHeight = parseFloat(currentHeight) || 0;
-        const numRate = parseFloat(currentRate) || 0;
-
-        let calculatedArea = 0;
-        let calculatedItemAmount = 0;
-
-        if (numLength > 0 && numHeight > 0) {
-            calculatedArea = numLength * numHeight;
-            calculatedItemAmount = numNos * calculatedArea * numRate;
-        } else {
-            calculatedItemAmount = numNos * numRate;
-        }
-
-        setCurrentArea(calculatedArea.toFixed(2));
-        setCurrentItemAmount(calculatedItemAmount.toFixed(2));
-    }, [currentNos, currentLength, currentHeight, currentRate]);
-
-    // Fetch sales data from Firestore
+  // Fetch sales bills
     useEffect(() => {
         if (db && userId && isAuthReady) {
             const salesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/salesBills`);
-            const q = query(salesCollectionRef);
-
-            const unsubscribe = onSnapshot(q, (snapshot) => {
+      const unsubscribe = onSnapshot(salesCollectionRef, (snapshot) => {
                 const bills = [];
                 snapshot.forEach((doc) => {
                     bills.push({ id: doc.id, ...doc.data() });
                 });
-                bills.sort((a, b) => new Date(b.billDate) - new Date(a.billDate));
+        bills.sort((a, b) => (b.invoiceDate || '').localeCompare(a.invoiceDate || ''));
                 setSalesBills(bills);
-            }, (error) => {
-                console.error("Error fetching sales bills:", error);
-                setMessage("Error fetching sales bills. Please try again.");
             });
-
             return () => unsubscribe();
         }
     }, [db, userId, isAuthReady, appId]);
 
-    // Function to clear all form fields
-    const clearForm = () => {
-        setBillDate(new Date().toISOString().split('T')[0]);
-        setSelectedCustomerId('');
-        setCustomerFirmName('');
-        setCustomerPersonName('');
-        setCustomerAddress('');
-        setCustomerContact('');
-        setCustomerEmail('');
-        setCustomerWhatsapp('');
-        setCustomerGSTIN('');
-        setWorkProgress('Ordered');
-        setPaymentProgress('Payment Pending');
-        setPaymentAmount('');
-        setBillRemark('');
-        setBillItems([]);
-        setSelectedSalesItemId('');
-        setCurrentNos('');
-        setCurrentLength('');
-        setCurrentHeight('');
-        setCurrentRate('');
-        setCurrentArea(0);
-        setCurrentItemAmount(0);
-        setEditingBillId(null);
-        setMessage('');
+  // Fetch purchases for stock calculation
+  useEffect(() => {
+    if (db && userId && isAuthReady) {
+      const purchasesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/purchaseBills`);
+      const unsubscribe = onSnapshot(purchasesCollectionRef, (snapshot) => {
+        const bills = [];
+        snapshot.forEach((doc) => {
+          bills.push({ id: doc.id, ...doc.data() });
+        });
+        setPurchases(bills);
+      });
+      return () => unsubscribe();
+    }
+  }, [db, userId, isAuthReady, appId]);
+
+  // Fetch company details
+  useEffect(() => {
+    if (db && userId && isAuthReady) {
+      const companyDocRef = doc(db, `artifacts/${appId}/users/${userId}/companyDetails`, 'myCompany');
+      const unsubscribe = onSnapshot(companyDocRef, (docSnap) => {
+        if (docSnap.exists()) {
+          setCompany(docSnap.data());
+        }
+      });
+      return () => unsubscribe();
+    }
+  }, [db, userId, isAuthReady, appId]);
+
+  // Calculate live stock for each item
+  useEffect(() => {
+    // Only run when items, purchases, or salesBills change
+    const stock = {};
+    items.forEach(item => {
+      let purchased = 0;
+      let sold = 0;
+      purchases.forEach(bill => {
+        (bill.items || []).forEach(billItem => {
+          if (billItem.itemId === item.id) {
+            purchased += parseFloat(billItem.quantity || 0);
+          }
+        });
+      });
+      salesBills.forEach(bill => {
+        (bill.rows || []).forEach(billRow => {
+          if (billRow.item === item.id) {
+            sold += parseFloat(billRow.nos || 0); // Adjust if you use a different field for quantity
+          }
+        });
+      });
+      stock[item.id] = purchased - sold;
+    });
+    setStockMap(stock);
+  }, [items, purchases, salesBills]);
+
+  // Auto-generate invoice number on date change or on mount
+  useEffect(() => {
+    const fy = getFinancialYear(invoiceDate);
+    // Find max serial for this FY in salesBills
+    const serials = salesBills
+      .filter(bill => (bill.invoiceNumber || '').startsWith(fy))
+      .map(bill => parseInt((bill.invoiceNumber || '').split('/')[1], 10))
+      .filter(n => !isNaN(n));
+    const nextSerial = (serials.length ? Math.max(...serials) : 0) + 1;
+    const paddedSerial = nextSerial.toString().padStart(4, '0');
+    setInvoiceNumber(`${fy}/${paddedSerial}`);
+    // eslint-disable-next-line
+  }, [invoiceDate, salesBills]);
+
+  // Calculate area, amount, GST, and total for each row
+  const handleRowChange = (idx, field, value) => {
+    const updatedRows = rows.map((row, i) => {
+      if (i !== idx) return row;
+      let updated = { ...row, [field]: value };
+      let itemObj = items.find(it => it.id === (field === 'item' ? value : row.item));
+      const unit = itemObj ? itemObj.quantityMeasurement : '';
+      if (field === 'item') {
+        updated.sgst = itemObj ? itemObj.sgstRate || 0 : 0;
+        updated.cgst = itemObj ? itemObj.cgstRate || 0 : 0;
+        updated.igst = itemObj ? itemObj.igstRate || 0 : 0;
+        updated.length = 0;
+        updated.height = 0;
+        updated.nos = 1;
+        updated.area = 0;
+        updated.rate = 0;
+        updated.amount = 0;
+        updated.total = 0;
+      }
+      // Area calculation for area/calculative units
+      if (areaUnits.includes(unit)) {
+        updated.area = (parseFloat(updated.nos) || 0) * (parseFloat(updated.length) || 0) * (parseFloat(updated.height) || 0);
+        updated.amount = (parseFloat(updated.area) || 0) * (parseFloat(updated.rate) || 0);
+      } else {
+        updated.area = 0;
+        updated.amount = (parseFloat(updated.nos) || 0) * (parseFloat(updated.rate) || 0);
+      }
+      // GST and total calculation
+      const sgstAmt = (parseFloat(updated.amount) || 0) * (parseFloat(updated.sgst) || 0) / 100;
+      const cgstAmt = (parseFloat(updated.amount) || 0) * (parseFloat(updated.cgst) || 0) / 100;
+      const igstAmt = (parseFloat(updated.amount) || 0) * (parseFloat(updated.igst) || 0) / 100;
+      updated.total = (parseFloat(updated.amount) || 0) + sgstAmt + cgstAmt + igstAmt;
+      return updated;
+    });
+    setRows(updatedRows);
+  };
+
+  const addRow = () => setRows([...rows, { ...initialItemRow }]);
+  const removeRow = idx => setRows(rows.filter((_, i) => i !== idx));
+
+  const subtotal = rows.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0);
+  const totalSGST = rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.sgst) || 0) / 100), 0);
+  const totalCGST = rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0) / 100), 0);
+  const totalIGST = rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0) / 100), 0);
+  const grandTotal = subtotal + totalSGST + totalCGST + totalIGST;
+
+  // Seller details from company
+  const seller = {
+    name: company.firmName || '',
+    address: `${company.address || ''}${company.city ? ', ' + company.city : ''}${company.pincode ? ' - ' + company.pincode : ''}`,
+    contact: company.contactNumber || '',
+    gstin: company.gstin || '',
+    state: company.state || '',
+    jurisdiction: company.city || '',
+    bankName: company.bankName || '',
+    bankAccount: company.bankAccount || '',
+    bankIfsc: company.bankIfsc || '',
+    upiId: company.upiId || '',
+  };
+  // Buyer details
+  const buyerObj = parties.find(p => p.id === party) || {};
+  const buyer = {
+    name: buyerObj.firmName || '',
+    address: buyerObj.address || '',
+    gstin: buyerObj.gstin || '',
+    state: buyerObj.state || '',
+  };
+  // Invoice details
+  const invoice = {
+    number: invoiceNumber,
+    date: invoiceDate,
+    placeOfSupply: seller.state,
+  };
+  // Items for print template
+  const printItems = rows.map((row, idx) => {
+    const itemObj = items.find(it => it.id === row.item) || {};
+    // For SunriseTemplate, combine GST for single column
+    const gstRate = (parseFloat(row.sgst || 0) + parseFloat(row.cgst || 0) + parseFloat(row.igst || 0)).toFixed(2);
+    const gstAmt = ((row.amount || 0) * gstRate / 100).toFixed(2);
+    return {
+      name: itemObj.itemName || '',
+      hsn: itemObj.hsnCode || '',
+      qty: row.nos,
+      unit: itemObj.quantityMeasurement || '',
+      rate: row.rate,
+      taxableValue: row.amount,
+      gstRate,
+      gstAmt,
+      total: row.total,
     };
+  });
+  // Totals for print template
+  const roundOff = (Math.round(grandTotal) - grandTotal).toFixed(2);
+  const totals = {
+    subtotal: subtotal.toFixed(2),
+    sgst: totalSGST.toFixed(2),
+    cgst: totalCGST.toFixed(2),
+    igst: totalIGST.toFixed(2),
+    grandTotal: Math.round(grandTotal).toFixed(2),
+    amountWords: numToWords(Math.round(grandTotal)),
+    roundOff,
+  };
+  // Extra fields for SunriseTemplate
+  const extra = {
+    paymentMode: 'UPI',
+    reverseCharge: 'YES',
+    buyerOrderNo: '',
+    supplierRef: '',
+    vehicleNo: '',
+    deliveryDate: '',
+    transportDetails: '',
+    termsOfDelivery: '',
+    bankName: 'STATE BANK OF INDIA',
+    bankBranch: 'Delhi',
+    bankAccount: '20412XXXXX05',
+    bankIfsc: 'SBIN003XXXX',
+    upiId: 'yourid@upi',
+    freightCharges: '0.00',
+    appName: 'Acc-app',
+  };
+  // Amount in words utility
+  function numToWords(num) {
+    // Simple INR words (for demo, can be replaced with a library)
+    const a = [ '', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen' ];
+    const b = [ '', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety' ];
+    function inWords(n) {
+      if (n < 20) return a[n];
+      if (n < 100) return b[Math.floor(n/10)] + (n%10 ? ' ' + a[n%10] : '');
+      if (n < 1000) return a[Math.floor(n/100)] + ' Hundred' + (n%100 ? ' and ' + inWords(n%100) : '');
+      if (n < 100000) return inWords(Math.floor(n/1000)) + ' Thousand' + (n%1000 ? ' ' + inWords(n%1000) : '');
+      if (n < 10000000) return inWords(Math.floor(n/100000)) + ' Lakh' + (n%100000 ? ' ' + inWords(n%100000) : '');
+      return inWords(Math.floor(n/10000000)) + ' Crore' + (n%10000000 ? ' ' + inWords(n%10000000) : '');
+    }
+    return inWords(Math.floor(num)) + ' Rupees Only';
+  }
 
-    // Handle selection of a customer from the dropdown
-    const handleCustomerSelect = (e) => {
-        const selectedId = e.target.value;
-        setSelectedCustomerId(selectedId);
-        const selectedCustomer = buyersList.find(buyer => buyer.id === selectedId);
+  const handlePrint = () => {
+    setShowPrint(true);
+    setTimeout(() => {
+      window.print();
+      setShowPrint(false);
+    }, 100);
+  };
 
-        if (selectedCustomer) {
-            setCustomerFirmName(selectedCustomer.firmName);
-            setCustomerPersonName(selectedCustomer.personName || '');
-            setCustomerAddress(selectedCustomer.address || '');
-            setCustomerContact(selectedCustomer.contact || '');
-            setCustomerEmail(selectedCustomer.email || '');
-            setCustomerWhatsapp(selectedCustomer.whatsapp || '');
-            setCustomerGSTIN(selectedCustomer.gstin || '');
-        } else {
-            setCustomerFirmName('');
-            setCustomerPersonName('');
-            setCustomerAddress('');
-            setCustomerContact('');
-            setCustomerEmail('');
-            setCustomerWhatsapp('');
-            setCustomerGSTIN('');
+  // For SunriseTemplate, ensure A4 size and fixed layout
+  const a4Style = showPrint ? {
+    width: '210mm',
+    minHeight: '297mm',
+    maxHeight: '297mm',
+    margin: '0 auto',
+    background: '#fff',
+    boxSizing: 'border-box',
+    overflow: 'hidden',
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'space-between',
+  } : {};
+
+  return (
+    <div className="min-h-screen bg-gray-100 flex flex-col items-center py-8">
+      <style>{`
+        @media print {
+          @page { size: A4 portrait; margin: 0; }
+          html, body { width: 210mm; height: 297mm; margin: 0; padding: 0; }
+          body * { visibility: hidden !important; }
+          #print-area, #print-area * { visibility: visible !important; }
+          #print-area { position: absolute; left: 0; top: 0; width: 210mm; min-height: 297mm; max-height: 297mm; background: #fff; z-index: 9999; margin: 0; padding: 0; box-sizing: border-box; }
         }
-    };
-
-    // Add current item to the billItems list
-    const handleAddItemToBill = () => {
-        if (!selectedSalesItemId || !currentNos || !currentRate) {
-            setMessage("Please select an Item, and fill in Nos and Rate for the item.");
-            return;
-        }
-
-        const selectedItemDetails = itemsList.find(item => item.id === selectedSalesItemId);
-        if (!selectedItemDetails) {
-            setMessage("Selected item not found in master data.");
-            return;
-        }
-
-        const newItem = {
-            itemId: selectedSalesItemId,
-            workType: selectedItemDetails.itemName,
-            quantityMeasurement: selectedItemDetails.quantityMeasurement,
-            nos: parseFloat(currentNos),
-            length: parseFloat(currentLength) || 0,
-            height: parseFloat(currentHeight) || 0,
-            area: parseFloat(currentArea),
-            rate: parseFloat(currentRate),
-            itemAmount: parseFloat(currentItemAmount),
-        };
-
-        setBillItems([...billItems, newItem]);
-        setMessage('Item added to current bill. Add more items or save the bill.');
-        setSelectedSalesItemId('');
-        setCurrentNos('');
-        setCurrentLength('');
-        setCurrentHeight('');
-        setCurrentRate('');
-        setCurrentArea(0);
-        setCurrentItemAmount(0);
-    };
-
-    // Remove an item from the billItems list
-    const handleRemoveItem = (indexToRemove) => {
-        setBillItems(billItems.filter((_, index) => index !== indexToRemove));
-        setMessage('Item removed from the bill.');
-    };
-
-    // Handle editing an existing bill
-    const handleEditBill = (bill) => {
-        setEditingBillId(bill.id);
-        setBillDate(bill.billDate);
-        setSelectedCustomerId(bill.customerId || '');
-        setCustomerFirmName(bill.customerFirmName || '');
-        setCustomerPersonName(bill.customerPersonName || '');
-        setCustomerAddress(bill.customerAddress || '');
-        setCustomerContact(bill.contact || '');
-        setCustomerEmail(bill.email || '');
-        setCustomerWhatsapp(bill.whatsapp || '');
-        setCustomerGSTIN(bill.gstin || '');
-        setWorkProgress(bill.workProgress || 'Ordered');
-        setPaymentProgress(bill.paymentProgress || 'Payment Pending');
-        setPaymentAmount(bill.paymentAmount || '');
-        setBillRemark(bill.remark || '');
-        setBillItems(bill.items || []);
-        setMessage('Editing existing bill. Make changes and click "Update Bill".');
-        setSelectedSalesItemId('');
-        setCurrentNos('');
-        setCurrentLength('');
-        setCurrentHeight('');
-        setCurrentRate('');
-        setCurrentArea(0);
-        setCurrentItemAmount(0);
-    };
-
-    // Handle saving or updating the entire bill to Firestore
-    const handleSaveBill = async () => {
-        if (!db || !userId) {
-            setMessage("Firebase not initialized or user not authenticated.");
-            return;
-        }
-
-        if (!billDate || !selectedCustomerId || billItems.length === 0) {
-            setMessage("Please fill in Bill Date, select a Customer, and add at least one item to the bill.");
-            return;
-        }
-
-        const totalBillAmount = billItems.reduce((sum, item) => sum + item.itemAmount, 0);
-
-        try {
-            const salesBillsCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/salesBills`);
-            const stockCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/stock`);
-
-            // Check stock availability before saving
-            for (const item of billItems) {
-                const stockDocRef = doc(db, stockCollectionRef, item.itemId);
-                const stockDocSnap = await getDoc(stockDocRef);
-
-                if (!stockDocSnap.exists() || (stockDocSnap.data().itemQuantity || 0) < item.nos) {
-                    setMessage(`Error: Insufficient stock for item "${item.workType}". Available: ${stockDocSnap.exists() ? stockDocSnap.data().itemQuantity : 0}, Required: ${item.nos}`);
-                    return;
-                }
-            }
-
-            const billData = {
-                billDate: billDate,
-                customerId: selectedCustomerId,
-                customerFirmName: customerFirmName,
-                customerPersonName: customerPersonName,
-                customerAddress: customerAddress,
-                contact: customerContact,
-                email: customerEmail,
-                whatsapp: customerWhatsapp,
-                gstin: customerGSTIN,
-                workProgress: workProgress,
-                paymentProgress: paymentProgress,
-                paymentAmount: parseFloat(paymentAmount) || 0,
-                remark: billRemark,
-                items: billItems,
-                totalAmount: totalBillAmount.toFixed(2),
-                timestamp: serverTimestamp()
-            };
-
-            if (editingBillId) {
-                const billRef = doc(db, `artifacts/${appId}/users/${userId}/salesBills`, editingBillId);
-                await setDoc(billRef, billData);
-                setMessage("Bill updated successfully!");
-            } else {
-                await addDoc(salesBillsCollectionRef, billData);
-                setMessage("Bill saved successfully!");
-            }
-
-            // Deduct from stock for each item in the bill
-            for (const item of billItems) {
-                const stockDocRef = doc(db, stockCollectionRef, item.itemId);
-                const stockDocSnap = await getDoc(stockDocRef);
-
-                if (stockDocSnap.exists()) {
-                    const currentStock = stockDocSnap.data();
-                    const updatedQuantity = (currentStock.itemQuantity || 0) - item.nos;
-                    if (updatedQuantity > 0) {
-                        await setDoc(stockDocRef, {
-                            itemQuantity: updatedQuantity,
-                            timestamp: serverTimestamp()
-                        }, { merge: true });
-                    } else {
-                        await deleteDoc(stockDocRef);
-                    }
-                }
-            }
-
-            clearForm();
-        } catch (error) {
-            console.error("Error saving/updating bill or stock:", error);
-            setMessage("Error saving/updating bill or stock. Please try again.");
-        }
-    };
-
-    // Handle deleting a bill
-    const handleDeleteBill = async (billId) => {
-        if (!db || !userId) {
-            setMessage("Firebase not initialized or user not authenticated.");
-            return;
-        }
-
-        try {
-            const billRef = doc(db, `artifacts/${appId}/users/${userId}/salesBills`, billId);
-            const billToDeleteSnap = await getDoc(billRef);
-            const billData = billToDeleteSnap.data();
-
-            await deleteDoc(billRef);
-            setMessage("Bill deleted successfully!");
-
-            // Revert stock for each item in the deleted bill
-            if (billData && billData.items) {
-                const stockCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/stock`);
-                for (const item of billData.items) {
-                    const stockDocRef = doc(stockCollectionRef, item.itemId);
-                    const stockDocSnap = await getDoc(stockDocRef);
-
-                    if (stockDocSnap.exists()) {
-                        const currentStock = stockDocSnap.data();
-                        const updatedQuantity = (currentStock.itemQuantity || 0) + item.nos;
-                        await setDoc(stockDocRef, {
-                            itemQuantity: updatedQuantity,
-                            timestamp: serverTimestamp()
-                        }, { merge: true });
-                    } else {
-                        const itemDetails = itemsList.find(i => i.id === item.itemId);
-                        await setDoc(stockDocRef, {
-                            itemId: item.itemId,
-                            itemName: itemDetails ? itemDetails.itemName : item.workType,
-                            quantityMeasurement: itemDetails ? itemDetails.quantityMeasurement : 'N/A',
-                            itemQuantity: item.nos,
-                            purchasePrice: 0,
-                            timestamp: serverTimestamp()
-                        });
-                    }
-                }
-            }
-
-        } catch (error) {
-            console.error("Error deleting bill or reverting stock:", error);
-            setMessage("Error deleting bill or reverting stock. Please try again.");
-        }
-    };
-
-    return (
-        <>
-            <div className="p-6 bg-white rounded-lg shadow-md">
-                <h2 className="text-2xl font-bold text-gray-800 mb-4">Sales Management</h2>
-
-                {message && (
-                    <div className={`p-3 mb-4 rounded-md ${message.includes('Error') ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
-                        {message}
+      `}</style>
+      <div className="bg-white rounded-lg shadow-md p-8 w-full max-w-5xl print:w-full print:shadow-none print:p-2">
+        <h2 className="text-3xl font-bold text-center mb-6">Create New Sales Invoice</h2>
+        {/* Print area (hidden except when printing) */}
+        {showPrint && (
+          <div id="print-area" className="print:block hidden" style={a4Style}>
+            <SunriseTemplate invoice={invoice} seller={seller} buyer={buyer} items={printItems} totals={totals} extra={extra} />
                     </div>
                 )}
-
-                <h3 className="text-xl font-bold text-gray-800 mb-4">{editingBillId ? 'Edit Existing Bill' : 'Create New Bill'}</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+        {/* Hide form/table UI when printing */}
+        <div className={showPrint ? 'hidden print:hidden' : ''}>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
                     <div>
-                        <label htmlFor="billDate" className="block text-sm font-medium text-gray-700">Bill Date</label>
-                        <input
-                            type="date"
-                            id="billDate"
-                            value={billDate}
-                            onChange={(e) => setBillDate(e.target.value)}
-                            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                            required
-                        />
+              <label className="block text-sm font-medium text-gray-700">Invoice Number</label>
+              <input type="text" value={invoiceNumber} onChange={e => setInvoiceNumber(e.target.value)}
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2" />
                     </div>
                     <div>
-                        <label htmlFor="customerSelect" className="block text-sm font-medium text-gray-700">Select Buyer (Firm Name)</label>
-                        <select
-                            id="customerSelect"
-                            value={selectedCustomerId}
-                            onChange={handleCustomerSelect}
-                            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                            required
-                        >
-                            <option value="">-- Select Customer --</option>
-                            {buyersList.map(buyer => (
-                                <option key={buyer.id} value={buyer.id}>{buyer.firmName}</option>
-                            ))}
+              <label className="block text-sm font-medium text-gray-700">Invoice Date</label>
+              <input type="date" value={invoiceDate} onChange={e => setInvoiceDate(e.target.value)}
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2" />
+                    </div>
+                    <div>
+              <label className="block text-sm font-medium text-gray-700">Party (Buyer)</label>
+              <select value={party} onChange={e => setParty(e.target.value)}
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2">
+                <option value="">Select Party</option>
+                {parties.map(p => <option key={p.id} value={p.id}>{p.firmName}</option>)}
                         </select>
                     </div>
                     <div>
-                        <label htmlFor="customerPersonName" className="block text-sm font-medium text-gray-700">Contact Person Name</label>
-                        <input
-                            type="text"
-                            id="customerPersonName"
-                            value={customerPersonName}
-                            readOnly
-                            className="mt-1 block w-full bg-gray-100 border border-gray-300 rounded-md shadow-sm p-2"
-                        />
-                    </div>
-                    <div className="md:col-span-2">
-                        <label htmlFor="customerAddress" className="block text-sm font-medium text-gray-700">Address</label>
-                        <textarea
-                            id="customerAddress"
-                            value={customerAddress}
-                            readOnly
-                            rows="2"
-                            className="mt-1 block w-full bg-gray-100 border border-gray-300 rounded-md shadow-sm p-2"
-                        ></textarea>
-                    </div>
-                    <div>
-                        <label htmlFor="customerContact" className="block text-sm font-medium text-gray-700">Contact No.</label>
-                        <input
-                            type="text"
-                            id="customerContact"
-                            value={customerContact}
-                            readOnly
-                            className="mt-1 block w-full bg-gray-100 border border-gray-300 rounded-md shadow-sm p-2"
-                        />
-                    </div>
-                    <div>
-                        <label htmlFor="customerEmail" className="block text-sm font-medium text-gray-700">Email</label>
-                        <input
-                            type="email"
-                            id="customerEmail"
-                            value={customerEmail}
-                            readOnly
-                            className="mt-1 block w-full bg-gray-100 border border-gray-300 rounded-md shadow-sm p-2"
-                        />
-                    </div>
-                    <div>
-                        <label htmlFor="customerWhatsapp" className="block text-sm font-medium text-gray-700">WhatsApp No.</label>
-                        <input
-                            type="text"
-                            id="customerWhatsapp"
-                            value={customerWhatsapp}
-                            readOnly
-                            className="mt-1 block w-full bg-gray-100 border border-gray-300 rounded-md shadow-sm p-2"
-                        />
-                    </div>
-                    <div>
-                        <label htmlFor="customerGSTIN" className="block text-sm font-medium text-700">GSTIN (Optional)</label>
-                        <input
-                            type="text"
-                            id="customerGSTIN"
-                            value={customerGSTIN}
-                            readOnly
-                            className="mt-1 block w-full bg-gray-100 border border-gray-300 rounded-md shadow-sm p-2"
-                        />
-                    </div>
-                    <div>
-                        <label htmlFor="workProgress" className="block text-sm font-medium text-gray-700">Work Progress</label>
-                        <select
-                            id="workProgress"
-                            value={workProgress}
-                            onChange={(e) => setWorkProgress(e.target.value)}
-                            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                        >
-                            <option value="Ordered">Ordered</option>
-                            <option value="Order Accepted">Order Accepted</option>
-                            <option value="At Designing">At Designing</option>
-                            <option value="At Printing">At Printing</option>
-                            <option value="At Fitting">At Fitting</option>
-                            <option value="Work Completed">Work Completed</option>
+              <label className="block text-sm font-medium text-gray-700">Payment Status</label>
+              <select value={paymentStatus} onChange={e => setPaymentStatus(e.target.value)}
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2">
+                <option>Pending</option>
+                <option>Paid</option>
+                <option>Partial</option>
                         </select>
                     </div>
-                    <div>
-                        <label htmlFor="paymentProgress" className="block text-sm font-medium text-gray-700">Payment Progress</label>
-                        <select
-                            id="paymentProgress"
-                            value={paymentProgress}
-                            onChange={(e) => setPaymentProgress(e.target.value)}
-                            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                        >
-                            <option value="Advance">Advance</option>
-                            <option value="Payment Pending">Payment Pending</option>
-                            <option value="Payment Received">Payment Received</option>
-                            <option value="Order Cancelled">Order Cancelled</option>
-                        </select>
                     </div>
-                    <div>
-                        <label htmlFor="paymentAmount" className="block text-sm font-medium text-gray-700">Payment Amount (₹)</label>
-                        <input
-                            type="number"
-                            id="paymentAmount"
-                            value={paymentAmount}
-                            onChange={(e) => setPaymentAmount(e.target.value)}
-                            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                            placeholder="e.g., 500.00"
-                        />
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700">Notes</label>
+            <textarea value={notes} onChange={e => setNotes(e.target.value)}
+              className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2" />
                     </div>
-                    <div className="md:col-span-3">
-                        <label htmlFor="billRemark" className="block text-sm font-medium text-gray-700">General Remark (Optional)</label>
-                        <textarea
-                            id="billRemark"
-                            value={billRemark}
-                            onChange={(e) => setBillRemark(e.target.value)}
-                            rows="2"
-                            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                            placeholder="Any additional notes for this bill"
-                        ></textarea>
-                    </div>
-                </div>
-
-                {/* Add Item Section */}
-                <h3 className="text-xl font-bold text-gray-800 mb-4">Add Item to Bill</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-                    <div>
-                        <label htmlFor="selectedSalesItemId" className="block text-sm font-medium text-gray-700">Select Item (Work Type)</label>
-                        <select
-                            id="selectedSalesItemId"
-                            value={selectedSalesItemId}
-                            onChange={handleSalesItemSelect}
-                            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                            required
-                        >
-                            <option value="">-- Select an Item --</option>
-                            {itemsList.map(item => (
-                                <option key={item.id} value={item.id}>{item.itemName} ({item.quantityMeasurement})</option>
-                            ))}
-                        </select>
-                    </div>
-                    <div>
-                        <label htmlFor="currentNos" className="block text-sm font-medium text-gray-700">Nos (Quantity)</label>
-                        <input
-                            type="number"
-                            id="currentNos"
-                            value={currentNos}
-                            onChange={(e) => setCurrentNos(e.target.value)}
-                            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                            placeholder="e.g., 1, 5000"
-                            required
-                        />
-                    </div>
-                    <div>
-                        <label htmlFor="currentLength" className="block text-sm font-medium text-gray-700">Length (Optional)</label>
-                        <input
-                            type="number"
-                            id="currentLength"
-                            value={currentLength}
-                            onChange={(e) => setCurrentLength(e.target.value)}
-                            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                            placeholder="e.g., 10 (for area calculation)"
-                        />
-                    </div>
-                    <div>
-                        <label htmlFor="currentHeight" className="block text-sm font-medium text-gray-700">Height (Optional)</label>
-                        <input
-                            type="number"
-                            id="currentHeight"
-                            value={currentHeight}
-                            onChange={(e) => setCurrentHeight(e.target.value)}
-                            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                            placeholder="e.g., 5 (for area calculation)"
-                        />
-                    </div>
-                    <div>
-                        <label htmlFor="currentRate" className="block text-sm font-medium text-gray-700">Rate</label>
-                        <input
-                            type="number"
-                            id="currentRate"
-                            value={currentRate}
-                            onChange={(e) => setCurrentRate(e.target.value)}
-                            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                            placeholder="e.g., 7, 12, 130"
-                            required
-                        />
-                    </div>
-                    <div className="flex items-end">
-                        <button
-                            onClick={handleAddItemToBill}
-                            className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-300 ease-in-out transform hover:scale-105"
-                        >
-                            Add Item to Bill
-                        </button>
-                    </div>
-                    <div className="md:col-span-2 lg:col-span-3 flex justify-between items-center bg-gray-50 p-3 rounded-md">
-                        <p className="text-lg font-medium text-gray-800">Item Area: <span className="font-semibold text-blue-700">{currentArea}</span></p>
-                        <p className="text-lg font-medium text-gray-800">Item Amount: <span className="font-semibold text-blue-700">₹{currentItemAmount}</span></p>
-                    </div>
-                </div>
-
-                {/* Items in Current Bill Table */}
-                {billItems.length > 0 && (
-                    <div className="mb-6">
-                        <h3 className="text-xl font-bold text-gray-800 mb-4">Items in Current Bill</h3>
-                        <div className="overflow-x-auto rounded-lg shadow-md border border-gray-200">
-                            <table className="min-w-full divide-y divide-gray-200">
+          <h3 className="text-xl font-bold text-gray-800 mb-2">Invoice Items</h3>
+          <div className="overflow-x-auto rounded-lg border border-gray-200 mb-4">
+            <table className="min-w-full divide-y divide-gray-200 text-sm">
                                 <thead className="bg-gray-50">
                                     <tr>
-                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Work Type</th>
-                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nos</th>
-                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Length</th>
-                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Height</th>
-                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Area</th>
-                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rate</th>
-                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
-                                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                  <th className="px-2 py-1">ITEM</th>
+                  <th className="px-2 py-1">NOS</th>
+                  <th className="px-2 py-1">LENGTH</th>
+                  <th className="px-2 py-1">HEIGHT</th>
+                  <th className="px-2 py-1">AREA</th>
+                  <th className="px-2 py-1">RATE</th>
+                  <th className="px-2 py-1">AMOUNT</th>
+                  <th className="px-2 py-1">SGST</th>
+                  <th className="px-2 py-1">CGST</th>
+                  <th className="px-2 py-1">IGST</th>
+                  <th className="px-2 py-1">TOTAL</th>
+                  <th className="px-2 py-1">REMOVE</th>
                                     </tr>
                                 </thead>
-                                <tbody className="bg-white divide-y divide-gray-200">
-                                    {billItems.map((item, index) => (
-                                        <tr key={index}>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item.workType}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item.nos}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item.length}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item.height}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item.area}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item.rate}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">₹{item.itemAmount}</td>
-                                            <td className="px-4 py-2 whitespace-nowrap text-sm text-red-600">
-                                                <button
-                                                    onClick={() => handleRemoveItem(index)}
-                                                    className="text-red-600 hover:text-red-800 font-medium"
-                                                >
-                                                    Remove
-                                                </button>
+              <tbody>
+                {rows.map((row, idx) => (
+                  <tr key={idx}>
+                    <td className="px-2 py-1">
+                      <select value={row.item} onChange={e => handleRowChange(idx, 'item', e.target.value)}
+                        className="border border-gray-300 rounded-md p-1 w-32">
+                        <option value="">Select Item</option>
+                        {items.map(it => <option key={it.id} value={it.id}>{it.itemName}</option>)}
+                      </select>
+                    </td>
+                    <td className="px-2 py-1">
+                      <input type="number" value={row.nos} min={1} onChange={e => handleRowChange(idx, 'nos', e.target.value)}
+                        className="border border-gray-300 rounded-md p-1 w-16" />
+                    </td>
+                    <td className="px-2 py-1">
+                      <input type="number" value={row.length} min={0} onChange={e => handleRowChange(idx, 'length', e.target.value)}
+                        className="border border-gray-300 rounded-md p-1 w-16" />
+                    </td>
+                    <td className="px-2 py-1">
+                      <input type="number" value={row.height} min={0} onChange={e => handleRowChange(idx, 'height', e.target.value)}
+                        className="border border-gray-300 rounded-md p-1 w-16" />
+                    </td>
+                    <td className="px-2 py-1">
+                      <input type="number" value={row.area} min={0} readOnly
+                        className="border border-gray-300 rounded-md p-1 w-16 bg-gray-100" />
+                    </td>
+                    <td className="px-2 py-1">
+                      <input type="number" value={row.rate} min={0} onChange={e => handleRowChange(idx, 'rate', e.target.value)}
+                        className="border border-gray-300 rounded-md p-1 w-16" />
+                    </td>
+                    <td className="px-2 py-1">
+                      <input type="number" value={row.amount} min={0} readOnly
+                        className="border border-gray-300 rounded-md p-1 w-20 bg-gray-100" />
+                    </td>
+                    <td className="px-2 py-1">
+                      <input type="number" value={row.sgst} min={0} onChange={e => handleRowChange(idx, 'sgst', e.target.value)}
+                        className="border border-gray-300 rounded-md p-1 w-14" />
+                    </td>
+                    <td className="px-2 py-1">
+                      <input type="number" value={row.cgst} min={0} onChange={e => handleRowChange(idx, 'cgst', e.target.value)}
+                        className="border border-gray-300 rounded-md p-1 w-14" />
+                    </td>
+                    <td className="px-2 py-1">
+                      <input type="number" value={row.igst} min={0} onChange={e => handleRowChange(idx, 'igst', e.target.value)}
+                        className="border border-gray-300 rounded-md p-1 w-14" />
+                    </td>
+                    <td className="px-2 py-1">
+                      <input type="number" value={row.total} min={0} readOnly
+                        className="border border-gray-300 rounded-md p-1 w-20 bg-green-50 font-semibold" />
+                    </td>
+                    <td className="px-2 py-1">
+                      <button type="button" onClick={() => removeRow(idx)} className="text-red-600 font-bold px-2 py-1 rounded hover:bg-red-100">X</button>
                                             </td>
                                         </tr>
                                     ))}
                                 </tbody>
-                                <tfoot>
-                                    <tr>
-                                        <td colSpan="6" className="px-4 py-2 text-right text-base font-bold text-gray-900">Total Bill Amount:</td>
-                                        <td className="px-4 py-2 whitespace-nowrap text-base font-bold text-blue-700">
-                                            ₹{billItems.reduce((sum, item) => sum + item.itemAmount, 0).toFixed(2)}
-                                        </td>
-                                        <td></td>
-                                    </tr>
-                                </tfoot>
                             </table>
+          </div>
+          <div className="flex flex-col md:flex-row md:justify-between items-start md:items-center mb-6">
+            <button onClick={addRow} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md mb-4 md:mb-0">Add Item Row</button>
+            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 w-full md:w-80">
+              <div className="flex justify-between mb-1"><span>Subtotal (Excl. GST):</span><span>₹{subtotal.toFixed(2)}</span></div>
+              <div className="flex justify-between mb-1"><span>Total SGST:</span><span>₹{totalSGST.toFixed(2)}</span></div>
+              <div className="flex justify-between mb-1"><span>Total CGST:</span><span>₹{totalCGST.toFixed(2)}</span></div>
+              <div className="flex justify-between mb-1"><span>Total IGST:</span><span>₹{totalIGST.toFixed(2)}</span></div>
+              <div className="flex justify-between mt-2 font-bold text-lg"><span>Grand Total (Incl. GST):</span><span className="text-blue-700">₹{grandTotal.toFixed(2)}</span></div>
                         </div>
                     </div>
-                )}
-                <div className="flex gap-4 mt-4">
-                    <button
-                        onClick={handleSaveBill}
-                        className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-300 ease-in-out transform hover:scale-105"
-                    >
-                        {editingBillId ? 'Update Bill' : 'Save Complete Bill'}
+          <div className="flex flex-col md:flex-row gap-4">
+            <button className="flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-md shadow-md transition duration-300 ease-in-out transform hover:scale-105 print:hidden">
+              Save Sales Invoice
                     </button>
-                    {editingBillId && (
-                        <button
-                            onClick={clearForm}
-                            className="flex-1 bg-gray-400 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-300 ease-in-out transform hover:scale-105"
-                        >
-                            Cancel Edit
+            <button type="button" onClick={handlePrint} className="flex-1 bg-gray-500 hover:bg-gray-700 text-white font-bold py-3 px-4 rounded-md shadow-md transition duration-300 ease-in-out transform hover:scale-105 print:hidden">
+              Print
                         </button>
-                    )}
                 </div>
-
-
-                <h3 className="text-xl font-bold text-gray-800 mt-8 mb-4">Recent Sales Bills</h3>
-                {salesBills.length === 0 ? (
-                    <p className="text-gray-600">No sales bills yet. Create your first bill above!</p>
-                ) : (
-                    <div className="overflow-x-auto rounded-lg shadow-md border border-gray-200">
-                        <table className="min-w-full divide-y divide-gray-200">
+          {/* Sales Bill List Section */}
+          <div className="mt-10">
+            <h3 className="text-xl font-bold text-gray-800 mb-2">Sales Bill List</h3>
+            <div className="overflow-x-auto rounded-lg border border-gray-200 mb-4">
+              <table className="min-w-full divide-y divide-gray-200 text-sm">
                             <thead className="bg-gray-50">
                                 <tr>
-                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Firm Name</th>
-                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contact Person</th>
-                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contact No.</th>
-                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
-                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">WhatsApp</th>
-                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">GSTIN</th>
-                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Work Progress</th>
-                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Payment Progress</th>
-                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Payment Amount</th>
-                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Amount</th>
-                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">General Remark</th>
-                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Items</th>
-                                    <th className="px-4 py-2 whitespace-nowrap text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                    <th className="px-2 py-1">Invoice No.</th>
+                    <th className="px-2 py-1">Date</th>
+                    <th className="px-2 py-1">Party</th>
+                    <th className="px-2 py-1">Amount</th>
                                 </tr>
                             </thead>
-                            <tbody className="bg-white divide-y divide-gray-200">
-                                {salesBills.map((bill) => (
-                                    <tr key={bill.id}>
-                                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{bill.billDate}</td>
-                                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{bill.customerFirmName}</td>
-                                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{bill.customerPersonName}</td>
-                                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{bill.contact}</td>
-                                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{bill.email}</td>
-                                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{bill.whatsapp}</td>
-                                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{bill.gstin}</td>
-                                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{bill.workProgress}</td>
-                                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{bill.paymentProgress}</td>
-                                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">₹{bill.paymentAmount}</td>
-                                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">₹{bill.totalAmount}</td>
-                                        <td className="px-4 py-2 text-sm text-gray-800 max-w-xs overflow-hidden text-ellipsis">{bill.remark}</td>
-                                        <td className="px-4 py-2 text-sm text-gray-800">
-                                            <ul className="list-disc list-inside">
-                                                {bill.items && bill.items.map((item, idx) => (
-                                                    <li key={idx}>
-                                                        {item.workType} ({item.nos} {item.quantityMeasurement}) @ ₹{item.rate}/unit = ₹{item.itemAmount}
-                                                    </li>
-                                                ))}
-                                            </ul>
-                                        </td>
-                                        <td className="px-4 py-2 whitespace-nowrap text-sm">
-                                            <button
-                                                onClick={() => handleEditBill(bill)}
-                                                className="text-indigo-600 hover:text-indigo-900 font-medium mr-2"
-                                            >
-                                                Edit
-                                            </button>
-                                            <button
-                                                onClick={() => handleDeleteBill(bill.id)}
-                                                className="text-red-600 hover:text-red-900 font-medium"
-                                            >
-                                                Delete
-                                            </button>
-                                        </td>
+                <tbody>
+                  {salesBills.map((bill, idx) => (
+                    <tr key={idx}>
+                      <td className="px-2 py-1">{bill.invoiceNumber}</td>
+                      <td className="px-2 py-1">{bill.invoiceDate || bill.date}</td>
+                      <td className="px-2 py-1">{(() => {
+                        const p = parties.find(pt => pt.id === bill.party);
+                        return p ? p.firmName : bill.party;
+                      })()}</td>
+                      <td className="px-2 py-1">₹{(bill.amount || 0).toLocaleString()}</td>
                                     </tr>
                                 ))}
                             </tbody>
                         </table>
                     </div>
-                )}
+          </div>
+        </div>
+      </div>
             </div>
-        </>
     );
-};
+}
 
 export default Sales; 

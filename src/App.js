@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
@@ -5,19 +6,15 @@ import { getFirestore } from 'firebase/firestore';
 
 // Import all module components
 import Dashboard from './components/Dashboard';
-import Sales from './components/Sales';
 import Parties from './components/Parties';
 import Items from './components/Items';
 import Purchases from './components/Purchases';
-import Stock from './components/Stock';
 import Reports from './components/Reports';
 import CompanyDetails from './components/CompanyDetails';
 import Taxes from './components/Taxes';
 import Manufacturing from './components/Manufacturing';
 import BillTemplates from './components/BillTemplates';
-import RollSheetConversion from './components/RollSheetConversion';
-import InkUsage from './components/InkUsage';
-import WasteManagement from './components/WasteManagement';
+import Sales from './components/Sales';
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
@@ -83,8 +80,6 @@ const App = () => {
         switch (activeModule) {
             case 'dashboard':
                 return <Dashboard {...moduleProps} />;
-            case 'sales':
-                return <Sales {...moduleProps} />;
             case 'parties':
                 return <Parties {...moduleProps} />;
             case 'items':
@@ -93,22 +88,16 @@ const App = () => {
                 return <Purchases {...moduleProps} />;
             case 'reports':
                 return <Reports {...moduleProps} />;
-            case 'stock':
-                return <Stock {...moduleProps} />;
             case 'manufacturing':
                 return <Manufacturing />;
             case 'billTemplates':
                 return <BillTemplates />;
-            case 'rollSheetConversion':
-                return <RollSheetConversion />;
-            case 'inkUsage':
-                return <InkUsage />;
-            case 'wasteManagement':
-                return <WasteManagement />;
             case 'companyDetails':
                 return <CompanyDetails {...moduleProps} setActiveModule={setActiveModule} />;
             case 'taxes':
                 return <Taxes />;
+            case 'sales':
+                return <Sales />;
             default:
                 return <Dashboard {...moduleProps} />;
         }
@@ -130,14 +119,6 @@ const App = () => {
                             Dashboard
                         </button>
                         <button
-                            onClick={() => setActiveModule('sales')}
-                            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors duration-200 ${
-                                activeModule === 'sales' ? 'bg-white text-blue-700 shadow-md' : 'hover:bg-blue-500'
-                            }`}
-                        >
-                            Sales
-                        </button>
-                        <button
                             onClick={() => setActiveModule('parties')}
                             className={`px-4 py-2 rounded-full text-sm font-medium transition-colors duration-200 ${
                                 activeModule === 'parties' ? 'bg-white text-blue-700 shadow-md' : 'hover:bg-blue-500'
@@ -152,6 +133,14 @@ const App = () => {
                             }`}
                         >
                             Items
+                        </button>
+                        <button
+                            onClick={() => setActiveModule('sales')}
+                            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors duration-200 ${
+                                activeModule === 'sales' ? 'bg-white text-blue-700 shadow-md' : 'hover:bg-blue-500'
+                            }`}
+                        >
+                            Sales
                         </button>
                         <button
                             onClick={() => setActiveModule('purchases')}
@@ -170,14 +159,6 @@ const App = () => {
                             Reports
                         </button>
                         <button
-                            onClick={() => setActiveModule('stock')}
-                            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors duration-200 ${
-                                activeModule === 'stock' ? 'bg-white text-blue-700 shadow-md' : 'hover:bg-blue-500'
-                            }`}
-                        >
-                            Stock
-                        </button>
-                        <button
                             onClick={() => setActiveModule('manufacturing')}
                             className={`px-4 py-2 rounded-full text-sm font-medium transition-colors duration-200 ${
                                 activeModule === 'manufacturing' ? 'bg-white text-blue-700 shadow-md' : 'hover:bg-blue-500'
@@ -194,36 +175,20 @@ const App = () => {
                             Bill Templates
                         </button>
                         <button
-                            onClick={() => setActiveModule('rollSheetConversion')}
-                            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors duration-200 ${
-                                activeModule === 'rollSheetConversion' ? 'bg-white text-blue-700 shadow-md' : 'hover:bg-blue-500'
-                            }`}
-                        >
-                            Roll/Sheet Conversion
-                        </button>
-                        <button
-                            onClick={() => setActiveModule('inkUsage')}
-                            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors duration-200 ${
-                                activeModule === 'inkUsage' ? 'bg-white text-blue-700 shadow-md' : 'hover:bg-blue-500'
-                            }`}
-                        >
-                            Ink Usage
-                        </button>
-                        <button
-                            onClick={() => setActiveModule('wasteManagement')}
-                            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors duration-200 ${
-                                activeModule === 'wasteManagement' ? 'bg-white text-blue-700 shadow-md' : 'hover:bg-blue-500'
-                            }`}
-                        >
-                            Waste Management
-                        </button>
-                        <button
                             onClick={() => setActiveModule('companyDetails')}
                             className={`px-4 py-2 rounded-full text-sm font-medium transition-colors duration-200 ${
                                 activeModule === 'companyDetails' ? 'bg-white text-blue-700 shadow-md' : 'hover:bg-blue-500'
                             }`}
                         >
                             Company Details
+                        </button>
+                        <button
+                            onClick={() => setActiveModule('taxes')}
+                            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors duration-200 ${
+                                activeModule === 'taxes' ? 'bg-white text-blue-700 shadow-md' : 'hover:bg-blue-500'
+                            }`}
+                        >
+                            Taxes
                         </button>
                     </nav>
                 </div>

@@ -6,6 +6,10 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
     const [selectedPartyId, setSelectedPartyId] = useState('');
     const [partyTransactions, setPartyTransactions] = useState([]);
     const [message, setMessage] = useState('');
+    const [activeTab, setActiveTab] = useState('party');
+    const [itemsList, setItemsList] = useState([]);
+    const [salesBills, setSalesBills] = useState([]);
+    const [purchaseBills, setPurchaseBills] = useState([]);
 
     // Fetch all parties to populate the dropdown
     useEffect(() => {
@@ -131,6 +135,49 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
         }
     }, [db, userId, isAuthReady, selectedPartyId, appId]);
 
+    // Fetch items
+    useEffect(() => {
+        if (db && userId && isAuthReady) {
+            const itemsCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/items`);
+            const unsubscribe = onSnapshot(itemsCollectionRef, (snapshot) => {
+                const items = [];
+                snapshot.forEach((doc) => {
+                    items.push({ id: doc.id, ...doc.data() });
+                });
+                setItemsList(items);
+            });
+            return () => unsubscribe();
+        }
+    }, [db, userId, isAuthReady, appId]);
+    // Fetch sales bills
+    useEffect(() => {
+        if (db && userId && isAuthReady) {
+            const salesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/salesBills`);
+            const unsubscribe = onSnapshot(salesCollectionRef, (snapshot) => {
+                const bills = [];
+                snapshot.forEach((doc) => {
+                    bills.push({ id: doc.id, ...doc.data() });
+                });
+                setSalesBills(bills);
+            });
+            return () => unsubscribe();
+        }
+    }, [db, userId, isAuthReady, appId]);
+    // Fetch purchase bills
+    useEffect(() => {
+        if (db && userId && isAuthReady) {
+            const purchasesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/purchaseBills`);
+            const unsubscribe = onSnapshot(purchasesCollectionRef, (snapshot) => {
+                const bills = [];
+                snapshot.forEach((doc) => {
+                    bills.push({ id: doc.id, ...doc.data() });
+                });
+                setPurchaseBills(bills);
+            });
+            return () => unsubscribe();
+        }
+    }, [db, userId, isAuthReady, appId]);
+
 
     return (
         <div className="p-6 bg-white rounded-lg shadow-md">
@@ -158,43 +205,122 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
                 </select>
             </div>
 
-            {selectedPartyId && partyTransactions.length > 0 ? (
+            {/* Tab navigation */}
+            <div className="flex gap-2 mb-6">
+                <button onClick={() => setActiveTab('party')} className={`px-4 py-2 rounded ${activeTab === 'party' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>Party List</button>
+                <button onClick={() => setActiveTab('item')} className={`px-4 py-2 rounded ${activeTab === 'item' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>Item List</button>
+                <button onClick={() => setActiveTab('sales')} className={`px-4 py-2 rounded ${activeTab === 'sales' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>Sales Bill List</button>
+                <button onClick={() => setActiveTab('purchase')} className={`px-4 py-2 rounded ${activeTab === 'purchase' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>Purchase Bill List</button>
+                <button onClick={() => setActiveTab('challan')} className={`px-4 py-2 rounded ${activeTab === 'challan' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>Challan List</button>
+                <button onClick={() => setActiveTab('quotation')} className={`px-4 py-2 rounded ${activeTab === 'quotation' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>Quotation List</button>
+            </div>
+
+            {/* Tab content */}
+            {activeTab === 'party' && (
                 <div className="overflow-x-auto rounded-lg shadow-md border border-gray-200">
                     <table className="min-w-full divide-y divide-gray-200">
                         <thead className="bg-gray-50">
                             <tr>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Amount</th>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Amount Paid/Received</th>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Outstanding</th>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Payment Status</th>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Running Balance</th>
+                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Firm Name</th>
+                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Party Type</th>
+                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">GSTIN</th>
+                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Address</th>
                             </tr>
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
-                            {partyTransactions.map((transaction) => (
-                                <tr key={transaction.id}>
-                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{transaction.date}</td>
-                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{transaction.type}</td>
-                                    <td className="px-4 py-2 text-sm text-gray-800 max-w-xs overflow-hidden text-ellipsis">{transaction.description}</td>
-                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">₹{transaction.totalAmount}</td>
-                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">₹{transaction.amountPaid}</td>
-                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-red-600">₹{transaction.outstanding}</td>
-                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{transaction.paymentProgress}</td>
-                                    <td className="px-4 py-2 whitespace-nowrap text-sm font-semibold">
-                                        ₹{transaction.runningBalance}
-                                    </td>
+                            {partiesList.map(party => (
+                                <tr key={party.id}>
+                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{party.firmName}</td>
+                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{party.partyType}</td>
+                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{party.gstin}</td>
+                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{party.address}</td>
                                 </tr>
                             ))}
                         </tbody>
                     </table>
                 </div>
-            ) : selectedPartyId ? (
-                <p className="text-gray-600">No transactions found for the selected party.</p>
-            ) : (
-                <p className="text-gray-600">Select a party from the dropdown to view their ledger.</p>
+            )}
+            {activeTab === 'item' && (
+                <div className="overflow-x-auto rounded-lg shadow-md border border-gray-200">
+                    <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                            <tr>
+                                <th className="px-4 py-2">Item Name</th>
+                                <th className="px-4 py-2">Unit</th>
+                                <th className="px-4 py-2">Type</th>
+                                <th className="px-4 py-2">HSN</th>
+                                <th className="px-4 py-2">GST</th>
+                                <th className="px-4 py-2">Stock</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {itemsList.map(item => (
+                                <tr key={item.id}>
+                                    <td className="px-4 py-2">{item.itemName}</td>
+                                    <td className="px-4 py-2">{item.quantityMeasurement}</td>
+                                    <td className="px-4 py-2">{item.itemType}</td>
+                                    <td className="px-4 py-2">{item.hsnCode}</td>
+                                    <td className="px-4 py-2">{item.gstPercentage}%</td>
+                                    <td className="px-4 py-2">{item.currentStock}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+            {activeTab === 'sales' && (
+                <div className="overflow-x-auto rounded-lg shadow-md border border-gray-200">
+                    <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                            <tr>
+                                <th className="px-4 py-2">Invoice No.</th>
+                                <th className="px-4 py-2">Date</th>
+                                <th className="px-4 py-2">Party</th>
+                                <th className="px-4 py-2">Amount</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {salesBills.map(bill => (
+                                <tr key={bill.id}>
+                                    <td className="px-4 py-2">{bill.invoiceNumber}</td>
+                                    <td className="px-4 py-2">{bill.billDate}</td>
+                                    <td className="px-4 py-2">{bill.customerFirmName}</td>
+                                    <td className="px-4 py-2">₹{bill.totalAmount}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+            {activeTab === 'purchase' && (
+                <div className="overflow-x-auto rounded-lg shadow-md border border-gray-200">
+                    <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                            <tr>
+                                <th className="px-4 py-2">Bill No.</th>
+                                <th className="px-4 py-2">Date</th>
+                                <th className="px-4 py-2">Seller</th>
+                                <th className="px-4 py-2">Amount</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {purchaseBills.map(bill => (
+                                <tr key={bill.id}>
+                                    <td className="px-4 py-2">{bill.id}</td>
+                                    <td className="px-4 py-2">{bill.purchaseDate}</td>
+                                    <td className="px-4 py-2">{bill.sellerFirmName}</td>
+                                    <td className="px-4 py-2">₹{bill.totalAmount}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+            {activeTab === 'challan' && (
+                <div className="p-4 text-gray-600">Challan list feature coming soon.</div>
+            )}
+            {activeTab === 'quotation' && (
+                <div className="p-4 text-gray-600">Quotation list feature coming soon.</div>
             )}
         </div>
     );

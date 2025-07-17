@@ -13,6 +13,29 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
     const [message, setMessage] = useState('');
     const [partiesList, setPartiesList] = useState([]);
     const [editingPartyId, setEditingPartyId] = useState(null);
+    const [city, setCity] = useState('');
+    const [stateName, setStateName] = useState('');
+    const [pincode, setPincode] = useState('');
+    const [pan, setPan] = useState('');
+    const [creditPeriod, setCreditPeriod] = useState('0');
+    const [creditLimit, setCreditLimit] = useState('0');
+    const [sameAsWhatsapp, setSameAsWhatsapp] = useState(false);
+
+    const indianStates = [
+        'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh',
+        'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand',
+        'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur',
+        'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab',
+        'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura',
+        'Uttar Pradesh', 'Uttarakhand', 'West Bengal',
+        'Andaman and Nicobar Islands', 'Chandigarh', 'Dadra and Nagar Haveli and Daman and Diu',
+        'Delhi', 'Jammu and Kashmir', 'Ladakh', 'Lakshadweep', 'Puducherry'
+    ];
+
+    // GSTIN validation regex (Indian GSTIN format)
+    const gstinRegex = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[A-Z0-9]{1}[Z]{1}[A-Z0-9]{1}$/;
+    // Indian phone number validation (10 digits, starts with 6-9)
+    const phoneRegex = /^[6-9][0-9]{9}$/;
 
     // Fetch parties data from Firestore
     useEffect(() => {
@@ -36,18 +59,31 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
         }
     }, [db, userId, isAuthReady, appId]);
 
+    useEffect(() => {
+        if (sameAsWhatsapp) {
+            setWhatsapp(contact);
+        }
+    }, [contact, sameAsWhatsapp]);
+
     // Function to clear party form fields
     const clearPartyForm = () => {
         setFirmName('');
         setPersonName('');
         setAddress('');
+        setCity('');
+        setStateName('');
+        setPincode('');
         setContact('');
         setEmail('');
         setWhatsapp('');
         setGstin('');
+        setPan('');
+        setCreditPeriod('0');
+        setCreditLimit('0');
         setPartyType('Buyer');
         setEditingPartyId(null);
         setMessage('');
+        setSameAsWhatsapp(false);
     };
 
     // Handle adding/updating a party
@@ -60,6 +96,27 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
             setMessage("Firm Name and Party Type are required.");
             return;
         }
+        // Validate GSTIN if entered
+        if (gstin && !gstinRegex.test(gstin)) {
+            setMessage("Invalid GSTIN. Please enter a valid 15-character GSTIN as per Indian law.");
+            return;
+        }
+        // Validate phone number
+        if (contact && !phoneRegex.test(contact)) {
+            setMessage("Invalid Phone number. Please enter a valid 10-digit Indian mobile number starting with 6-9.");
+            return;
+        }
+        // Check for duplicate GSTIN or Contact (ignore current editing party)
+        const duplicateGstin = partiesList.find(p => p.gstin && gstin && p.gstin === gstin && p.id !== editingPartyId);
+        if (duplicateGstin) {
+            setMessage("A party with this GSTIN already exists.");
+            return;
+        }
+        const duplicateContact = partiesList.find(p => p.contact && contact && p.contact === contact && p.id !== editingPartyId);
+        if (duplicateContact) {
+            setMessage("A party with this Contact number already exists.");
+            return;
+        }
 
         try {
             const partiesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/parties`);
@@ -67,10 +124,16 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
                 firmName,
                 personName,
                 address,
+                city,
+                state: stateName,
+                pincode,
                 contact,
                 email,
                 whatsapp,
                 gstin,
+                pan,
+                creditPeriod: parseInt(creditPeriod) || 0,
+                creditLimit: parseFloat(creditLimit) || 0,
                 partyType,
                 timestamp: serverTimestamp()
             };
@@ -96,12 +159,19 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
         setFirmName(party.firmName);
         setPersonName(party.personName);
         setAddress(party.address);
+        setCity(party.city || '');
+        setStateName(party.state || '');
+        setPincode(party.pincode || '');
         setContact(party.contact);
         setEmail(party.email);
         setWhatsapp(party.whatsapp);
         setGstin(party.gstin);
+        setPan(party.pan || '');
+        setCreditPeriod(party.creditPeriod?.toString() || '0');
+        setCreditLimit(party.creditLimit?.toString() || '0');
         setPartyType(party.partyType);
         setMessage('Editing existing party.');
+        setSameAsWhatsapp(party.whatsapp === party.contact);
     };
 
     // Handle deleting a party
@@ -133,13 +203,23 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
             <h3 className="text-xl font-bold text-gray-800 mb-4">{editingPartyId ? 'Edit Party' : 'Add New Party'}</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
                 <div>
-                    <label htmlFor="firmName" className="block text-sm font-medium text-gray-700">Firm Name</label>
+                    <label htmlFor="firmName" className="block text-sm font-medium text-gray-700">Party Name</label>
                     <input type="text" id="firmName" value={firmName} onChange={(e) => setFirmName(e.target.value)}
                         className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
                         placeholder="e.g., ABC Enterprises" required />
                 </div>
                 <div>
-                    <label htmlFor="personName" className="block text-sm font-medium text-gray-700">Contact Person Name</label>
+                    <label htmlFor="partyType" className="block text-sm font-medium text-gray-700">Party Type</label>
+                    <select id="partyType" value={partyType} onChange={(e) => setPartyType(e.target.value)}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                        required>
+                        <option value="Buyer">Buyer (Customer)</option>
+                        <option value="Seller">Seller (Supplier)</option>
+                        <option value="Both">Both</option>
+                    </select>
+                </div>
+                <div>
+                    <label htmlFor="personName" className="block text-sm font-medium text-gray-700">Contact Person</label>
                     <input type="text" id="personName" value={personName} onChange={(e) => setPersonName(e.target.value)}
                         className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
                         placeholder="e.g., Jane Doe" />
@@ -151,38 +231,78 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
                         placeholder="Full address" />
                 </div>
                 <div>
-                    <label htmlFor="contact" className="block text-sm font-medium text-gray-700">Contact No.</label>
+                    <label htmlFor="city" className="block text-sm font-medium text-gray-700">City</label>
+                    <input type="text" id="city" value={city} onChange={(e) => setCity(e.target.value)}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="e.g., Mumbai" />
+                </div>
+                <div>
+                    <label htmlFor="stateName" className="block text-sm font-medium text-gray-700">State</label>
+                    <select
+                        id="stateName"
+                        value={stateName}
+                        onChange={e => setStateName(e.target.value)}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                    >
+                        <option value="">-- Select State --</option>
+                        {indianStates.map(state => (
+                            <option key={state} value={state}>{state}</option>
+                        ))}
+                    </select>
+                </div>
+                <div>
+                    <label htmlFor="pincode" className="block text-sm font-medium text-gray-700">Pincode</label>
+                    <input type="text" id="pincode" value={pincode} onChange={(e) => setPincode(e.target.value)}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="e.g., 400001" />
+                </div>
+                <div>
+                    <label htmlFor="contact" className="block text-sm font-medium text-gray-700">Phone</label>
                     <input type="text" id="contact" value={contact} onChange={(e) => setContact(e.target.value)}
                         className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
                         placeholder="e.g., +919876543210" />
-                </div>
-                <div>
-                    <label htmlFor="email" className="block text-sm font-medium text-gray-700">Email</label>
-                    <input type="email" id="email" value={email} onChange={(e) => setEmail(e.target.value)}
-                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                        placeholder="e.g., info@example.com" />
+                    <div className="flex items-center mt-1">
+                        <input
+                            type="checkbox"
+                            id="sameAsWhatsapp"
+                            checked={sameAsWhatsapp}
+                            onChange={e => setSameAsWhatsapp(e.target.checked)}
+                            className="mr-2"
+                        />
+                        <label htmlFor="sameAsWhatsapp" className="text-sm text-gray-600">Same as WhatsApp</label>
+                    </div>
                 </div>
                 <div>
                     <label htmlFor="whatsapp" className="block text-sm font-medium text-gray-700">WhatsApp No.</label>
                     <input type="text" id="whatsapp" value={whatsapp} onChange={(e) => setWhatsapp(e.target.value)}
                         className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                        placeholder="e.g., +919876543210" />
+                        placeholder="e.g., +919876543210"
+                        disabled={sameAsWhatsapp}
+                    />
                 </div>
                 <div>
-                    <label htmlFor="gstin" className="block text-sm font-medium text-gray-700">GSTIN (Optional)</label>
+                    <label htmlFor="gstin" className="block text-sm font-medium text-gray-700">GSTIN</label>
                     <input type="text" id="gstin" value={gstin} onChange={(e) => setGstin(e.target.value)}
                         className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
                         placeholder="e.g., 22AAAAA0000A1Z5" />
                 </div>
                 <div>
-                    <label htmlFor="partyType" className="block text-sm font-medium text-gray-700">Party Type</label>
-                    <select id="partyType" value={partyType} onChange={(e) => setPartyType(e.target.value)}
+                    <label htmlFor="pan" className="block text-sm font-medium text-gray-700">PAN</label>
+                    <input type="text" id="pan" value={pan} onChange={(e) => setPan(e.target.value)}
                         className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                        required>
-                        <option value="Buyer">Buyer</option>
-                        <option value="Seller">Seller</option>
-                        <option value="Both">Both</option>
-                    </select>
+                        placeholder="e.g., ABCDE1234F" />
+                </div>
+                <div>
+                    <label htmlFor="creditPeriod" className="block text-sm font-medium text-gray-700">Credit Period (Days)</label>
+                    <input type="number" id="creditPeriod" value={creditPeriod} onChange={(e) => setCreditPeriod(e.target.value)}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                        min="0" />
+                </div>
+                <div>
+                    <label htmlFor="creditLimit" className="block text-sm font-medium text-gray-700">Credit Limit (₹)</label>
+                    <input type="number" id="creditLimit" value={creditLimit} onChange={(e) => setCreditLimit(e.target.value)}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                        min="0" />
                 </div>
             </div>
             <div className="flex gap-4 mt-4">

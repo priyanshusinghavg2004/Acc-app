@@ -11,6 +11,28 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
     const [message, setMessage] = useState('');
     const [itemsList, setItemsList] = useState([]);
     const [editingItemId, setEditingItemId] = useState(null);
+    const [description, setDescription] = useState('');
+    const [purchasePrice, setPurchasePrice] = useState('0');
+    const [salePrice, setSalePrice] = useState('0');
+    const [currentStock, setCurrentStock] = useState('0');
+    const [gstSplitRate, setGstSplitRate] = useState('0');
+    const [igstRate, setIgstRate] = useState('0');
+    const [isActive, setIsActive] = useState(true);
+    const [purchaseBills, setPurchaseBills] = useState([]);
+    const [salesBills, setSalesBills] = useState([]);
+
+    const predefinedUnits = [
+        'Pieces', 'Piece', 'Kg', 'Gram', 'Ton', 'Quintal', 'Meter', 'Centimeter', 'Millimeter', 'Yard', 'Foot', 'Inch',
+        'Litre', 'ML', 'Gallon', 'Drum', 'Cylinder',
+        'Box', 'Packet', 'Carton', 'Bag', 'Bottle', 'Can', 'Jar', 'Tube',
+        'Sheet', 'Strip', 'Roll', 'Ream', 'Bundle', 'Panel', 'Board', 'Plate', 'Slab', 'Block',
+        'Sq. Ft.', 'Sq. Inch', 'Sq. Yard', 'Square Meter', 'Cubic Feet', 'Cubic Meter', 'Cu. Inch', 'Cu. Yard',
+        'Hour', 'Day', 'Month', 'Year',
+        'Lot', 'Job', 'Impression', 'Run',
+        'Set', 'Pair',
+        'Other'
+    ];
+    const [customUnit, setCustomUnit] = useState('');
 
     // Fetch items data from Firestore
     useEffect(() => {
@@ -34,6 +56,32 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
         }
     }, [db, userId, isAuthReady, appId]);
 
+    // Fetch purchase and sales bills for stock calculation
+    useEffect(() => {
+        if (db && userId && isAuthReady) {
+            const purchasesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/purchaseBills`);
+            const unsubscribePurchases = onSnapshot(purchasesCollectionRef, (snapshot) => {
+                const bills = [];
+                snapshot.forEach((doc) => {
+                    bills.push({ id: doc.id, ...doc.data() });
+                });
+                setPurchaseBills(bills);
+            });
+            const salesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/salesBills`);
+            const unsubscribeSales = onSnapshot(salesCollectionRef, (snapshot) => {
+                const bills = [];
+                snapshot.forEach((doc) => {
+                    bills.push({ id: doc.id, ...doc.data() });
+                });
+                setSalesBills(bills);
+            });
+            return () => {
+                unsubscribePurchases();
+                unsubscribeSales();
+            };
+        }
+    }, [db, userId, isAuthReady, appId]);
+
     // Function to clear item form fields
     const clearItemForm = () => {
         setItemName('');
@@ -42,8 +90,16 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
         setItemType('Service');
         setHsnCode('');
         setGstPercentage('');
+        setDescription('');
+        setPurchasePrice('0');
+        setSalePrice('0');
+        setCurrentStock('0');
+        setGstSplitRate('0');
+        setIgstRate('0');
+        setIsActive(true);
         setEditingItemId(null);
         setMessage('');
+        setCustomUnit('');
     };
 
     // Handle adding/updating an item
@@ -52,11 +108,19 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
             setMessage("Firebase not initialized or user not authenticated.");
             return;
         }
-        if (!itemName || !quantityMeasurement) {
-            setMessage("Item Name and Quantity Measurement are required.");
+        if (!itemName) {
+            setMessage("Item Name is required.");
             return;
         }
-
+        if (sgstCgstUsed && igstUsed) {
+            setMessage("Use either GST (SGST+CGST) or IGST, not both.");
+            return;
+        }
+        let sgstRate = 0, cgstRate = 0;
+        if (sgstCgstUsed) {
+            sgstRate = (parseFloat(gstSplitRate) / 2).toFixed(2);
+            cgstRate = (parseFloat(gstSplitRate) / 2).toFixed(2);
+        }
         try {
             const itemsCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/items`);
             const itemData = {
@@ -66,6 +130,14 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
                 itemType,
                 hsnCode: hsnCode,
                 gstPercentage: parseFloat(gstPercentage) || 0,
+                description,
+                purchasePrice: parseFloat(purchasePrice) || 0,
+                salePrice: parseFloat(salePrice) || 0,
+                currentStock: parseFloat(currentStock) || 0,
+                sgstRate: parseFloat(sgstRate) || 0,
+                cgstRate: parseFloat(cgstRate) || 0,
+                igstRate: parseFloat(igstRate) || 0,
+                isActive,
                 timestamp: serverTimestamp()
             };
 
@@ -93,7 +165,15 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
         setItemType(item.itemType);
         setHsnCode(item.hsnCode || '');
         setGstPercentage(item.gstPercentage || '');
+        setDescription(item.description || '');
+        setPurchasePrice(item.purchasePrice?.toString() || '0');
+        setSalePrice(item.salePrice?.toString() || '0');
+        setCurrentStock(item.currentStock?.toString() || '0');
+        setGstSplitRate(item.sgstRate && item.cgstRate ? (parseFloat(item.sgstRate) + parseFloat(item.cgstRate)).toString() : '0');
+        setIgstRate(item.igstRate?.toString() || '0');
+        setIsActive(item.isActive !== false);
         setMessage('Editing existing item.');
+        setCustomUnit(predefinedUnits.includes(item.quantityMeasurement) ? '' : (item.quantityMeasurement || ''));
     };
 
     // Handle deleting an item
@@ -111,6 +191,37 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
             setMessage("Error deleting item. Please try again.");
         }
     };
+
+    // Calculate stock for each item
+    const getStockForItem = (itemId) => {
+        let purchased = 0;
+        let sold = 0;
+        purchaseBills.forEach(bill => {
+            if (bill.items && Array.isArray(bill.items)) {
+                bill.items.forEach(item => {
+                    if (item.itemId === itemId) {
+                        purchased += parseFloat(item.quantity) || 0;
+                    }
+                });
+            }
+        });
+        salesBills.forEach(bill => {
+            if (bill.items && Array.isArray(bill.items)) {
+                bill.items.forEach(item => {
+                    if (item.itemId === itemId) {
+                        sold += parseFloat(item.nos) || 0;
+                    }
+                });
+            }
+        });
+        return purchased - sold;
+    };
+
+    // SGST/CGST vs IGST logic
+    const sgstCgstUsed = parseFloat(gstSplitRate) > 0;
+    const igstUsed = parseFloat(igstRate) > 0;
+
+    const gstRateOptions = ['0', '0.25', '3', '5', '12', '18', '28'];
 
     return (
         <div className="p-6 bg-white rounded-lg shadow-md">
@@ -132,9 +243,36 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
                 </div>
                 <div>
                     <label htmlFor="quantityMeasurement" className="block text-sm font-medium text-gray-700">Quantity Measurement</label>
-                    <input type="text" id="quantityMeasurement" value={quantityMeasurement} onChange={(e) => setQuantityMeasurement(e.target.value)}
+                    <select
+                        id="quantityMeasurement"
+                        value={predefinedUnits.includes(quantityMeasurement) ? quantityMeasurement : 'Other'}
+                        onChange={e => {
+                            const val = e.target.value;
+                            setQuantityMeasurement(val === 'Other' ? customUnit : val);
+                            if (val !== 'Other') setCustomUnit('');
+                        }}
                         className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                        placeholder="e.g., Sq. Ft., Pieces, Meters" required />
+                        required
+                    >
+                        <option value="">Select Unit</option>
+                        {predefinedUnits.map(unit => (
+                            <option key={unit} value={unit}>{unit}</option>
+                        ))}
+                    </select>
+                    {((quantityMeasurement === 'Other') || (!predefinedUnits.includes(quantityMeasurement) && quantityMeasurement)) && (
+                        <input
+                            type="text"
+                            id="customUnit"
+                            value={customUnit}
+                            onChange={e => {
+                                setCustomUnit(e.target.value);
+                                setQuantityMeasurement(e.target.value);
+                            }}
+                            className="mt-2 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                            placeholder="Enter custom unit"
+                            required
+                        />
+                    )}
                 </div>
                 <div>
                     <label htmlFor="defaultRate" className="block text-sm font-medium text-gray-700">Default Rate (₹) (Optional)</label>
@@ -153,23 +291,65 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
                         <option value="Other">Other</option>
                     </select>
                 </div>
+                <div className="md:col-span-2">
+                    <label htmlFor="description" className="block text-sm font-medium text-gray-700">Description</label>
+                    <textarea id="description" value={description} onChange={(e) => setDescription(e.target.value)} rows="2"
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="Item description" />
+                </div>
                 <div>
-                    <label htmlFor="hsnCode" className="block text-sm font-medium text-gray-700">HSN Code (Optional)</label>
+                    <label htmlFor="purchasePrice" className="block text-sm font-medium text-gray-700">Purchase Price (per unit)</label>
+                    <input type="number" id="purchasePrice" value={purchasePrice} onChange={(e) => setPurchasePrice(e.target.value)}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                        min="0" />
+                </div>
+                <div>
+                    <label htmlFor="salePrice" className="block text-sm font-medium text-gray-700">Sale Price (per unit)</label>
+                    <input type="number" id="salePrice" value={salePrice} onChange={(e) => setSalePrice(e.target.value)}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                        min="0" />
+                </div>
+                <div>
+                    <label htmlFor="currentStock" className="block text-sm font-medium text-gray-700">Current Stock</label>
+                    <input type="number" id="currentStock" value={currentStock} onChange={(e) => setCurrentStock(e.target.value)}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                        min="0" />
+                </div>
+                <div>
+                    <label htmlFor="hsnCode" className="block text-sm font-medium text-gray-700">HSN Code</label>
                     <input type="text" id="hsnCode" value={hsnCode} onChange={(e) => setHsnCode(e.target.value)}
                         className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
                         placeholder="e.g., 48025510" />
                 </div>
                 <div>
-                    <label htmlFor="gstPercentage" className="block text-sm font-medium text-gray-700">GST Percentage</label>
-                    <select id="gstPercentage" value={gstPercentage} onChange={(e) => setGstPercentage(e.target.value)}
+                    <label htmlFor="gstSplitRate" className="block text-sm font-medium text-gray-700">GST Rate (SGST+CGST)</label>
+                    <select id="gstSplitRate" value={gstSplitRate} onChange={e => { setGstSplitRate(e.target.value); if (parseFloat(e.target.value) > 0) setIgstRate('0'); }}
                         className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                        required>
-                        <option value="">-- Select GST % --</option>
-                        <option value="5">5%</option>
-                        <option value="12">12%</option>
-                        <option value="18">18%</option>
-                        <option value="28">28%</option>
+                        disabled={igstUsed}
+                    >
+                        {gstRateOptions.map(rate => (
+                            <option key={rate} value={rate}>{rate}% ({rate/2}% + {rate/2}%)</option>
+                        ))}
                     </select>
+                    {sgstCgstUsed && (
+                        <div className="text-xs text-gray-500 mt-1">SGST: {(parseFloat(gstSplitRate)/2).toFixed(2)}% &nbsp; CGST: {(parseFloat(gstSplitRate)/2).toFixed(2)}%</div>
+                    )}
+                </div>
+                <div>
+                    <label htmlFor="igstRate" className="block text-sm font-medium text-gray-700">IGST Rate (%)</label>
+                    <select id="igstRate" value={igstRate} onChange={e => { setIgstRate(e.target.value); if (parseFloat(e.target.value) > 0) setGstSplitRate('0'); }}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                        disabled={sgstCgstUsed}
+                    >
+                        {gstRateOptions.map(rate => (
+                            <option key={rate} value={rate}>{rate}%</option>
+                        ))}
+                    </select>
+                </div>
+                <div className="flex items-center mt-2">
+                    <input type="checkbox" id="isActive" checked={isActive} onChange={e => setIsActive(e.target.checked)}
+                        className="mr-2" />
+                    <label htmlFor="isActive" className="text-sm text-gray-700">Is Active</label>
                 </div>
             </div>
             <div className="flex gap-4 mt-4">
@@ -199,6 +379,7 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">HSN Code</th>
                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">GST %</th>
+                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Stock</th>
                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                             </tr>
                         </thead>
@@ -211,6 +392,7 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
                                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item.itemType}</td>
                                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item.hsnCode || 'N/A'}</td>
                                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item.gstPercentage ? `${item.gstPercentage}%` : 'N/A'}</td>
+                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{getStockForItem(item.id)}</td>
                                     <td className="px-4 py-2 whitespace-nowrap text-sm">
                                         <button
                                             onClick={() => handleEditItem(item)}
