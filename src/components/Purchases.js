@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { collection, addDoc, query, onSnapshot, serverTimestamp, doc, setDoc, deleteDoc, getDoc } from 'firebase/firestore';
+import BillTemplates from './BillTemplates';
 
 const Purchases = ({ db, userId, isAuthReady, appId }) => {
     const [purchaseDate, setPurchaseDate] = useState(new Date().toISOString().split('T')[0]);
@@ -28,6 +29,8 @@ const Purchases = ({ db, userId, isAuthReady, appId }) => {
     const [sellersList, setSellersList] = useState([]);
     const [itemsList, setItemsList] = useState([]);
     const [editingPurchaseBillId, setEditingPurchaseBillId] = useState(null);
+    const [showInvoiceModal, setShowInvoiceModal] = useState(false);
+    const [invoiceBill, setInvoiceBill] = useState(null);
 
     // Fetch sellers from Parties module and items from Items module
     useEffect(() => {
@@ -651,6 +654,12 @@ const Purchases = ({ db, userId, isAuthReady, appId }) => {
                                             >
                                                 Delete
                                             </button>
+                                            <button
+                                                onClick={() => { setInvoiceBill(bill); setShowInvoiceModal(true); }}
+                                                className="text-blue-600 hover:text-blue-900 font-medium ml-2"
+                                            >
+                                                Invoice
+                                            </button>
                                         </td>
                                     </tr>
                                 ))}
@@ -659,6 +668,14 @@ const Purchases = ({ db, userId, isAuthReady, appId }) => {
                     </div>
                 )}
             </div>
+            {showInvoiceModal && invoiceBill && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+                    <div className="bg-white rounded-lg shadow-lg p-6 max-w-4xl w-full relative">
+                        <button onClick={() => setShowInvoiceModal(false)} className="absolute top-2 right-2 text-gray-500 hover:text-gray-800 text-xl">&times;</button>
+                        <BillTemplates db={db} userId={userId} isAuthReady={isAuthReady} appId={appId} billOverride={invoiceBill} type="purchase" />
+                    </div>
+                </div>
+            )}
         </>
     );
 };

@@ -4,6 +4,10 @@ import { doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
 const indianStates = [
     'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal', 'Andaman and Nicobar Islands', 'Chandigarh', 'Dadra and Nagar Haveli and Daman and Diu', 'Delhi', 'Jammu and Kashmir', 'Ladakh', 'Lakshadweep', 'Puducherry'
 ];
+
+// Indian PAN validation regex (5 letters + 4 digits + 1 letter)
+const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
+
 const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => {
     const [firmName, setFirmName] = useState('');
     const [gstin, setGstin] = useState('');
@@ -74,6 +78,11 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
             setMessage("Firm Name and GSTIN are required.");
             return;
         }
+        // Validate PAN if entered
+        if (pan && !panRegex.test(pan.toUpperCase())) {
+            setMessage("Invalid PAN. Please enter a valid 10-character PAN as per Indian law (e.g., ABCDE1234F).");
+            return;
+        }
         try {
             const companyDocRef = doc(db, `artifacts/${appId}/users/${userId}/companyDetails`, 'myCompany');
             await setDoc(companyDocRef, {
@@ -85,7 +94,7 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
                 pincode,
                 contactNumber,
                 email,
-                pan,
+                pan: pan.toUpperCase(), // Convert to uppercase for consistency
                 gstinType,
                 bankName,
                 bankAccount,

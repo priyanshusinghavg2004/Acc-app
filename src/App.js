@@ -91,13 +91,13 @@ const App = () => {
             case 'manufacturing':
                 return <Manufacturing />;
             case 'billTemplates':
-                return <BillTemplates />;
+                return <BillTemplates db={db} userId={userId} isAuthReady={isAuthReady} appId={appId} />;
             case 'companyDetails':
                 return <CompanyDetails {...moduleProps} setActiveModule={setActiveModule} />;
             case 'taxes':
                 return <Taxes />;
             case 'sales':
-                return <Sales />;
+                return <Sales {...moduleProps} />;
             default:
                 return <Dashboard {...moduleProps} />;
         }

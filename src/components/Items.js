@@ -16,10 +16,10 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
     const [salePrice, setSalePrice] = useState('0');
     const [currentStock, setCurrentStock] = useState('0');
     const [gstSplitRate, setGstSplitRate] = useState('0');
-    const [igstRate, setIgstRate] = useState('0');
     const [isActive, setIsActive] = useState(true);
     const [purchaseBills, setPurchaseBills] = useState([]);
     const [salesBills, setSalesBills] = useState([]);
+    const [stockMap, setStockMap] = useState({});
 
     const predefinedUnits = [
         'Pieces', 'Piece', 'Kg', 'Gram', 'Ton', 'Quintal', 'Meter', 'Centimeter', 'Millimeter', 'Yard', 'Foot', 'Inch',
@@ -82,6 +82,21 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
         }
     }, [db, userId, isAuthReady, appId]);
 
+    // Fetch live stock from stock collection
+    useEffect(() => {
+        if (db && userId && isAuthReady) {
+            const stockCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/stock`);
+            const unsubscribe = onSnapshot(stockCollectionRef, (snapshot) => {
+                const stock = {};
+                snapshot.forEach((doc) => {
+                    stock[doc.id] = doc.data().itemQuantity || 0;
+                });
+                setStockMap(stock);
+            });
+            return () => unsubscribe();
+        }
+    }, [db, userId, isAuthReady, appId]);
+
     // Function to clear item form fields
     const clearItemForm = () => {
         setItemName('');
@@ -95,7 +110,6 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
         setSalePrice('0');
         setCurrentStock('0');
         setGstSplitRate('0');
-        setIgstRate('0');
         setIsActive(true);
         setEditingItemId(null);
         setMessage('');
@@ -112,12 +126,9 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
             setMessage("Item Name is required.");
             return;
         }
-        if (sgstCgstUsed && igstUsed) {
-            setMessage("Use either GST (SGST+CGST) or IGST, not both.");
-            return;
-        }
+        // Removed obsolete GST split validation
         let sgstRate = 0, cgstRate = 0;
-        if (sgstCgstUsed) {
+        if (parseFloat(gstSplitRate) > 0) {
             sgstRate = (parseFloat(gstSplitRate) / 2).toFixed(2);
             cgstRate = (parseFloat(gstSplitRate) / 2).toFixed(2);
         }
@@ -136,7 +147,6 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
                 currentStock: parseFloat(currentStock) || 0,
                 sgstRate: parseFloat(sgstRate) || 0,
                 cgstRate: parseFloat(cgstRate) || 0,
-                igstRate: parseFloat(igstRate) || 0,
                 isActive,
                 timestamp: serverTimestamp()
             };
@@ -170,7 +180,6 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
         setSalePrice(item.salePrice?.toString() || '0');
         setCurrentStock(item.currentStock?.toString() || '0');
         setGstSplitRate(item.sgstRate && item.cgstRate ? (parseFloat(item.sgstRate) + parseFloat(item.cgstRate)).toString() : '0');
-        setIgstRate(item.igstRate?.toString() || '0');
         setIsActive(item.isActive !== false);
         setMessage('Editing existing item.');
         setCustomUnit(predefinedUnits.includes(item.quantityMeasurement) ? '' : (item.quantityMeasurement || ''));
@@ -219,7 +228,6 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
 
     // SGST/CGST vs IGST logic
     const sgstCgstUsed = parseFloat(gstSplitRate) > 0;
-    const igstUsed = parseFloat(igstRate) > 0;
 
     const gstRateOptions = ['0', '0.25', '3', '5', '12', '18', '28'];
 
@@ -322,29 +330,19 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
                         placeholder="e.g., 48025510" />
                 </div>
                 <div>
-                    <label htmlFor="gstSplitRate" className="block text-sm font-medium text-gray-700">GST Rate (SGST+CGST)</label>
-                    <select id="gstSplitRate" value={gstSplitRate} onChange={e => { setGstSplitRate(e.target.value); if (parseFloat(e.target.value) > 0) setIgstRate('0'); }}
+                    <label htmlFor="gstPercentage" className="block text-sm font-medium text-gray-700">GST %</label>
+                    <input
+                        type="number"
+                        id="gstPercentage"
+                        value={gstPercentage}
+                        onChange={e => setGstPercentage(e.target.value)}
                         className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                        disabled={igstUsed}
-                    >
-                        {gstRateOptions.map(rate => (
-                            <option key={rate} value={rate}>{rate}% ({rate/2}% + {rate/2}%)</option>
-                        ))}
-                    </select>
-                    {sgstCgstUsed && (
-                        <div className="text-xs text-gray-500 mt-1">SGST: {(parseFloat(gstSplitRate)/2).toFixed(2)}% &nbsp; CGST: {(parseFloat(gstSplitRate)/2).toFixed(2)}%</div>
-                    )}
-                </div>
-                <div>
-                    <label htmlFor="igstRate" className="block text-sm font-medium text-gray-700">IGST Rate (%)</label>
-                    <select id="igstRate" value={igstRate} onChange={e => { setIgstRate(e.target.value); if (parseFloat(e.target.value) > 0) setGstSplitRate('0'); }}
-                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                        disabled={sgstCgstUsed}
-                    >
-                        {gstRateOptions.map(rate => (
-                            <option key={rate} value={rate}>{rate}%</option>
-                        ))}
-                    </select>
+                        placeholder="e.g., 0, 5, 12, 18, 28"
+                        min="0"
+                        max="100"
+                        step="0.01"
+                        required
+                    />
                 </div>
                 <div className="flex items-center mt-2">
                     <input type="checkbox" id="isActive" checked={isActive} onChange={e => setIsActive(e.target.checked)}
@@ -391,8 +389,8 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
                                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">₹{item.defaultRate}</td>
                                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item.itemType}</td>
                                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item.hsnCode || 'N/A'}</td>
-                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item.gstPercentage ? `${item.gstPercentage}%` : 'N/A'}</td>
-                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{getStockForItem(item.id)}</td>
+                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{typeof item.gstPercentage !== 'undefined' ? `${item.gstPercentage}%` : '0%'}</td>
+                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{stockMap[item.id] ?? 0}</td>
                                     <td className="px-4 py-2 whitespace-nowrap text-sm">
                                         <button
                                             onClick={() => handleEditItem(item)}
@@ -417,4 +415,4 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
     );
 };
 
-export default Items; 
+export default Items;
