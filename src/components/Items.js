@@ -21,18 +21,15 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
     const [salesBills, setSalesBills] = useState([]);
     const [stockMap, setStockMap] = useState({});
 
+    // 1. Add 'Nos.' to predefinedUnits, alphabetically
     const predefinedUnits = [
-        'Pieces', 'Piece', 'Kg', 'Gram', 'Ton', 'Quintal', 'Meter', 'Centimeter', 'Millimeter', 'Yard', 'Foot', 'Inch',
-        'Litre', 'ML', 'Gallon', 'Drum', 'Cylinder',
-        'Box', 'Packet', 'Carton', 'Bag', 'Bottle', 'Can', 'Jar', 'Tube',
-        'Sheet', 'Strip', 'Roll', 'Ream', 'Bundle', 'Panel', 'Board', 'Plate', 'Slab', 'Block',
-        'Sq. Ft.', 'Sq. Inch', 'Sq. Yard', 'Square Meter', 'Cubic Feet', 'Cubic Meter', 'Cu. Inch', 'Cu. Yard',
-        'Hour', 'Day', 'Month', 'Year',
-        'Lot', 'Job', 'Impression', 'Run',
-        'Set', 'Pair',
-        'Other'
+        'Bag', 'Barrel', 'Block', 'Board', 'Bottle', 'Box', 'Bundle', 'Can', 'Carton', 'Centimeter', 'Cubic Feet', 'Cubic Meter', 'Cu. Inch', 'Cu. Yard', 'Cylinder', 'Day', 'Drum', 'Foot', 'Gallon', 'Gram', 'Hour', 'Impression', 'Inch', 'Jar', 'Job', 'Kg', 'Litre', 'Lot', 'Meter', 'Millimeter', 'Month', 'Nos.', 'Packet', 'Pair', 'Panel', 'Piece', 'Pieces', 'Plate', 'Quintal', 'Ream', 'Roll', 'Run', 'Set', 'Sheet', 'Slab', 'Sq. Ft.', 'Sq. Inch', 'Sq. Yard', 'Square Meter', 'Strip', 'Ton', 'Tube', 'Year', 'Other'
     ];
     const [customUnit, setCustomUnit] = useState('');
+
+    // 2. Replace <select> with searchable input+dropdown for quantity measurement
+    const [unitSearch, setUnitSearch] = useState('');
+    const filteredUnits = predefinedUnits.filter(u => u.toLowerCase().includes(unitSearch.toLowerCase())).sort();
 
     // Fetch items data from Firestore
     useEffect(() => {
@@ -251,22 +248,38 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
                 </div>
                 <div>
                     <label htmlFor="quantityMeasurement" className="block text-sm font-medium text-gray-700">Quantity Measurement</label>
-                    <select
+                    <input
+                        type="text"
                         id="quantityMeasurement"
-                        value={predefinedUnits.includes(quantityMeasurement) ? quantityMeasurement : 'Other'}
+                        value={quantityMeasurement}
                         onChange={e => {
-                            const val = e.target.value;
-                            setQuantityMeasurement(val === 'Other' ? customUnit : val);
-                            if (val !== 'Other') setCustomUnit('');
+                            setQuantityMeasurement(e.target.value);
+                            setUnitSearch(e.target.value);
                         }}
+                        onFocus={e => setUnitSearch(quantityMeasurement)}
                         className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="Type or select unit"
+                        autoComplete="off"
                         required
-                    >
-                        <option value="">Select Unit</option>
-                        {predefinedUnits.map(unit => (
-                            <option key={unit} value={unit}>{unit}</option>
-                        ))}
-                    </select>
+                    />
+                    {unitSearch && (
+                        <div className="border border-gray-300 rounded bg-white shadow-md max-h-40 overflow-y-auto absolute z-10 w-full">
+                            {filteredUnits.map(unit => (
+                                <div
+                                    key={unit}
+                                    className="px-3 py-1 hover:bg-blue-100 cursor-pointer"
+                                    onMouseDown={() => {
+                                        setQuantityMeasurement(unit);
+                                        setUnitSearch('');
+                                        if (unit !== 'Other') setCustomUnit('');
+                                    }}
+                                >
+                                    {unit}
+                                </div>
+                            ))}
+                            {filteredUnits.length === 0 && <div className="px-3 py-1 text-gray-400">No units found</div>}
+                        </div>
+                    )}
                     {((quantityMeasurement === 'Other') || (!predefinedUnits.includes(quantityMeasurement) && quantityMeasurement)) && (
                         <input
                             type="text"

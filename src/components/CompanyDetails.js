@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
+import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 
 const indianStates = [
     'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal', 'Andaman and Nicobar Islands', 'Chandigarh', 'Dadra and Nagar Haveli and Daman and Diu', 'Delhi', 'Jammu and Kashmir', 'Ladakh', 'Lakshadweep', 'Puducherry'
@@ -26,6 +27,15 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
     const [signUrl, setSignUrl] = useState('');
     const [sealUrl, setSealUrl] = useState('');
     const [message, setMessage] = useState('');
+    const [logoPreview, setLogoPreview] = useState('');
+    const [signPreview, setSignPreview] = useState('');
+    const [sealPreview, setSealPreview] = useState('');
+    const [logoUploading, setLogoUploading] = useState(false);
+    const [logoProgress, setLogoProgress] = useState(0);
+    const [signUploading, setSignUploading] = useState(false);
+    const [signProgress, setSignProgress] = useState(0);
+    const [sealUploading, setSealUploading] = useState(false);
+    const [sealProgress, setSealProgress] = useState(0);
 
     useEffect(() => {
         if (db && userId && isAuthReady) {
@@ -60,14 +70,60 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
         }
     }, [db, userId, isAuthReady, appId]);
 
-    const handleImageChange = (e, setter) => {
+    // REPLACE handleImageChange with Firebase upload logic
+    const handleImageChange = (e, setter, type, previewSetter, setUploading, setProgress) => {
         const file = e.target.files[0];
-        if (file) {
-            const url = URL.createObjectURL(file);
+        console.log('Selected file:', file);
+        if (!file) return;
+        if (file.size > 1024 * 1024) { // 1 MB
+            setMessage('File size must be less than 1 MB.');
+            console.warn('File too large:', file.size);
+            return;
+        }
+        setUploading(true);
+        setProgress(0);
+        // Show local preview immediately
+        const localUrl = URL.createObjectURL(file);
+        previewSetter(localUrl);
+        try {
+            const storage = getStorage();
+            const storageRef = ref(storage, `companyAssets/${userId}/${type}_${Date.now()}`);
+            // Use uploadBytesResumable for progress
+            const uploadTask = uploadBytesResumable(storageRef, file);
+            uploadTask.on('state_changed',
+                (snapshot) => {
+                    const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+                    setProgress(Math.round(progress));
+                    console.log(`[${type}] Upload progress:`, progress, '%');
+                },
+                (error) => {
+                    setMessage('Image upload failed. Please try again.');
+                    setUploading(false);
+                    setProgress(0);
+                    console.error(`[${type}] Upload error:`, error);
+                },
+                () => {
+                    getDownloadURL(uploadTask.snapshot.ref).then((url) => {
             setter(url);
-            // In production, upload to storage and save the download URL to Firestore
+                        previewSetter(url);
+                        setUploading(false);
+                        setProgress(0);
+                        console.log(`[${type}] Upload complete, URL:`, url);
+                    });
+                }
+            );
+        } catch (err) {
+            setMessage('Image upload failed. Please try again.');
+            setUploading(false);
+            setProgress(0);
+            console.error(`[${type}] Upload exception:`, err);
         }
     };
+
+    // Add remove handlers for logo, sign, seal
+    const handleRemoveLogo = () => { setLogoUrl(''); setLogoPreview(''); };
+    const handleRemoveSign = () => { setSignUrl(''); setSignPreview(''); };
+    const handleRemoveSeal = () => { setSealUrl(''); setSealPreview(''); };
 
     const handleSaveCompanyDetails = async () => {
         if (!db || !userId) {
@@ -208,24 +264,45 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
                 </div>
                 <div>
                     <label className="block text-sm font-medium text-gray-700">Logo (Image)</label>
-                    <input type="file" accept="image/*" onChange={e => handleImageChange(e, setLogoUrl)} />
-                    {logoUrl && <img src={logoUrl} alt="Logo Preview" className="mt-2 h-16" />}
+                    <input type="file" accept="image/*" onChange={e => handleImageChange(e, setLogoUrl, 'logo', setLogoPreview, setLogoUploading, setLogoProgress)} />
+                    {logoUploading && logoProgress > 0 && <div className="text-xs text-blue-600 mt-1">Uploading: {logoProgress}%</div>}
+                    {(logoPreview || logoUrl) && (
+                      <div className="flex items-center gap-2 mt-2">
+                        <img src={logoPreview || logoUrl} alt="Logo Preview" className="h-16" />
+                        <button type="button" onClick={handleRemoveLogo} className="text-red-600 text-xs border border-red-300 rounded px-2 py-1 hover:bg-red-50">Remove</button>
+                      </div>
+                    )}
                 </div>
                 <div>
                     <label className="block text-sm font-medium text-gray-700">Sign (Image)</label>
-                    <input type="file" accept="image/*" onChange={e => handleImageChange(e, setSignUrl)} />
-                    {signUrl && <img src={signUrl} alt="Sign Preview" className="mt-2 h-16" />}
+                    <input type="file" accept="image/*" onChange={e => handleImageChange(e, setSignUrl, 'sign', setSignPreview, setSignUploading, setSignProgress)} />
+                    {signUploading && signProgress > 0 && <div className="text-xs text-blue-600 mt-1">Uploading: {signProgress}%</div>}
+                    {(signPreview || signUrl) && (
+                      <div className="flex items-center gap-2 mt-2">
+                        <img src={signPreview || signUrl} alt="Sign Preview" className="h-16" />
+                        <button type="button" onClick={handleRemoveSign} className="text-red-600 text-xs border border-red-300 rounded px-2 py-1 hover:bg-red-50">Remove</button>
+                      </div>
+                    )}
                 </div>
                 <div>
                     <label className="block text-sm font-medium text-gray-700">Seal (Image)</label>
-                    <input type="file" accept="image/*" onChange={e => handleImageChange(e, setSealUrl)} />
-                    {sealUrl && <img src={sealUrl} alt="Seal Preview" className="mt-2 h-16" />}
+                    <input type="file" accept="image/*" onChange={e => handleImageChange(e, setSealUrl, 'seal', setSealPreview, setSealUploading, setSealProgress)} />
+                    {sealUploading && sealProgress > 0 && <div className="text-xs text-blue-600 mt-1">Uploading: {sealProgress}%</div>}
+                    {(sealPreview || sealUrl) && (
+                      <div className="flex items-center gap-2 mt-2">
+                        <img src={sealPreview || sealUrl} alt="Seal Preview" className="h-16" />
+                        <button type="button" onClick={handleRemoveSeal} className="text-red-600 text-xs border border-red-300 rounded px-2 py-1 hover:bg-red-50">Remove</button>
+                      </div>
+                    )}
                 </div>
             </div>
             <div className="flex gap-4 mt-4">
-                <button onClick={handleSaveCompanyDetails}
-                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-300 ease-in-out transform hover:scale-105">
-                    Save Company Details
+                <button
+                    onClick={handleSaveCompanyDetails}
+                    disabled={logoUploading || signUploading || sealUploading}
+                    className={`flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-300 ease-in-out transform hover:scale-105 ${logoUploading || signUploading || sealUploading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                    {logoUploading || signUploading || sealUploading ? 'Uploading Image...' : 'Save Company Details'}
                 </button>
                 <button onClick={() => setActiveModule('taxes')}
                     className="flex-1 bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-300 ease-in-out transform hover:scale-105">

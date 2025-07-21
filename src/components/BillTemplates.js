@@ -1,5 +1,20 @@
 import React, { useState, useEffect, useRef } from "react";
-import { collection, getDocs, addDoc, setDoc, doc, deleteDoc, getDoc } from "firebase/firestore";
+import { 
+  collection, 
+  getDocs, 
+  addDoc, 
+  setDoc, 
+  doc, 
+  deleteDoc, 
+  getDoc, 
+  serverTimestamp,
+  onSnapshot,
+  query,
+  where
+} from "firebase/firestore";
+
+// Add at the top with other imports
+import { formatNumber, formatCurrency, formatDate, numToWords } from '../utils/numberFormat';
 
 const DOCUMENT_TYPES = [
   { key: "invoice", label: "Invoice" },
@@ -43,44 +58,43 @@ const BLOCK_LIBRARY = [
 const BlockPreview = ({ block }) => {
   switch (block) {
     case "header":
-      return <div className="font-bold text-xl mb-2">Header (Invoice Title, Number, Date)</div>;
+      return <div className="font-bold text-xl mb-2">Header</div>;
     case "logo":
-      return <div className="flex items-center justify-center h-full"><span className="text-gray-400">[Logo]</span></div>;
+      return <div className="flex items-center justify-center h-full"><span className="text-gray-400">Logo</span></div>;
     case "billedBy":
-      return <div><span className="font-bold">Billed By:</span> {'{company details}'}</div>;
+      return <div><span className="font-bold">Billed By</span></div>;
     case "billedTo":
-      return <div><span className="font-bold">Billed To:</span> {'{party details}'}</div>;
+      return <div><span className="font-bold">Billed To</span></div>;
     case "shippedTo":
-      return <div><span className="font-bold">Shipped To:</span> {'{shipping details}'}</div>;
+      return <div><span className="font-bold">Shipped To</span></div>;
     case "supplyInfo":
-      return <div>Place of Supply: {'{company.state}'} | Country: India</div>;
+      return <div>Place of Supply</div>;
     case "gstDetails":
-      return <div className="font-bold text-center">[GST Details Table]</div>;
+      return <div className="font-bold text-center">GST Details</div>;
     case "itemTable":
-      return <div className="font-bold">[Item Table]</div>;
+      return <div className="font-bold">Item Table</div>;
     case "bankDetails":
-      return <div><span className="font-bold">Bank & Payment Details:</span> {'{bank details}'}</div>;
+      return <div><span className="font-bold">Bank & Payment Details</span></div>;
     case "totals":
-      return <div><span className="font-bold">Totals:</span> {'{totals}'}</div>;
+      return <div><span className="font-bold">Totals</span></div>;
     case "terms":
-      return <div><span className="font-bold">Terms and Conditions:</span> {'{terms}'}</div>;
+      return <div><span className="font-bold">Terms and Conditions</span></div>;
     case "notes":
-      return <div><span className="font-bold">Additional Notes:</span> {'{notes}'}</div>;
+      return <div><span className="font-bold">Additional Notes</span></div>;
     case "footer":
-      return <div className="text-xs text-gray-500">Footer (Contact Info)</div>;
+      return <div className="text-xs text-gray-500">Footer</div>;
     default:
       return <div className="text-gray-400">[Empty]</div>;
   }
 };
 
 const defaultLayout = [
-  { columns: 2, cells: ["header", "header"], height: 40, width: 190 },
-  { columns: 3, cells: ["billedBy", "billedTo", "shippedTo"], height: 40, width: 190 },
-  { columns: 1, cells: ["gstDetails"], height: 30, width: 190 },
-  { columns: 1, cells: ["itemTable"], height: 100, width: 190 },
-  { columns: 2, cells: ["bankDetails", "totals"], height: 30, width: 190 },
-  { columns: 1, cells: ["terms"], height: 15, width: 190 },
-  { columns: 1, cells: ["footer"], height: 15, width: 190 },
+  { columns: 2, cells: ["header", "logo"], height: 40, width: 190 },
+  { columns: 3, cells: ["billedBy", "billedTo", "shippedTo"], height: 60, width: 190 },
+  { columns: 1, cells: ["itemTable"], height: 120, width: 190 },
+  { columns: 2, cells: ["bankDetails", "totals"], height: 50, width: 190 },
+  { columns: 1, cells: ["terms"], height: 30, width: 190 },
+  { columns: 1, cells: ["footer"], height: 20, width: 190 }
 ];
 
 const FONT_FAMILIES = [
@@ -177,97 +191,282 @@ const BLOCK_SUBLINES = {
     { key: 'totalAmount', label: 'Total Amount' },
   ],
 };
-// Update DEFAULT_FONT_SETTINGS to include more font options for each sub-line
+// Update DEFAULT_FONT_SETTINGS to include all necessary sublines
 const DEFAULT_FONT_SETTINGS = BLOCKS.reduce((acc, block) => {
   if (block === "header") {
     acc[block] = {
       mainHead: {
-        fontSize: 22,
-        fontFamily: "",
+        fontSize: 24,
+        fontFamily: "Arial, sans-serif",
         fontWeight: "bold",
-        color: "#222222",
+        color: "#1a365d",
         visible: true,
         fontStyle: "normal",
         textDecoration: "none",
-        letterSpacing: 0,
-        textTransform: "none",
+        letterSpacing: 0.5,
+        textTransform: "uppercase",
         lineHeight: 1.2,
       },
-      sublines: {},
-      customLines: [],
-    };
-  } else if (block === "itemTable") {
-    acc[block] = {
-      gstColumns: { SGST: true, CGST: true, IGST: false },
-      gst: {
-        SGST: { fontSize: 14, fontFamily: "", fontWeight: "normal", color: "#222222", width: 30 },
-        CGST: { fontSize: 14, fontFamily: "", fontWeight: "normal", color: "#222222", width: 30 },
-        IGST: { fontSize: 14, fontFamily: "", fontWeight: "normal", color: "#222222", width: 30 },
-      },
-      sublines: BLOCK_SUBLINES[block].reduce((sacc, s) => {
-        sacc[s.key] = {
+      sublines: {
+        invoiceNumber: {
           fontSize: 14,
-          fontFamily: "",
+          fontFamily: "Arial, sans-serif",
           fontWeight: "normal",
-          color: "#222222",
+          color: "#2d3748",
           visible: true,
           fontStyle: "normal",
           textDecoration: "none",
           letterSpacing: 0,
           textTransform: "none",
-          lineHeight: 1.2,
-          width: s.key === 'itemDescription' ? 60 : 30, // 60mm for description, 30mm for others
-        };
-        return sacc;
-      }, {}),
+          lineHeight: 1.4,
+        },
+        invoiceDate: {
+          fontSize: 14,
+          fontFamily: "Arial, sans-serif",
+          fontWeight: "normal",
+          color: "#2d3748",
+          visible: true,
+          fontStyle: "normal",
+          textDecoration: "none",
+          letterSpacing: 0,
+          textTransform: "none",
+          lineHeight: 1.4,
+        }
+      },
       customLines: [],
-      sequence: [
-        'serialNo',
-        'itemDescription',
-        'hsn',
-        'quantity',
-        'rate',
-        'taxableAmount',
-        'gst',
-        'amount',
-      ],
+    };
+  } else if (block === "billedBy" || block === "billedTo" || block === "shippedTo") {
+    acc[block] = {
+      sublines: {
+        companyName: {
+          fontSize: 16,
+          fontFamily: "Arial, sans-serif",
+          fontWeight: "bold",
+          color: "#2d3748",
+          visible: true,
+          fontStyle: "normal",
+          textDecoration: "none",
+          letterSpacing: 0,
+          textTransform: "none",
+          lineHeight: 1.4,
+        },
+        gstin: {
+          fontSize: 14,
+          fontFamily: "Arial, sans-serif",
+          fontWeight: "normal",
+          color: "#2d3748",
+          visible: true,
+          fontStyle: "normal",
+          textDecoration: "none",
+          letterSpacing: 0,
+          textTransform: "none",
+          lineHeight: 1.4,
+        },
+        contact: {
+          fontSize: 14,
+          fontFamily: "Arial, sans-serif",
+          fontWeight: "normal",
+          color: "#2d3748",
+          visible: true,
+          fontStyle: "normal",
+          textDecoration: "none",
+          letterSpacing: 0,
+          textTransform: "none",
+          lineHeight: 1.4,
+        },
+        email: {
+          fontSize: 14,
+          fontFamily: "Arial, sans-serif",
+          fontWeight: "normal",
+          color: "#2d3748",
+          visible: true,
+          fontStyle: "normal",
+          textDecoration: "none",
+          letterSpacing: 0,
+          textTransform: "none",
+          lineHeight: 1.4,
+        },
+        address: {
+          fontSize: 14,
+          fontFamily: "Arial, sans-serif",
+          fontWeight: "normal",
+          color: "#2d3748",
+          visible: true,
+          fontStyle: "normal",
+          textDecoration: "none",
+          letterSpacing: 0,
+          textTransform: "none",
+          lineHeight: 1.4,
+        }
+      },
+      customLines: [],
+    };
+  } else if (block === "bankDetails") {
+    acc[block] = {
+      sublines: {
+        bankName: {
+          fontSize: 14,
+          fontFamily: "Arial, sans-serif",
+          fontWeight: "bold",
+          color: "#2d3748",
+          visible: true,
+          fontStyle: "normal",
+          textDecoration: "none",
+          letterSpacing: 0,
+          textTransform: "none",
+          lineHeight: 1.4,
+        },
+        accountNumber: {
+          fontSize: 14,
+          fontFamily: "Arial, sans-serif",
+          fontWeight: "normal",
+          color: "#2d3748",
+          visible: true,
+          fontStyle: "normal",
+          textDecoration: "none",
+          letterSpacing: 0,
+          textTransform: "none",
+          lineHeight: 1.4,
+        },
+        ifscCode: {
+          fontSize: 14,
+          fontFamily: "Arial, sans-serif",
+          fontWeight: "normal",
+          color: "#2d3748",
+          visible: true,
+          fontStyle: "normal",
+          textDecoration: "none",
+          letterSpacing: 0,
+          textTransform: "none",
+          lineHeight: 1.4,
+        },
+        upiId: {
+          fontSize: 14,
+          fontFamily: "Arial, sans-serif",
+          fontWeight: "normal",
+          color: "#2d3748",
+          visible: true,
+          fontStyle: "normal",
+          textDecoration: "none",
+          letterSpacing: 0,
+          textTransform: "none",
+          lineHeight: 1.4,
+        }
+      },
+      customLines: [],
     };
   } else if (block === "totals") {
     acc[block] = {
-      sublines: BLOCK_SUBLINES[block].reduce((sacc, s) => {
-        sacc[s.key] = {
+      sublines: {
+        taxableAmount: {
           fontSize: 14,
-          fontFamily: "",
-          fontWeight: "bold",
-          color: "#222222",
+          fontFamily: "Arial, sans-serif",
+          fontWeight: "normal",
+          color: "#2d3748",
           visible: true,
           fontStyle: "normal",
           textDecoration: "none",
           letterSpacing: 0,
           textTransform: "none",
-          lineHeight: 1.2,
-        };
-        return sacc;
-      }, {}),
+          lineHeight: 1.4,
+        },
+        CGST: {
+          fontSize: 14,
+          fontFamily: "Arial, sans-serif",
+          fontWeight: "normal",
+          color: "#2d3748",
+          visible: true,
+          fontStyle: "normal",
+          textDecoration: "none",
+          letterSpacing: 0,
+          textTransform: "none",
+          lineHeight: 1.4,
+        },
+        SGST: {
+          fontSize: 14,
+          fontFamily: "Arial, sans-serif",
+          fontWeight: "normal",
+          color: "#2d3748",
+          visible: true,
+          fontStyle: "normal",
+          textDecoration: "none",
+          letterSpacing: 0,
+          textTransform: "none",
+          lineHeight: 1.4,
+        },
+        IGST: {
+          fontSize: 14,
+          fontFamily: "Arial, sans-serif",
+          fontWeight: "normal",
+          color: "#2d3748",
+          visible: true,
+          fontStyle: "normal",
+          textDecoration: "none",
+          letterSpacing: 0,
+          textTransform: "none",
+          lineHeight: 1.4,
+        },
+        totalAmount: {
+          fontSize: 16,
+          fontFamily: "Arial, sans-serif",
+          fontWeight: "bold",
+          color: "#1a365d",
+          visible: true,
+          fontStyle: "normal",
+          textDecoration: "none",
+          letterSpacing: 0,
+          textTransform: "none",
+          lineHeight: 1.4,
+        },
+        amountInWords: {
+          fontSize: 14,
+          fontFamily: "Arial, sans-serif",
+          fontWeight: "normal",
+          color: "#2d3748",
+          visible: true,
+          fontStyle: "italic",
+          textDecoration: "none",
+          letterSpacing: 0,
+          textTransform: "none",
+          lineHeight: 1.4,
+        }
+      },
       customLines: [],
     };
-  } else if (BLOCK_SUBLINES[block]) {
+  } else if (block === "terms") {
     acc[block] = {
-      sublines: BLOCK_SUBLINES[block].reduce((sacc, s) => {
-        sacc[s.key] = {
-          fontSize: 14,
-          fontFamily: "",
+      sublines: {
+        termsText: {
+          fontSize: 12,
+          fontFamily: "Arial, sans-serif",
           fontWeight: "normal",
-          color: "#222222",
+          color: "#4a5568",
           visible: true,
           fontStyle: "normal",
           textDecoration: "none",
           letterSpacing: 0,
           textTransform: "none",
-          lineHeight: 1.2,
-        };
-        return sacc;
-      }, {}),
+          lineHeight: 1.4,
+        }
+      },
+      customLines: [],
+    };
+  } else if (block === "footer") {
+    acc[block] = {
+      sublines: {
+        footerText: {
+          fontSize: 12,
+          fontFamily: "Arial, sans-serif",
+          fontWeight: "normal",
+          color: "#718096",
+          visible: true,
+          fontStyle: "normal",
+          textDecoration: "none",
+          letterSpacing: 0,
+          textTransform: "none",
+          lineHeight: 1.4,
+        }
+      },
       customLines: [],
     };
   } else {
@@ -276,7 +475,7 @@ const DEFAULT_FONT_SETTINGS = BLOCKS.reduce((acc, block) => {
   return acc;
 }, {});
 
-const BillTemplates = ({ db, userId, isAuthReady, appId }) => {
+const BillTemplates = ({ db, userId, isAuthReady, appId, billOverride }) => {
   const [selectedType, setSelectedType] = useState(DOCUMENT_TYPES[0].key);
   // Refactored: All state is now per-type
   const [layoutsByType, setLayoutsByType] = useState({});
@@ -294,6 +493,230 @@ const BillTemplates = ({ db, userId, isAuthReady, appId }) => {
   const [zoom, setZoom] = useState(2);
   const [layout, setLayout] = useState(defaultLayout);
   const [customSize, setCustomSize] = useState({ width: 210, height: 297 });
+  const [companyDetails, setCompanyDetails] = useState(null);
+  const [billData, setBillData] = useState(null);
+  const [partyDetails, setPartyDetails] = useState(null);
+
+  // Fetch bill data when billOverride changes
+  useEffect(() => {
+    if (billOverride) {
+      setBillData(billOverride);
+      // Fetch party details
+      if (db && userId && isAuthReady && appId && billOverride.party) {
+        const partyRef = doc(db, `artifacts/${appId}/users/${userId}/parties`, billOverride.party);
+        getDoc(partyRef).then(docSnap => {
+          if (docSnap.exists()) {
+            setPartyDetails(docSnap.data());
+          }
+        });
+      }
+    }
+  }, [billOverride, db, userId, isAuthReady, appId]);
+
+  // Function to format date as DD/MM/YYYY
+  const formatDate = (dateStr) => {
+    if (!dateStr) return '';
+    const date = new Date(dateStr);
+    return date.toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric'
+    });
+  };
+
+  // Function to format currency
+  const formatCurrency = (amount) => {
+    if (!amount && amount !== 0) return '';
+    return new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    }).format(amount);
+  };
+
+  // Function to convert number to words
+  const numToWords = (num) => {
+    const a = ['', 'One ', 'Two ', 'Three ', 'Four ', 'Five ', 'Six ', 'Seven ', 'Eight ', 'Nine ', 'Ten ',
+      'Eleven ', 'Twelve ', 'Thirteen ', 'Fourteen ', 'Fifteen ', 'Sixteen ', 'Seventeen ', 'Eighteen ', 'Nineteen '];
+    const b = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+
+    if ((num = num.toString()).length > 9) return 'Overflow';
+    const n = ('000000000' + num).substr(-9).match(/^(\d{2})(\d{2})(\d{2})(\d{1})(\d{2})$/);
+    if (!n) return;
+    let str = '';
+    str += (n[1] != 0) ? (a[Number(n[1])] || b[n[1][0]] + ' ' + a[n[1][1]]) + 'Crore ' : '';
+    str += (n[2] != 0) ? (a[Number(n[2])] || b[n[2][0]] + ' ' + a[n[2][1]]) + 'Lakh ' : '';
+    str += (n[3] != 0) ? (a[Number(n[3])] || b[n[3][0]] + ' ' + a[n[3][1]]) + 'Thousand ' : '';
+    str += (n[4] != 0) ? (a[Number(n[4])] || b[n[4][0]] + ' ' + a[n[4][1]]) + 'Hundred ' : '';
+    str += (n[5] != 0) ? ((str != '') ? 'and ' : '') + (a[Number(n[5])] || b[n[5][0]] + ' ' + a[n[5][1]]) : '';
+    return str.trim() + ' Rupees Only';
+  };
+
+  // Map data to template blocks
+  const mapDataToBlock = (block) => {
+    if (!billData || !companyDetails) return {};
+
+    switch (block) {
+      case 'header':
+        return {
+          mainHead: billData.docType === 'challan' ? 'CHALLAN' : billData.docType === 'quotation' ? 'QUOTATION' : 'TAX INVOICE',
+          invoiceNumber: billData.number || '',
+          invoiceDate: formatDate(billData.invoiceDate) || '',
+        };
+
+      case 'billedBy':
+        return {
+          companyName: companyDetails.firmName || '',
+          gstin: `GSTIN: ${companyDetails.gstin || ''}`,
+          contact: companyDetails.contactNumber || '',
+          email: companyDetails.email || '',
+          address: [
+            companyDetails.address || '',
+            companyDetails.city || '',
+            companyDetails.state ? `${companyDetails.state} - ${companyDetails.pincode || ''}` : ''
+          ].filter(Boolean).join(', '),
+        };
+
+      case 'billedTo':
+        return partyDetails ? {
+          companyName: partyDetails.firmName || '',
+          gstin: `GSTIN: ${partyDetails.gstin || ''}`,
+          contact: partyDetails.contactNumber || '',
+          email: partyDetails.email || '',
+          address: [
+            partyDetails.address || '',
+            partyDetails.city || '',
+            partyDetails.state ? `${partyDetails.state} - ${partyDetails.pincode || ''}` : ''
+          ].filter(Boolean).join(', '),
+        } : {};
+
+      case 'bankDetails':
+        return {
+          bankName: companyDetails.bankName || '',
+          accountNumber: `A/C: ${companyDetails.bankAccount || ''}`,
+          ifscCode: `IFSC: ${companyDetails.bankIfsc || ''}`,
+          upiId: companyDetails.upiId ? `UPI: ${companyDetails.upiId}` : '',
+        };
+
+      case 'totals':
+        const subtotal = billData.rows?.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0) || 0;
+        const totalSGST = billData.rows?.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.sgst) || 0) / 100), 0) || 0;
+        const totalCGST = billData.rows?.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0) / 100), 0) || 0;
+        const totalIGST = billData.rows?.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0) / 100), 0) || 0;
+        const grandTotal = subtotal + totalSGST + totalCGST + totalIGST;
+
+        return {
+          taxableAmount: `Taxable Amount: ${formatCurrency(subtotal)}`,
+          CGST: `CGST: ${formatCurrency(totalCGST)}`,
+          SGST: `SGST: ${formatCurrency(totalSGST)}`,
+          IGST: `IGST: ${formatCurrency(totalIGST)}`,
+          totalAmount: `Grand Total: ${formatCurrency(grandTotal)}`,
+          amountInWords: numToWords(Math.round(grandTotal)),
+        };
+
+      case 'terms':
+        return {
+          termsText: companyDetails.terms || 'Thank you for your business!',
+        };
+
+      case 'footer':
+        return {
+          footerText: `Generated on ${new Date().toLocaleDateString('en-IN')} | ${companyDetails.firmName || ''}`,
+        };
+
+      default:
+        return {};
+    }
+  };
+
+  // Add effect to fetch company details
+  useEffect(() => {
+    if (!db || !userId || !isAuthReady || !appId) return;
+    const companyDocRef = doc(db, `artifacts/${appId}/users/${userId}/companyDetails`, 'myCompany');
+    const unsubscribe = onSnapshot(companyDocRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setCompanyDetails(docSnap.data());
+      }
+    });
+    return () => unsubscribe();
+  }, [db, userId, isAuthReady, appId]);
+
+  useEffect(() => {
+    if (!db || !userId || !isAuthReady || !appId) return;
+    const fetchLayouts = async () => {
+      setLoadingLayouts(true);
+      try {
+        // 1. Fetch layouts from the correct path
+        const layoutsRef = collection(db, `artifacts/${appId}/users/${userId}/billLayouts`);
+        const layoutsSnapshot = await getDocs(layoutsRef);
+        
+        // 2. Group layouts by type
+        const layoutsByTypeTemp = {};
+        layoutsSnapshot.docs.forEach(docSnap => {
+          const data = docSnap.data();
+          const type = data.type || 'invoice';
+          if (!layoutsByTypeTemp[type]) layoutsByTypeTemp[type] = [];
+          layoutsByTypeTemp[type].push({ id: docSnap.id, ...data });
+        });
+        setSavedLayoutsByType(layoutsByTypeTemp);
+        
+        // 3. Set current type's layouts
+        if (layoutsByTypeTemp[selectedType]) {
+          setSavedLayouts(layoutsByTypeTemp[selectedType]);
+        }
+
+        // 4. Fetch default template preferences
+        const preferencesRef = doc(db, `artifacts/${appId}/users/${userId}/preferences`, 'userPreferences');
+        const preferencesSnap = await getDoc(preferencesRef);
+        
+        if (preferencesSnap.exists()) {
+          const prefs = preferencesSnap.data();
+          const defaultIds = prefs.defaultTemplateIdByType || {};
+          
+          // 5. Verify default templates exist
+          Object.entries(defaultIds).forEach(([type, defaultId]) => {
+            const layoutsOfType = layoutsByTypeTemp[type] || [];
+            const templateExists = layoutsOfType.some(l => l.id === defaultId);
+            
+            if (!templateExists) {
+              delete defaultIds[type];
+            }
+          });
+          
+          // 6. Set default template IDs
+          setDefaultTemplateIdByType(defaultIds);
+          
+          // 7. Set current type's default template
+          if (defaultIds[selectedType]) {
+            setDefaultTemplateId(defaultIds[selectedType]);
+          }
+        }
+
+      } catch (err) {
+        console.error('Error fetching layouts:', err);
+        setSavedLayoutsByType({});
+        setSavedLayouts([]);
+        setDefaultTemplateIdByType({});
+        setDefaultTemplateId(null);
+      }
+      setLoadingLayouts(false);
+    };
+
+    fetchLayouts();
+  }, [db, userId, isAuthReady, appId, selectedType]);
+
+  // Add effect to update current layouts when type changes
+  useEffect(() => {
+    if (savedLayoutsByType[selectedType]) {
+      setSavedLayouts(savedLayoutsByType[selectedType]);
+      // Update default template ID for current type
+      setDefaultTemplateId(defaultTemplateIdByType[selectedType] || null);
+    } else {
+      setSavedLayouts([]);
+      setDefaultTemplateId(null);
+    }
+  }, [selectedType, savedLayoutsByType, defaultTemplateIdByType]);
 
   // Calculate paper dimensions
   const paper = paperSize === 'custom'
@@ -348,7 +771,7 @@ const BillTemplates = ({ db, userId, isAuthReady, appId }) => {
   // Add state for editable sample row values per template
   const [itemTableSampleRow, setItemTableSampleRow] = useState({});
 
-  // Place this at the top level of the BillTemplates component, with other useState declarations
+  // Place this at the top level of the BillTemplates component, with other useState hooks:
   const [dragIdx, setDragIdx] = useState(null);
 
   // Add state for discount type and value in Totals
@@ -371,49 +794,6 @@ const BillTemplates = ({ db, userId, isAuthReady, appId }) => {
   // Add per-type margin variable and setter:
   const margin = marginByType[selectedType] || { top: 10, right: 10, bottom: 10, left: 10 };
   const setMarginForType = (newMargin) => setMarginByType(prev => ({ ...prev, [selectedType]: typeof newMargin === 'function' ? newMargin(prev[selectedType] || { top: 10, right: 10, bottom: 10, left: 10 }) : newMargin }));
-
-  useEffect(() => {
-    if (!db || !userId || !isAuthReady) return;
-    const fetchLayouts = async () => {
-      setLoadingLayouts(true);
-      try {
-        // Fetch layouts
-        const q = collection(db, "users", userId, "billLayouts");
-        const querySnapshot = await getDocs(q);
-        // Group layouts by type
-        const layoutsByTypeTemp = {};
-        querySnapshot.docs.forEach(docSnap => {
-          const data = docSnap.data();
-          const type = data.type || 'invoice';
-          if (!layoutsByTypeTemp[type]) layoutsByTypeTemp[type] = [];
-          layoutsByTypeTemp[type].push({ id: docSnap.id, ...data });
-        });
-        setSavedLayoutsByType(layoutsByTypeTemp);
-        // Fetch default template preference (per type)
-        try {
-          const userDoc = await getDoc(doc(db, "users", userId));
-          if (userDoc.exists()) {
-            const userData = userDoc.data();
-            const defaultIds = userData.defaultTemplateIdByType || {};
-            setDefaultTemplateIdByType(defaultIds);
-            // Optionally, verify existence
-            Object.entries(defaultIds).forEach(([type, defaultId]) => {
-              if (defaultId && !(layoutsByTypeTemp[type] || []).find(l => l.id === defaultId)) {
-                // Clear missing default
-                setDefaultTemplateIdByType(prev => ({ ...prev, [type]: null }));
-              }
-            });
-          }
-        } catch (err) {
-          setDefaultTemplateIdByType({});
-        }
-      } catch (err) {
-        setSavedLayoutsByType({});
-      }
-      setLoadingLayouts(false);
-    };
-    fetchLayouts();
-  }, [db, userId, isAuthReady]);
 
   useEffect(() => {
     if (resizingCol) {
@@ -479,7 +859,7 @@ const BillTemplates = ({ db, userId, isAuthReady, appId }) => {
 
   // Save or update layout in Firestore
   const handleSaveLayout = async () => {
-    if (!layoutName.trim() || !db || !userId) return;
+    if (!layoutName.trim() || !db || !userId || !appId) return;
     const layoutData = {
       name: layoutName,
       data: {
@@ -493,11 +873,16 @@ const BillTemplates = ({ db, userId, isAuthReady, appId }) => {
         headerMainHeadOther,
       },
       type: selectedType,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
     };
-    const colRef = collection(db, "users", userId, "billLayouts");
+    const colRef = collection(db, `artifacts/${appId}/users/${userId}/billLayouts`);
     if (editingLayoutId) {
       // Update existing
-      await setDoc(doc(colRef, editingLayoutId), layoutData, { merge: true });
+      await setDoc(doc(colRef, editingLayoutId), {
+        ...layoutData,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
     } else {
       // Add new
       await addDoc(colRef, layoutData);
@@ -550,29 +935,43 @@ const BillTemplates = ({ db, userId, isAuthReady, appId }) => {
 
   // Set template as default
   const handleSetAsDefault = async (id) => {
-    if (!db || !userId) {
+    if (!db || !userId || !appId) {
       alert("Database connection or user authentication not available");
       return;
     }
     try {
-      // Check if the template exists
+      // 1. Check if the template exists
       const template = savedLayouts.find(l => l.id === id);
       if (!template) {
         alert("Template not found");
         return;
       }
-      // Get current defaultTemplateIdByType from Firestore
-      const userDocRef = doc(db, "users", userId);
-      const userDoc = await getDoc(userDocRef);
+
+      // 2. Get current preferences
+      const preferencesRef = doc(db, `artifacts/${appId}/users/${userId}/preferences`, 'userPreferences');
+      const preferencesSnap = await getDoc(preferencesRef);
+      
+      // 3. Prepare new preferences
       let defaultTemplateIdByType = {};
-      if (userDoc.exists()) {
-        defaultTemplateIdByType = userDoc.data().defaultTemplateIdByType || {};
+      if (preferencesSnap.exists()) {
+        defaultTemplateIdByType = preferencesSnap.data().defaultTemplateIdByType || {};
       }
-      // Set for current type
+      
+      // 4. Update default template for current type
       defaultTemplateIdByType[selectedType] = id;
-      await setDoc(userDocRef, { defaultTemplateIdByType }, { merge: true });
+
+      // 5. Save to Firebase
+      await setDoc(preferencesRef, {
+        defaultTemplateIdByType,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+
+      // 6. Update local state
       setDefaultTemplateIdByType(prev => ({ ...prev, [selectedType]: id }));
-      alert("Template set as default successfully!");
+      setDefaultTemplateId(id);
+
+      // 7. Show success message
+      alert(`Template "${template.name}" set as default for ${selectedType.toUpperCase()}`);
     } catch (err) {
       console.error("Error setting default template:", err);
       alert(`Failed to set template as default: ${err.message || 'Unknown error'}`);
@@ -778,8 +1177,8 @@ const BillTemplates = ({ db, userId, isAuthReady, appId }) => {
 
   // Delete layout from Firestore
   const handleDeleteLayout = async (id) => {
-    if (!db || !userId) return;
-    const colRef = collection(db, "users", userId, "billLayouts");
+    if (!db || !userId || !appId) return;
+    const colRef = collection(db, `artifacts/${appId}/users/${userId}/billLayouts`);
     await deleteDoc(doc(colRef, id));
     // Refresh list
     const querySnapshot = await getDocs(colRef);
@@ -792,11 +1191,13 @@ const BillTemplates = ({ db, userId, isAuthReady, appId }) => {
     // If deleted template was default, clear default
     if (defaultTemplateId === id) {
       try {
-        const userDocRef = doc(db, "users", userId);
+        const userDocRef = doc(db, `artifacts/${appId}/users/${userId}`, 'preferences');
         const userDoc = await getDoc(userDocRef);
         
         if (userDoc.exists()) {
-          await setDoc(userDocRef, { defaultTemplateId: null }, { merge: true });
+          const defaultTemplateIdByType = userDoc.data().defaultTemplateIdByType || {};
+          delete defaultTemplateIdByType[selectedType];
+          await setDoc(userDocRef, { defaultTemplateIdByType }, { merge: true });
         }
         setDefaultTemplateId(null);
       } catch (err) {
@@ -1271,15 +1672,270 @@ const BillTemplates = ({ db, userId, isAuthReady, appId }) => {
     );
   };
 
-  // Add this after the useEffect that fetches layouts from Firestore
-  useEffect(() => {
-    if (savedLayoutsByType[selectedType]) {
-      setSavedLayouts(savedLayoutsByType[selectedType]);
-    } else {
-      setSavedLayouts([]);
-    }
-  }, [savedLayoutsByType, selectedType]);
+  // Add this helper function at the top level
+  const getDefaultFontStyle = (block, key) => ({
+    fontSize: 14,
+    fontFamily: "Arial, sans-serif",
+    fontWeight: "normal",
+    color: "#2d3748",
+    fontStyle: "normal",
+    textDecoration: "none",
+    letterSpacing: 0,
+    textTransform: "none",
+    lineHeight: 1.4,
+    visible: true,
+  });
 
+  // If billOverride is present, we're in print mode
+  if (billOverride) {
+    const companyDetails = billOverride.companyDetails || {};
+    const partyDetails = billOverride.partyDetails || {};
+    const items = billOverride.items || [];
+    const rows = billOverride.rows || [];
+
+    const defaultTemplateId = defaultTemplateIdByType[billOverride.docType || 'invoice'];
+    const defaultTemplate = savedLayoutsByType[billOverride.docType || 'invoice']?.find(l => l.id === defaultTemplateId);
+    const templateData = defaultTemplate?.data || { layout: defaultLayout, margin: { top: 10, right: 10, bottom: 10, left: 10 } };
+    const layout = templateData.layout || defaultLayout;
+    const margin = templateData.margin || { top: 10, right: 10, bottom: 10, left: 10 };
+
+    // Dynamic document type label
+    const docTypeLabel = {
+      invoice: 'TAX INVOICE',
+      challan: 'CHALLAN',
+      quotation: 'QUOTATION',
+      purchase_bill: 'PURCHASE BILL',
+      purchase_order: 'PURCHASE ORDER'
+    }[billOverride.docType] || 'INVOICE';
+    // Dynamic number label
+    const numberLabel = {
+      invoice: 'Invoice Number',
+      challan: 'Challan Number',
+      quotation: 'Quotation Number',
+      purchase_bill: 'Purchase Bill Number',
+      purchase_order: 'Purchase Order Number'
+    }[billOverride.docType] || 'Number';
+
+    return (
+      <div className="flex justify-center items-start min-h-screen bg-gray-100 p-4">
+        <div
+          className="bg-white shadow-lg"
+          style={{
+            width: '900px',
+            margin: 'auto',
+            padding: `${margin.top}px ${margin.right}px ${margin.bottom}px ${margin.left}px`,
+            boxSizing: 'border-box'
+          }}
+        >
+          {layout.map((row, rowIdx) => (
+            <div key={rowIdx} style={{ display: 'flex', marginBottom: 8, minHeight: 60 }}>
+              {row.cells.map((cell, colIdx) => {
+                if (!cell) return <div key={colIdx} style={{ flex: 1 }} />;
+                // Render each block with real data
+                if (rowIdx === 0 && colIdx === 0 && cell === 'header') {
+                  // Row 1, Col 1: Document type, number, date
+                  return (
+                    <div key={colIdx} style={{ flex: 1, textAlign: 'left', display: 'flex', flexDirection: 'column', justifyContent: 'center', height: '100%' }}>
+                      <div className="text-xl font-bold">{docTypeLabel}</div>
+                      <div>{numberLabel}: {billOverride.number || ''}</div>
+                      <div>Date: {billOverride.invoiceDate || ''}</div>
+          </div>
+                  );
+                }
+                if (rowIdx === 0 && colIdx === 1 && cell === 'logo') {
+                  // Row 1, Col 2: Company logo
+                  return (
+                    <div key={colIdx} style={{ flex: 1, textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                      {companyDetails.logoUrl ? (
+                        <img src={companyDetails.logoUrl} alt="Logo" style={{ maxHeight: 60, maxWidth: 120, margin: '0 auto', objectFit: 'contain', display: 'block' }} />
+                      ) : (
+                        <span className="text-gray-400">No Logo</span>
+                      )}
+                    </div>
+                  );
+                }
+                // ...rest of the switch/cases for other blocks...
+                switch (cell) {
+                  case 'header':
+                    return (
+                      <div key={colIdx} style={{ flex: 1, textAlign: 'center' }}>
+                        <h1 className="text-2xl font-bold">{companyDetails.firmName || ''}</h1>
+                        <div>{companyDetails.address || ''}</div>
+            <div>
+                          {companyDetails.city || ''} {companyDetails.state ? `, ${companyDetails.state}` : ''} 
+                          {companyDetails.pincode ? ` - ${companyDetails.pincode}` : ''}
+            </div>
+                        <div>GSTIN: {companyDetails.gstin || ''}</div>
+                        <div>Contact: {companyDetails.contactNumber || ''}</div>
+            </div>
+                    );
+                  case 'billedBy':
+                    return (
+                      <div key={colIdx} style={{ flex: 1 }}>
+                        <b>Billed By:</b>
+                        <div>{companyDetails.firmName || ''}</div>
+                        <div>{companyDetails.address || ''}</div>
+                        <div>GSTIN: {companyDetails.gstin || ''}</div>
+                        <div>Contact: {companyDetails.contactNumber || ''}</div>
+          </div>
+                    );
+                  case 'billedTo':
+                    return (
+                      <div key={colIdx} style={{ flex: 1 }}>
+                        <b>Bill To:</b>
+                        <div>{partyDetails.firmName || ''}</div>
+                        <div>{partyDetails?.address || ''}</div>
+                        <div>GSTIN: {partyDetails?.gstin || ''}</div>
+                        <div>Contact: {partyDetails?.contactNumber || ''}</div>
+            </div>
+                    );
+                  case 'shippedTo':
+                    return (
+                      <div key={colIdx} style={{ flex: 1 }}>
+                        <b>Ship To:</b>
+                        <div>{partyDetails.firmName || ''}</div>
+                        <div>{partyDetails?.address || ''}</div>
+                        <div>GSTIN: {partyDetails?.gstin || ''}</div>
+                        <div>Contact: {partyDetails?.contactNumber || ''}</div>
+            </div>
+                    );
+                  case 'itemTable':
+                    return (
+                      <div key={colIdx} style={{ flex: 1 }}>
+                        {/* Item Table */}
+            <table className="w-full border-collapse">
+              <thead className="bg-gray-800 text-white">
+                <tr>
+                              <th className="border px-2 py-1">Sr.</th>
+                              <th className="border px-2 py-1">Item Description</th>
+                              <th className="border px-2 py-1">HSN</th>
+                              <th className="border px-2 py-1">Qty</th>
+                              <th className="border px-2 py-1">Rate</th>
+                              <th className="border px-2 py-1">Amount</th>
+                              <th className="border px-2 py-1">GST %</th>
+                              <th className="border px-2 py-1">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                            {rows.map((row, idx) => {
+                              const itemObj = items.find(it => it.id === row.item) || {};
+                  return (
+                                <tr key={idx}>
+                                  <td className="border px-2 py-1 text-center">{idx + 1}</td>
+                                  <td className="border px-2 py-1">
+                                    <div>{itemObj.itemName || ''}</div>
+                                    {(row.nos || row.length || row.height) && (
+                                      <div style={{ fontSize: '0.85em', fontStyle: 'italic', color: '#555' }}>
+                                        {[
+                                          row.nos && parseFloat(row.nos) !== 0 ? row.nos : null,
+                                          row.length && parseFloat(row.length) !== 1 && parseFloat(row.length) !== 0 ? row.length : null,
+                                          row.height && parseFloat(row.height) !== 1 && parseFloat(row.height) !== 0 ? row.height : null
+                                        ].filter(Boolean).join('x')}
+                                      </div>
+                                    )}
+                                  </td>
+                                  <td className="border px-2 py-1">{itemObj.hsnCode || ''}</td>
+                                  <td className="border px-2 py-1 text-center">{row.qty}</td>
+                                  <td className="border px-2 py-1 text-right">{row.rate}</td>
+                                  <td className="border px-2 py-1 text-right">{row.amount}</td>
+                                  <td className="border px-2 py-1 text-center">{round2((parseFloat(row.sgst) || 0) + (parseFloat(row.cgst) || 0) + (parseFloat(row.igst) || 0))}%</td>
+                                  <td className="border px-2 py-1 text-right">{row.total}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+                    );
+                  case 'bankDetails':
+                    return (
+                      <div key={colIdx} style={{ flex: 1 }}>
+                        <b>Bank & Payment Details:</b>
+                        <div>{companyDetails.bankName || ''}</div>
+                        <div>{companyDetails.bankAccount ? `A/C: ${companyDetails.bankAccount}` : ''}</div>
+                        <div>{companyDetails.bankIfsc ? `IFSC: ${companyDetails.bankIfsc}` : ''}</div>
+                        <div>{companyDetails.upiId ? `UPI: ${companyDetails.upiId}` : ''}</div>
+                      </div>
+                    );
+                  case 'totals': {
+                    // Group rows by GST %
+                    const gstGroups = {};
+                    rows.forEach(row => {
+                      const gstPercent = parseFloat(row.sgst || 0) + parseFloat(row.cgst || 0) + parseFloat(row.igst || 0);
+                      if (!gstGroups[gstPercent]) gstGroups[gstPercent] = { taxable: 0, sgst: 0, cgst: 0, igst: 0 };
+                      gstGroups[gstPercent].taxable += parseFloat(row.amount) || 0;
+                      gstGroups[gstPercent].sgst += ((parseFloat(row.amount) || 0) * (parseFloat(row.sgst) || 0) / 100) || 0;
+                      gstGroups[gstPercent].cgst += ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0) / 100) || 0;
+                      gstGroups[gstPercent].igst += ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0) / 100) || 0;
+                    });
+                    const subtotal = rows?.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0) || 0;
+                    const totalSGST = rows?.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.sgst) || 0) / 100), 0) || 0;
+                    const totalCGST = rows?.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0) / 100), 0) || 0;
+                    const totalIGST = rows?.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0) / 100), 0) || 0;
+                    const grandTotal = subtotal + totalSGST + totalCGST + totalIGST;
+                    return (
+                      <div key={colIdx} style={{ flex: 1 }}>
+                        <b>Totals (GST % wise):</b>
+                        <table className="w-full border-collapse text-xs mt-1 mb-2">
+                          <thead>
+                            <tr>
+                              <th className="border px-1 py-0.5 text-center align-middle">GST %</th>
+                              <th className="border px-1 py-0.5 text-center align-middle">Taxable</th>
+                              <th className="border px-1 py-0.5 text-center align-middle">SGST</th>
+                              <th className="border px-1 py-0.5 text-center align-middle">CGST</th>
+                              <th className="border px-1 py-0.5 text-center align-middle">IGST</th>
+                              <th className="border px-1 py-0.5 text-center align-middle">Total Tax</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {Object.entries(gstGroups).map(([gst, vals]) => (
+                              <tr key={gst}>
+                                <td className="border px-1 py-0.5 text-center align-middle">{gst}%</td>
+                                <td className="border px-1 py-0.5 text-center align-middle">{round2(vals.taxable)}</td>
+                                <td className="border px-1 py-0.5 text-center align-middle">{round2(vals.sgst)}</td>
+                                <td className="border px-1 py-0.5 text-center align-middle">{round2(vals.cgst)}</td>
+                                <td className="border px-1 py-0.5 text-center align-middle">{round2(vals.igst)}</td>
+                                <td className="border px-1 py-0.5 text-center align-middle">{round2(vals.sgst + vals.cgst + vals.igst)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        <div>Taxable Amount: {round2(subtotal)}</div>
+                        <div>SGST: {round2(totalSGST)}</div>
+                        <div>CGST: {round2(totalCGST)}</div>
+                        <div>IGST: {round2(totalIGST)}</div>
+                        <div>Grand Total: {round2(grandTotal)}</div>
+                      </div>
+                    );
+                  }
+                  case 'gst':
+                    // You can render a GST summary or details here, or combine with totals if needed
+                    return null; // Placeholder, or implement as needed
+                  case 'terms':
+                    return (
+                      <div key={colIdx} style={{ flex: 1 }}>
+                        <b>Terms and Conditions:</b>
+                        <div>{companyDetails.terms || 'Thank you for your business!'}</div>
+                      </div>
+                    );
+                  case 'footer':
+                    return (
+                      <div key={colIdx} style={{ flex: 1, textAlign: 'center', fontSize: 12, color: '#888' }}>
+                        {companyDetails.footer || `Generated on ${new Date().toLocaleDateString('en-IN')} | ${companyDetails.firmName || ''}`}
+                      </div>
+                    );
+                  default:
+                    return <div key={colIdx} style={{ flex: 1 }} />;
+                }
+              })}
+              </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // Regular template editor UI
   return (
     <div className="p-4">
       <h2 className="text-2xl font-bold mb-4">Bill Templates</h2>
@@ -1529,35 +2185,46 @@ const BillTemplates = ({ db, userId, isAuthReady, appId }) => {
                           setFontEditor({ open: true, block: cell, pos: { x: rect.right + window.scrollX + 8, y: rect.top + window.scrollY } });
                         }}
                       >
-                        {cell === 'itemTable' ? <ItemTable widthMm={row.width || 190} /> :
-                          cell === 'gstDetails' ? <GstDetailsTable widthMm={row.width || 190} /> :
-                          fontSettings[cell] && fontSettings[cell].sublines && BLOCK_SUBLINES[cell] ? (
-                            BLOCK_SUBLINES[cell]
-                              .filter(sub => fontSettings[cell].sublines[sub.key] && fontSettings[cell].sublines[sub.key].visible)
-                              .map(sub => {
-                                const sublineSettings = fontSettings[cell].sublines[sub.key] || {};
-                                return (
-                                  <div
-                                    key={sub.key}
-                                    style={{
-                                      fontSize: sublineSettings.fontSize || 14,
-                                      fontFamily: sublineSettings.fontFamily || "",
-                                      fontWeight: sublineSettings.fontWeight || "normal",
-                                      color: sublineSettings.color || "#222222",
-                                      fontStyle: sublineSettings.fontStyle || "normal",
-                                      textDecoration: sublineSettings.textDecoration || "none",
-                                      letterSpacing: sublineSettings.letterSpacing || 0,
-                                      textTransform: sublineSettings.textTransform || "none",
-                                      lineHeight: sublineSettings.lineHeight || 1.2,
-                                    }}
-                                                                  >
-                                  {cell === 'header' && sub.key === 'mainHead'
-                                    ? (headerMainHead === 'Other' ? headerMainHeadOther : headerMainHead)
-                                    : sub.key === 'label' ? (BLOCK_DISPLAY_NAMES[cell] || sub.label) : sub.label}
+                        {cell === 'itemTable' ? (
+                          <ItemTable 
+                            widthMm={row.width || 190} 
+                            items={billData?.rows || []} 
+                            db={db} 
+                            userId={userId} 
+                            isAuthReady={isAuthReady} 
+                            appId={appId} 
+                          />
+                        ) : cell === 'gstDetails' ? (
+                          <GstDetailsTable widthMm={row.width || 190} db={db} userId={userId} isAuthReady={isAuthReady} appId={appId} />
+                        ) : (
+                          <div className="p-4">
+                            {Object.entries(mapDataToBlock(cell) || {}).map(([key, value]) => {
+                              // Get font settings with fallbacks
+                              const blockSettings = fontSettings?.[cell] || DEFAULT_FONT_SETTINGS[cell] || {};
+                              const sublineSettings = blockSettings?.sublines?.[key] || getDefaultFontStyle(cell, key);
+                              
+                              // Skip if not visible
+                              if (sublineSettings.visible === false) return null;
+
+                              return (
+                                <div key={key} style={{
+                                  fontSize: sublineSettings.fontSize || 14,
+                                  fontFamily: sublineSettings.fontFamily || "Arial, sans-serif",
+                                  fontWeight: sublineSettings.fontWeight || "normal",
+                                  color: sublineSettings.color || "#2d3748",
+                                  fontStyle: sublineSettings.fontStyle || "normal",
+                                  textDecoration: sublineSettings.textDecoration || "none",
+                                  letterSpacing: sublineSettings.letterSpacing || 0,
+                                  textTransform: sublineSettings.textTransform || "none",
+                                  lineHeight: sublineSettings.lineHeight || 1.4,
+                                  marginBottom: "0.5rem"
+                                }}>
+                                  {value}
                                 </div>
                               );
-                              })
-                          ) : <BlockPreview block={cell} />}
+                            })}
+                          </div>
+                        )}
                         {fontSettings[cell]?.customLines?.map((line, idx) => (
                           <div
                             key={idx}
@@ -1830,27 +2497,13 @@ const BillTemplates = ({ db, userId, isAuthReady, appId }) => {
                     {FONT_WEIGHTS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
                   </select>
                   <select className="border rounded px-1 py-0.5" value={fontSettings[fontEditor.block]?.sublines?.[sub.key]?.fontStyle ?? "normal"}
-                    onChange={e => setFontSettings(fs => ({ ...fs, [fontEditor.block]: { ...fs[fontEditor.block], sublines: { ...fs[fontEditor.block].sublines, [sub.key]: { ...fs[fontEditor.block].sublines[sub.key], fontStyle: e.target.value } } } }))}>
-                    <option value="normal">Normal</option>
-                    <option value="italic">Italic</option>
-                    <option value="oblique">Oblique</option>
-                  </select>
+                    onChange={e => setFontSettings(fs => ({ ...fs, [fontEditor.block]: { ...fs[fontEditor.block], sublines: { ...fs[fontEditor.block].sublines, [sub.key]: { ...fs[fontEditor.block].sublines[sub.key], fontStyle: e.target.value } } } }))} />
                   <select className="border rounded px-1 py-0.5" value={fontSettings[fontEditor.block]?.sublines?.[sub.key]?.textDecoration ?? "none"}
-                    onChange={e => setFontSettings(fs => ({ ...fs, [fontEditor.block]: { ...fs[fontEditor.block], sublines: { ...fs[fontEditor.block].sublines, [sub.key]: { ...fs[fontEditor.block].sublines[sub.key], textDecoration: e.target.value } } } }))}>
-                    <option value="none">None</option>
-                    <option value="underline">Underline</option>
-                    <option value="line-through">Line-through</option>
-                    <option value="overline">Overline</option>
-                  </select>
+                    onChange={e => setFontSettings(fs => ({ ...fs, [fontEditor.block]: { ...fs[fontEditor.block], sublines: { ...fs[fontEditor.block].sublines, [sub.key]: { ...fs[fontEditor.block].sublines[sub.key], textDecoration: e.target.value } } } }))} />
                   <input type="number" step="0.1" className="border rounded px-1 py-0.5 w-12" value={fontSettings[fontEditor.block]?.sublines?.[sub.key]?.letterSpacing ?? 0}
                     onChange={e => setFontSettings(fs => ({ ...fs, [fontEditor.block]: { ...fs[fontEditor.block], sublines: { ...fs[fontEditor.block].sublines, [sub.key]: { ...fs[fontEditor.block].sublines[sub.key], letterSpacing: parseFloat(e.target.value) || 0 } } } }))} placeholder="Spacing" />
                   <select className="border rounded px-1 py-0.5" value={fontSettings[fontEditor.block]?.sublines?.[sub.key]?.textTransform ?? "none"}
-                    onChange={e => setFontSettings(fs => ({ ...fs, [fontEditor.block]: { ...fs[fontEditor.block], sublines: { ...fs[fontEditor.block].sublines, [sub.key]: { ...fs[fontEditor.block].sublines[sub.key], textTransform: e.target.value } } } }))}>
-                    <option value="none">None</option>
-                    <option value="uppercase">Uppercase</option>
-                    <option value="lowercase">Lowercase</option>
-                    <option value="capitalize">Capitalize</option>
-                  </select>
+                    onChange={e => setFontSettings(fs => ({ ...fs, [fontEditor.block]: { ...fs[fontEditor.block], sublines: { ...fs[fontEditor.block].sublines, [sub.key]: { ...fs[fontEditor.block].sublines[sub.key], textTransform: e.target.value } } } }))} />
                   <input type="number" step="0.1" className="border rounded px-1 py-0.5 w-12" value={fontSettings[fontEditor.block]?.sublines?.[sub.key]?.lineHeight ?? 1.2}
                     onChange={e => setFontSettings(fs => ({ ...fs, [fontEditor.block]: { ...fs[fontEditor.block], sublines: { ...fs[fontEditor.block].sublines, [sub.key]: { ...fs[fontEditor.block].sublines[sub.key], lineHeight: parseFloat(e.target.value) || 1.2 } } } }))} placeholder="Line" />
                   <input type="color" className="ml-1" value={fontSettings[fontEditor.block]?.sublines?.[sub.key]?.color ?? "#222222"}
@@ -1988,37 +2641,46 @@ const patchLayoutRowWidths = (layout, paperW, margin) => {
 const mmToPx = mm => mm * 3.78;
 
 // Add new GstDetailsTable component
-function GstDetailsTable({ widthMm = 190 }) {
-  const [rows, setRows] = React.useState([
-    { hsn: '', taxableAmount: 0, cgstRate: 9, cgstAmount: 0, sgstRate: 9, sgstAmount: 0, totalTaxAmount: 0, selected: false },
-  ]);
-  
-  const addRow = () => setRows(r => [...r, { hsn: '', taxableAmount: 0, cgstRate: 9, cgstAmount: 0, sgstRate: 9, sgstAmount: 0, totalTaxAmount: 0, selected: false }]);
-  const removeRow = idx => setRows(r => r.filter((_, i) => i !== idx));
-  const toggleRowSelection = idx => setRows(r => r.map((row, i) => i === idx ? { ...row, selected: !row.selected } : row));
-  const removeSelectedRows = () => setRows(r => r.filter(row => !row.selected));
-  const updateRow = (idx, key, value) => {
-    setRows(r => {
-      const newRows = r.map((row, i) => {
-        if (i === idx) {
-          const updatedRow = { ...row, [key]: value };
-          // Recalculate amounts
-          const taxable = parseFloat(updatedRow.taxableAmount) || 0;
-          const cgstRate = parseFloat(updatedRow.cgstRate) || 0;
-          const sgstRate = parseFloat(updatedRow.sgstRate) || 0;
-          updatedRow.cgstAmount = (taxable * cgstRate / 100);
-          updatedRow.sgstAmount = (taxable * sgstRate / 100);
-          updatedRow.totalTaxAmount = updatedRow.cgstAmount + updatedRow.sgstAmount;
-          return updatedRow;
-        }
-        return row;
+function GstDetailsTable({ widthMm = 190, db, userId, isAuthReady, appId }) {
+  const [gstDetails, setGstDetails] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // Fetch GST details from Firebase
+  useEffect(() => {
+    if (!db || !userId || !isAuthReady || !appId) return;
+    const gstCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/gstDetails`);
+    const unsubscribe = onSnapshot(gstCollectionRef, (snapshot) => {
+      const gstArr = [];
+      snapshot.forEach((doc) => {
+        gstArr.push({ id: doc.id, ...doc.data() });
       });
-      return newRows;
+      setGstDetails(gstArr);
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, [db, userId, isAuthReady, appId]);
+
+  const addRow = () => setGstDetails(gstDetails => [...gstDetails, { hsn: '', taxableAmount: 0, cgstRate: 0, cgstAmount: 0, sgstRate: 0, sgstAmount: 0, totalTaxAmount: 0, selected: false }]);
+  const removeRow = idx => setGstDetails(gstDetails => gstDetails.filter((_, i) => i !== idx));
+  const toggleRowSelection = idx => setGstDetails(gstDetails => gstDetails.map((row, i) => i === idx ? { ...row, selected: !row.selected } : row));
+  const removeSelectedRows = () => setGstDetails(gstDetails => gstDetails.filter(row => !row.selected));
+  const updateRow = (idx, key, value) => {
+    setGstDetails(gstDetails => {
+      const newGstDetails = [...gstDetails];
+      newGstDetails[idx] = { ...newGstDetails[idx], [key]: value };
+      // Recalculate amounts
+      const taxable = parseFloat(newGstDetails[idx].taxableAmount) || 0;
+      const cgstRate = parseFloat(newGstDetails[idx].cgstRate) || 0;
+      const sgstRate = parseFloat(newGstDetails[idx].sgstRate) || 0;
+      newGstDetails[idx].cgstAmount = (taxable * cgstRate / 100);
+      newGstDetails[idx].sgstAmount = (taxable * sgstRate / 100);
+      newGstDetails[idx].totalTaxAmount = newGstDetails[idx].cgstAmount + newGstDetails[idx].sgstAmount;
+      return newGstDetails;
     });
   };
   
   const tableWidthPx = mmToPx(widthMm);
-  const selectedRows = rows.filter(row => row.selected);
+  const selectedRows = gstDetails.filter(row => row.selected);
   const totalTaxableAmount = selectedRows.reduce((sum, row) => sum + (parseFloat(row.taxableAmount) || 0), 0);
   const totalCgstAmount = selectedRows.reduce((sum, row) => sum + (parseFloat(row.cgstAmount) || 0), 0);
   const totalSgstAmount = selectedRows.reduce((sum, row) => sum + (parseFloat(row.sgstAmount) || 0), 0);
@@ -2054,7 +2716,7 @@ function GstDetailsTable({ widthMm = 190 }) {
       </div>
       
       {/* Data rows */}
-      {rows.map((row, idx) => (
+      {gstDetails.map((row, idx) => (
         <div key={idx} style={{ display: 'flex', borderBottom: '1px solid #eee', alignItems: 'center', fontSize: 13 }}>
           <div style={{ flex: 0.3, padding: '6px 4px', textAlign: 'center', borderRight: '1px solid #eee' }}>
             <input 
@@ -2092,7 +2754,7 @@ function GstDetailsTable({ widthMm = 190 }) {
           </div>
           <div style={{ flex: 1, padding: '6px 4px', textAlign: 'center', borderRight: '1px solid #eee' }}>
             <span style={{ fontVariantNumeric: 'tabular-nums' }}>
-              {row.cgstAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              {round2(row.cgstAmount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
           </div>
           <div style={{ flex: 1, padding: '6px 4px', textAlign: 'center', borderRight: '1px solid #eee' }}>
@@ -2106,12 +2768,12 @@ function GstDetailsTable({ widthMm = 190 }) {
           </div>
           <div style={{ flex: 1, padding: '6px 4px', textAlign: 'center', borderRight: '1px solid #eee' }}>
             <span style={{ fontVariantNumeric: 'tabular-nums' }}>
-              {row.sgstAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              {round2(row.sgstAmount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
           </div>
           <div style={{ flex: 1.5, padding: '6px 4px', textAlign: 'center' }}>
             <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 'bold' }}>
-              {row.totalTaxAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              {round2(row.totalTaxAmount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
           </div>
         </div>
@@ -2146,18 +2808,18 @@ function GstDetailsTable({ widthMm = 190 }) {
       <div style={{ display: 'flex', background: '#f3f4f6', fontWeight: 'bold', fontSize: 14, borderTop: '2px solid #444' }}>
         <div style={{ flex: 2.8, textAlign: 'right', padding: '8px 4px' }}>Total (Selected):</div>
         <div style={{ flex: 1.5, textAlign: 'center', padding: '8px 4px', borderRight: '1px solid #ccc', fontVariantNumeric: 'tabular-nums' }}>
-          {totalTaxableAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          {round2(totalTaxableAmount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
         </div>
         <div style={{ flex: 1, textAlign: 'center', padding: '8px 4px', borderRight: '1px solid #ccc' }}></div>
         <div style={{ flex: 1, textAlign: 'center', padding: '8px 4px', borderRight: '1px solid #ccc', fontVariantNumeric: 'tabular-nums' }}>
-          {totalCgstAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          {round2(totalCgstAmount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
         </div>
         <div style={{ flex: 1, textAlign: 'center', padding: '8px 4px', borderRight: '1px solid #ccc' }}></div>
         <div style={{ flex: 1, textAlign: 'center', padding: '8px 4px', borderRight: '1px solid #ccc', fontVariantNumeric: 'tabular-nums' }}>
-          {totalSgstAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          {round2(totalSgstAmount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
         </div>
         <div style={{ flex: 1.5, textAlign: 'center', padding: '8px 4px', fontVariantNumeric: 'tabular-nums' }}>
-          {grandTotalTaxAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          {round2(grandTotalTaxAmount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
         </div>
       </div>
     </div>
@@ -2165,198 +2827,261 @@ function GstDetailsTable({ widthMm = 190 }) {
 }
 
 // New ItemTable component with reorderable columns
-function ItemTable({ widthMm = 190 }) {
-  const [rows, setRows] = React.useState([
-    { 
-      sno: 1,
-      description: '', 
-      hsn: '', 
-      qty: 1, 
-      rate: 10000, 
-      gst: 9,
-      taxableAmount: 10000,
-      amount: 10900
-    }
-  ]);
-
-  // Column configuration with reorderable capability
-  const [columns, setColumns] = React.useState([
-    { key: 'sno', label: 'S.No', width: 0.5, editable: false, type: 'number' },
-    { key: 'description', label: 'Item Description', width: 2, editable: true, type: 'text' },
-    { key: 'hsn', label: 'HSN', width: 1, editable: true, type: 'text' },
-    { key: 'qty', label: 'Qty.', width: 1, editable: true, type: 'number' },
-    { key: 'rate', label: 'Rate', width: 1, editable: true, type: 'number' },
-    { key: 'gst', label: 'GST %', width: 1, editable: true, type: 'select' },
-    { key: 'taxableAmount', label: 'Taxable Amount', width: 1.5, editable: false, type: 'currency' },
-    { key: 'amount', label: 'Amount', width: 1.5, editable: false, type: 'currency' }
-  ]);
-
-  const gstOptions = [0, 5, 9, 12, 18, 28];
-
-  // Column reordering functions
-  const moveColumn = (fromIndex, toIndex) => {
-    const newColumns = [...columns];
-    const [movedColumn] = newColumns.splice(fromIndex, 1);
-    newColumns.splice(toIndex, 0, movedColumn);
-    setColumns(newColumns);
-  };
-
-  const addRow = () => {
-    const newSno = rows.length + 1;
-    const newRow = {
-      sno: newSno,
-      description: '',
-      hsn: '',
-      qty: 1,
-      rate: 10000,
-      gst: 9,
-      taxableAmount: 10000,
-      amount: 10900
-    };
-    setRows(r => [...r, newRow]);
-  };
-
-  const updateRow = (idx, key, value) => {
-    setRows(r => {
-      const newRows = r.map((row, i) => {
-        if (i === idx) {
-          const updatedRow = { ...row, [key]: value };
-          
-          // Recalculate amounts if qty, rate, or gst changes
-          if (key === 'qty' || key === 'rate' || key === 'gst') {
-            const qty = parseFloat(updatedRow.qty) || 0;
-            const rate = parseFloat(updatedRow.rate) || 0;
-            const gst = parseFloat(updatedRow.gst) || 0;
-            
-            updatedRow.taxableAmount = qty * rate;
-            const gstAmount = (updatedRow.taxableAmount * gst) / 100;
-            updatedRow.amount = updatedRow.taxableAmount + gstAmount;
-          }
-          
-          return updatedRow;
-        }
-        return row;
-      });
-      return newRows;
-    });
-  };
-
+function ItemTable({ widthMm = 190, items = [], db, userId, isAuthReady, appId }) {
   const tableWidthPx = mmToPx(widthMm);
-  const selectedRows = rows.filter(row => row.selected);
+  const [itemsData, setItemsData] = useState({});
 
-  // Render cell content based on column type
-  const renderCell = (row, column, idx) => {
-    const value = row[column.key];
-    
-    switch (column.type) {
-      case 'number':
-        return <span style={{ fontWeight: 'bold', color: '#666' }}>{value}</span>;
-      
-      case 'text':
-        return (
-          <input 
-            value={value} 
-            onChange={e => updateRow(idx, column.key, e.target.value)} 
-            style={{ width: '100%', border: 'none', background: 'transparent', outline: 'none', fontSize: 15, textAlign: column.key === 'description' ? 'left' : 'center' }} 
-            placeholder={column.label}
-          />
-        );
-      
-      case 'select':
-        return (
-          <select 
-            value={value} 
-            onChange={e => updateRow(idx, column.key, parseFloat(e.target.value))} 
-            style={{ width: '100%', border: 'none', background: 'transparent', outline: 'none', fontSize: 15, textAlign: 'center' }}
-          >
-            {gstOptions.map(opt => <option key={opt} value={opt}>{opt}%</option>)}
-          </select>
-        );
-      
-      case 'currency':
-        return (
-          <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: column.key === 'amount' ? 'bold' : 'normal' }}>
-            {value.toLocaleString('en-IN', { style: 'currency', currency: 'INR' })}
-          </span>
-        );
-      
-      default:
-        return <span>{value}</span>;
-    }
+  // Helper function to safely format numbers
+  const formatNumber = (value) => {
+    const num = parseFloat(value);
+    return isNaN(num) ? '0.00' : num.toFixed(2);
   };
+
+  // Helper function to format currency
+  const formatCurrency = (value) => {
+    const num = parseFloat(value);
+    return isNaN(num) ? '₹0.00' : new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    }).format(num);
+  };
+
+  // Fetch item details for each item in the bill
+  useEffect(() => {
+    if (!db || !userId || !isAuthReady || !appId || !items.length) return;
+    
+    const fetchItems = async () => {
+      const itemsObj = {};
+      for (const row of items) {
+        if (row.item) {
+          const itemRef = doc(db, `artifacts/${appId}/users/${userId}/items`, row.item);
+          const itemSnap = await getDoc(itemRef);
+          if (itemSnap.exists()) {
+            itemsObj[row.item] = itemSnap.data();
+          }
+        }
+      }
+      setItemsData(itemsObj);
+    };
+
+    fetchItems();
+  }, [items, db, userId, isAuthReady, appId]);
+
+  // Calculate totals
+  const totals = items.reduce((acc, row) => {
+    const amount = parseFloat(row.amount) || 0;
+    const sgst = amount * (parseFloat(row.sgst) || 0) / 100;
+    const cgst = amount * (parseFloat(row.cgst) || 0) / 100;
+    const igst = amount * (parseFloat(row.igst) || 0) / 100;
+    
+    return {
+      subtotal: acc.subtotal + amount,
+      sgst: acc.sgst + sgst,
+      cgst: acc.cgst + cgst,
+      igst: acc.igst + igst,
+      total: acc.total + (parseFloat(row.total) || 0)
+    };
+  }, { subtotal: 0, sgst: 0, cgst: 0, igst: 0, total: 0 });
 
   return (
-    <div style={{ width: tableWidthPx, maxWidth: tableWidthPx, margin: 0, boxSizing: 'border-box', borderRadius: 8, overflow: 'hidden', border: '1.5px solid #444', background: '#fff' }}>
-      {/* Header with reorderable columns */}
-      <div style={{ display: 'flex', background: '#444', color: '#fff', fontWeight: 'bold', fontSize: 16 }}>
-        {columns.map((column, colIdx) => (
-          <div 
-            key={column.key}
-            style={{ 
-              flex: column.width, 
-              padding: '8px 8px', 
-              textAlign: column.key === 'description' ? 'left' : 'center',
-              borderRight: colIdx < columns.length - 1 ? '1px solid #555' : 'none',
-              cursor: 'grab',
-              userSelect: 'none'
-            }}
-            draggable
-            onDragStart={(e) => {
-              e.dataTransfer.setData('text/plain', colIdx);
-            }}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
-              e.preventDefault();
-              const fromIndex = parseInt(e.dataTransfer.getData('text/plain'));
-              const toIndex = colIdx;
-              if (fromIndex !== toIndex) {
-                moveColumn(fromIndex, toIndex);
-              }
-            }}
-            title="Drag to reorder column"
-          >
-            {column.label}
-          </div>
-        ))}
+    <div style={{ width: tableWidthPx, maxWidth: tableWidthPx, margin: 0, overflow: 'hidden', border: '1px solid #e2e8f0' }}>
+      <div style={{ display: 'flex', background: '#2d3748', color: '#fff', fontWeight: 'bold', fontSize: 12 }}>
+        <div style={{ width: '40px', padding: '8px', borderRight: '1px solid #4a5568', textAlign: 'center' }}>Sr.</div>
+        <div style={{ flex: 2, padding: '8px', borderRight: '1px solid #4a5568' }}>Item Description</div>
+        <div style={{ width: '80px', padding: '8px', borderRight: '1px solid #4a5568', textAlign: 'center' }}>HSN</div>
+        <div style={{ width: '60px', padding: '8px', borderRight: '1px solid #4a5568', textAlign: 'center' }}>Qty</div>
+        <div style={{ width: '80px', padding: '8px', borderRight: '1px solid #4a5568', textAlign: 'right' }}>Rate</div>
+        <div style={{ width: '100px', padding: '8px', borderRight: '1px solid #4a5568', textAlign: 'right' }}>Amount</div>
+        <div style={{ width: '60px', padding: '8px', borderRight: '1px solid #4a5568', textAlign: 'center' }}>GST%</div>
+        <div style={{ width: '100px', padding: '8px', textAlign: 'right' }}>Total</div>
       </div>
-
-      {/* Data rows */}
-      {rows.map((row, idx) => (
-        <div key={idx} style={{ display: 'flex', borderBottom: '1px solid #eee', alignItems: 'center', fontSize: 15 }}>
-          {/* Data columns */}
-          {columns.map((column, colIdx) => (
-            <div 
-              key={column.key}
-              style={{ 
-                flex: column.width, 
-                padding: '8px 8px', 
-                textAlign: column.key === 'description' ? 'left' : 'center',
-                borderRight: colIdx < columns.length - 1 ? '1px solid #ddd' : 'none'
-              }}
-            >
-              {renderCell(row, column, idx)}
+      <div style={{ background: '#fff' }}>
+        {items.map((row, idx) => {
+          const itemDetails = itemsData[row.item] || {};
+          const gstPercent = parseFloat(itemDetails.gstPercentage) || 0;
+          
+          return (
+            <div key={idx} style={{ display: 'flex', borderBottom: '1px solid #e2e8f0' }}>
+              <div style={{ width: '40px', padding: '8px', borderRight: '1px solid #e2e8f0', textAlign: 'center' }}>
+                {idx + 1}
+              </div>
+              <div style={{ flex: 2, padding: '8px', borderRight: '1px solid #e2e8f0' }}>
+                {itemDetails.itemName || ''}
+              </div>
+              <div style={{ width: '80px', padding: '8px', borderRight: '1px solid #e2e8f0', textAlign: 'center' }}>
+                {itemDetails.hsnCode || ''}
+              </div>
+              <div style={{ width: '60px', padding: '8px', borderRight: '1px solid #e2e8f0', textAlign: 'center' }}>
+                {formatNumber(row.nos)}
+              </div>
+              <div style={{ width: '80px', padding: '8px', borderRight: '1px solid #e2e8f0', textAlign: 'right' }}>
+                {formatNumber(row.rate)}
+              </div>
+              <div style={{ width: '100px', padding: '8px', borderRight: '1px solid #e2e8f0', textAlign: 'right' }}>
+                {formatNumber(row.amount)}
+              </div>
+              <div style={{ width: '60px', padding: '8px', borderRight: '1px solid #e2e8f0', textAlign: 'center' }}>
+                {formatNumber(gstPercent)}%
+              </div>
+              <div style={{ width: '100px', padding: '8px', textAlign: 'right' }}>
+                {formatNumber(row.total)}
+              </div>
             </div>
-          ))}
-        </div>
-      ))}
-
-      {/* Action buttons */}
-      <div style={{ padding: 8, textAlign: 'right' }}>
-        <button 
-          onClick={addRow} 
-          style={{ background: '#444', color: '#fff', border: 'none', borderRadius: 4, padding: '6px 18px', fontSize: 15, cursor: 'pointer' }}
-        >
-          + Add Item
-        </button>
+          );
+        })}
       </div>
-
-      {/* Totals row */}
-      <div style={{ display: 'flex', background: '#f3f4f6', fontWeight: 'bold', fontSize: 16, borderTop: '2px solid #444' }}>
-        <div style={{ flex: 9.5, textAlign: 'right', padding: '8px 8px', borderRight: '1px solid #ddd' }}>Total:</div>
-        <div style={{ flex: 1.5, textAlign: 'right', padding: '8px 8px', fontVariantNumeric: 'tabular-nums' }}>
-          {rows.reduce((sum, row) => sum + row.amount, 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR' })}
+      
+      {/* Totals Section */}
+      <div style={{ background: '#f7fafc', borderTop: '2px solid #e2e8f0', padding: '12px 16px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-end' }}>
+          <div style={{ fontSize: '14px' }}>
+            <span style={{ display: 'inline-block', width: '120px', fontWeight: 'medium' }}>Subtotal:</span>
+            <span style={{ display: 'inline-block', width: '120px', textAlign: 'right' }}>{formatCurrency(totals.subtotal)}</span>
+          </div>
+          {totals.sgst > 0 && (
+            <div style={{ fontSize: '14px' }}>
+              <span style={{ display: 'inline-block', width: '120px', fontWeight: 'medium' }}>SGST:</span>
+              <span style={{ display: 'inline-block', width: '120px', textAlign: 'right' }}>{formatCurrency(totals.sgst)}</span>
+            </div>
+          )}
+          {totals.cgst > 0 && (
+            <div style={{ fontSize: '14px' }}>
+              <span style={{ display: 'inline-block', width: '120px', fontWeight: 'medium' }}>CGST:</span>
+              <span style={{ display: 'inline-block', width: '120px', textAlign: 'right' }}>{formatCurrency(totals.cgst)}</span>
+            </div>
+          )}
+          {totals.igst > 0 && (
+            <div style={{ fontSize: '14px' }}>
+              <span style={{ display: 'inline-block', width: '120px', fontWeight: 'medium' }}>IGST:</span>
+              <span style={{ display: 'inline-block', width: '120px', textAlign: 'right' }}>{formatCurrency(totals.igst)}</span>
+            </div>
+          )}
+          <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#1a365d', borderTop: '1px solid #e2e8f0', paddingTop: '8px', marginTop: '4px' }}>
+            <span style={{ display: 'inline-block', width: '120px' }}>Grand Total:</span>
+            <span style={{ display: 'inline-block', width: '120px', textAlign: 'right' }}>{formatCurrency(totals.total)}</span>
+          </div>
         </div>
       </div>
     </div>
   );
+}
+
+function DefaultTemplate({ data, companyDetails, partyDetails, bankDetails }) {
+  const [itemsData, setItemsData] = useState([]);
+  const [totals, setTotals] = useState({
+    subtotal: 0,
+    cgst: 0,
+    sgst: 0,
+    igst: 0,
+    total: 0
+  });
+
+  useEffect(() => {
+    if (data && data.rows) {
+      setItemsData(data.rows);
+      // Calculate totals
+      const subtotal = data.rows.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0);
+      const cgst = data.rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0) / 100), 0);
+      const sgst = data.rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.sgst) || 0) / 100), 0);
+      const igst = data.rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0) / 100), 0);
+      const total = subtotal + cgst + sgst + igst;
+
+      setTotals({
+        subtotal,
+        cgst,
+        sgst,
+        igst,
+        total
+      });
+    }
+  }, [data]);
+
+  return (
+    <div className="p-8 max-w-4xl mx-auto bg-white print:p-4 print:max-w-none print:mx-0">
+      {/* Header with Company Details */}
+      <div className="text-center mb-8 print:mb-4">
+        <h1 className="text-2xl font-bold text-gray-800 print:text-xl">{companyDetails?.firmName || 'Company Name'}</h1>
+        <p className="text-gray-600">{companyDetails?.address || 'Company Address'}</p>
+        <p className="text-gray-600">
+          {companyDetails?.city || ''} {companyDetails?.state ? `, ${companyDetails.state}` : ''} 
+          {companyDetails?.pincode ? ` - ${companyDetails.pincode}` : ''}
+        </p>
+        <p className="text-gray-600">GSTIN: {companyDetails?.gstin || 'GSTIN'}</p>
+        <p className="text-gray-600">Contact: {companyDetails?.contactNumber || ''}</p>
+        <p className="text-gray-600">Email: {companyDetails?.email || ''}</p>
+      </div>
+
+      {/* Document Type and Number */}
+      <div className="flex justify-between mb-6 print:mb-4">
+        <div>
+          <h2 className="text-xl font-bold text-gray-800 print:text-lg">
+            {data?.docType === 'challan' ? 'CHALLAN' : 
+             data?.docType === 'quotation' ? 'QUOTATION' : 'TAX INVOICE'}
+          </h2>
+          <p className="text-gray-600">No: {data?.number || ''}</p>
+          <p className="text-gray-600">Date: {formatDate(data?.date)}</p>
+        </div>
+      </div>
+
+      {/* Bill To / Ship To Details */}
+      <div className="grid grid-cols-2 gap-8 mb-6 print:mb-4 print:gap-4">
+        <div className="border p-3 rounded print:border-gray-300">
+          <h3 className="font-bold text-gray-800 mb-2">Bill To:</h3>
+          <p className="font-semibold">{partyDetails?.firmName || ''}</p>
+          <p>{partyDetails?.address || ''}</p>
+          <p>
+            {partyDetails?.city || ''} {partyDetails?.state ? `, ${partyDetails.state}` : ''}
+            {partyDetails?.pincode ? ` - ${partyDetails.pincode}` : ''}
+          </p>
+          <p>GSTIN: {partyDetails?.gstin || ''}</p>
+          <p>Contact: {partyDetails?.contactNumber || ''}</p>
+        </div>
+        <div className="border p-3 rounded print:border-gray-300">
+          <h3 className="font-bold text-gray-800 mb-2">Ship To:</h3>
+          <p className="font-semibold">{partyDetails?.firmName || ''}</p>
+          <p>{partyDetails?.address || ''}</p>
+          <p>
+            {partyDetails?.city || ''} {partyDetails?.state ? `, ${partyDetails.state}` : ''}
+            {partyDetails?.pincode ? ` - ${partyDetails.pincode}` : ''}
+          </p>
+          <p>GSTIN: {partyDetails?.gstin || ''}</p>
+          <p>Contact: {partyDetails?.contactNumber || ''}</p>
+        </div>
+      </div>
+
+      {/* Bank Details */}
+      <div className="border-t pt-4 mb-6 print:mb-4">
+        <h3 className="font-bold text-gray-800 mb-2">Bank Details:</h3>
+        <p>Bank Name: {companyDetails?.bankName || ''}</p>
+        <p>Account No: {companyDetails?.bankAccount || ''}</p>
+        <p>IFSC Code: {companyDetails?.bankIfsc || ''}</p>
+        {companyDetails?.upiId && <p>UPI ID: {companyDetails.upiId}</p>}
+      </div>
+
+      {/* Terms & Signature */}
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <h3 className="font-bold text-gray-800 mb-2">Terms & Conditions:</h3>
+          <p className="text-sm text-gray-600 whitespace-pre-wrap">{companyDetails?.terms || 
+            '1. Goods once sold will not be taken back.\n' +
+            '2. Interest @18% p.a. will be charged on overdue bills.\n' +
+            '3. Subject to local jurisdiction.'}</p>
+        </div>
+        <div className="text-right">
+          <div className="mt-16 print:mt-8">
+            <div className="border-t border-gray-400 inline-block px-8"></div>
+            <p className="text-gray-600">Authorized Signatory</p>
+            <p className="font-semibold">For {companyDetails?.firmName || ''}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Utility for rounding to 2 decimal places
+function round2(val) {
+  return Math.round((parseFloat(val) + Number.EPSILON) * 100) / 100;
 }

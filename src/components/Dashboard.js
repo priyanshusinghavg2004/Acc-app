@@ -10,7 +10,7 @@ const Dashboard = ({ db, userId, isAuthReady, appId }) => {
     const [lastSevenDaysSales, setLastSevenDaysSales] = useState(0);
     const [totalOutstandingReceivables, setTotalOutstandingReceivables] = useState(0);
     const [totalOutstandingPayables, setTotalOutstandingPayables] = useState(0);
-    const [companyDetails, setCompanyDetails] = useState({ firmName: 'Your Company Name (Placeholder)', gstin: 'Your Company GSTIN (Placeholder)', contactNumber: 'N/A', address: 'N/A', gstinType: 'N/A' });
+    const [companyDetails, setCompanyDetails] = useState({ firmName: '', gstin: '', contactNumber: '', address: '', gstinType: '' });
     const [message, setMessage] = useState('');
 
     useEffect(() => {
@@ -51,7 +51,7 @@ const Dashboard = ({ db, userId, isAuthReady, appId }) => {
                 if (docSnap.exists()) {
                     setCompanyDetails(docSnap.data());
                 } else {
-                    setCompanyDetails({ firmName: 'Your Company Name (Placeholder)', gstin: 'Your Company GSTIN (Placeholder)', contactNumber: 'N/A', address: 'N/A', gstinType: 'N/A' });
+                    setCompanyDetails({ firmName: '', gstin: '', contactNumber: '', address: '', gstinType: '' });
                 }
             }, (error) => {
                 console.error("Error fetching company details:", error);

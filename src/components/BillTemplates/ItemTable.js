@@ -1,199 +1,162 @@
-import React from "react";
-import { mmToPx } from "./utils";
+import React from 'react';
 
-const ItemTable = ({ widthMm = 190 }) => {
-  const [rows, setRows] = React.useState([
-    { 
-      sno: 1,
-      description: '', 
-      hsn: '', 
-      qty: 1, 
-      rate: 10000, 
-      gst: 9,
-      taxableAmount: 10000,
-      amount: 10900
-    }
-  ]);
-
-  // Column configuration with reorderable capability
-  const [columns, setColumns] = React.useState([
-    { key: 'sno', label: 'S.No', width: 0.5, editable: false, type: 'number' },
-    { key: 'description', label: 'Item Description', width: 2, editable: true, type: 'text' },
-    { key: 'hsn', label: 'HSN', width: 1, editable: true, type: 'text' },
-    { key: 'qty', label: 'Qty.', width: 1, editable: true, type: 'number' },
-    { key: 'rate', label: 'Rate', width: 1, editable: true, type: 'number' },
-    { key: 'gst', label: 'GST %', width: 1, editable: true, type: 'select' },
-    { key: 'taxableAmount', label: 'Taxable Amount', width: 1.5, editable: false, type: 'currency' },
-    { key: 'amount', label: 'Amount', width: 1.5, editable: false, type: 'currency' }
-  ]);
-
-  const gstOptions = [0, 5, 9, 12, 18, 28];
-
-  // Column reordering functions
-  const moveColumn = (fromIndex, toIndex) => {
-    const newColumns = [...columns];
-    const [movedColumn] = newColumns.splice(fromIndex, 1);
-    newColumns.splice(toIndex, 0, movedColumn);
-    setColumns(newColumns);
-  };
-
-  const addRow = () => {
-    const newSno = rows.length + 1;
-    const newRow = {
-      sno: newSno,
-      description: '',
-      hsn: '',
-      qty: 1,
-      rate: 10000,
-      gst: 9,
-      taxableAmount: 10000,
-      amount: 10900
-    };
-    setRows(r => [...r, newRow]);
-  };
-
-  const updateRow = (idx, key, value) => {
-    setRows(r => {
-      const newRows = r.map((row, i) => {
-        if (i === idx) {
-          const updatedRow = { ...row, [key]: value };
-          
-          // Recalculate amounts if qty, rate, or gst changes
-          if (key === 'qty' || key === 'rate' || key === 'gst') {
-            const qty = parseFloat(updatedRow.qty) || 0;
-            const rate = parseFloat(updatedRow.rate) || 0;
-            const gst = parseFloat(updatedRow.gst) || 0;
-            
-            updatedRow.taxableAmount = qty * rate;
-            const gstAmount = (updatedRow.taxableAmount * gst) / 100;
-            updatedRow.amount = updatedRow.taxableAmount + gstAmount;
-          }
-          
-          return updatedRow;
-        }
-        return row;
-      });
-      return newRows;
-    });
-  };
-
+function ItemTable({ widthMm = 190, data }) {
+  const mmToPx = mm => mm * 3.78;
   const tableWidthPx = mmToPx(widthMm);
 
-  // Render cell content based on column type
-  const renderCell = (row, column, idx) => {
-    const value = row[column.key];
-    
-    switch (column.type) {
-      case 'number':
-        return <span style={{ fontWeight: 'bold', color: '#666' }}>{value}</span>;
-      
-      case 'text':
-        return (
-          <input 
-            value={value} 
-            onChange={e => updateRow(idx, column.key, e.target.value)} 
-            style={{ width: '100%', border: 'none', background: 'transparent', outline: 'none', fontSize: 15, textAlign: column.key === 'description' ? 'left' : 'center' }} 
-            placeholder={column.label}
-          />
-        );
-      
-      case 'select':
-        return (
-          <select 
-            value={value} 
-            onChange={e => updateRow(idx, column.key, parseFloat(e.target.value))} 
-            style={{ width: '100%', border: 'none', background: 'transparent', outline: 'none', fontSize: 15, textAlign: 'center' }}
-          >
-            {gstOptions.map(opt => <option key={opt} value={opt}>{opt}%</option>)}
-          </select>
-        );
-      
-      case 'currency':
-        return (
-          <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: column.key === 'amount' ? 'bold' : 'normal' }}>
-            {value.toLocaleString('en-IN', { style: 'currency', currency: 'INR' })}
-          </span>
-        );
-      
-      default:
-        return <span>{value}</span>;
-    }
+  const tableStyle = {
+    width: tableWidthPx,
+    maxWidth: tableWidthPx,
+    margin: 0,
+    boxSizing: 'border-box',
+    borderRadius: 4,
+    overflow: 'hidden',
+    border: '1px solid #e2e8f0',
+    background: '#fff',
+    fontFamily: 'Arial, sans-serif'
   };
 
+  const headerStyle = {
+    display: 'flex',
+    background: '#2d3748',
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 12,
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em'
+  };
+
+  const cellStyle = {
+    padding: '8px 12px',
+    textAlign: 'center',
+    borderRight: '1px solid #4a5568',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center'
+  };
+
+  const rowStyle = {
+    display: 'flex',
+    borderBottom: '1px solid #e2e8f0',
+    fontSize: 12,
+    color: '#4a5568'
+  };
+
+  const dataCellStyle = {
+    ...cellStyle,
+    borderRight: '1px solid #e2e8f0',
+    color: '#2d3748',
+    padding: '6px 8px'
+  };
+
+  // Sample data for preview
+  const sampleData = [
+    {
+      no: '1',
+      description: 'Sample Product Description',
+      hsn: '1234',
+      qty: '2',
+      rate: '1000.00',
+      amount: '2000.00',
+      gst: '18%',
+      total: '2360.00'
+    },
+    {
+      no: '2',
+      description: 'Another Sample Item',
+      hsn: '5678',
+      qty: '1',
+      rate: '500.00',
+      amount: '500.00',
+      gst: '12%',
+      total: '560.00'
+    }
+  ];
+
+  const columns = [
+    { key: 'no', label: 'No.', width: '5%' },
+    { key: 'description', label: 'Description', width: '35%', align: 'left' },
+    { key: 'hsn', label: 'HSN', width: '8%' },
+    { key: 'qty', label: 'Qty', width: '8%' },
+    { key: 'rate', label: 'Rate', width: '12%', align: 'right' },
+    { key: 'amount', label: 'Amount', width: '12%', align: 'right' },
+    { key: 'gst', label: 'GST', width: '8%' },
+    { key: 'total', label: 'Total', width: '12%', align: 'right' }
+  ];
+
+  // Use data prop if provided, else fallback to sampleData
+  const tableData = Array.isArray(data) && data.length > 0 ? data : sampleData;
+
   return (
-    <div style={{ width: tableWidthPx, maxWidth: tableWidthPx, margin: 0, boxSizing: 'border-box', borderRadius: 8, overflow: 'hidden', border: '1.5px solid #444', background: '#fff' }}>
-      {/* Header with reorderable columns */}
-      <div style={{ display: 'flex', background: '#444', color: '#fff', fontWeight: 'bold', fontSize: 16 }}>
-        {columns.map((column, colIdx) => (
-          <div 
-            key={column.key}
-            style={{ 
-              flex: column.width, 
-              padding: '8px 8px', 
-              textAlign: column.key === 'description' ? 'left' : 'center',
-              borderRight: colIdx < columns.length - 1 ? '1px solid #555' : 'none',
-              cursor: 'grab',
-              userSelect: 'none'
+    <div style={tableStyle}>
+      {/* Header */}
+      <div style={headerStyle}>
+        {columns.map((col) => (
+          <div
+            key={col.key}
+            style={{
+              ...cellStyle,
+              width: col.width,
+              textAlign: col.align || 'center',
+              justifyContent: col.align === 'left' ? 'flex-start' : 'center'
             }}
-            draggable
-            onDragStart={(e) => {
-              e.dataTransfer.setData('text/plain', colIdx);
-            }}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
-              e.preventDefault();
-              const fromIndex = parseInt(e.dataTransfer.getData('text/plain'));
-              const toIndex = colIdx;
-              if (fromIndex !== toIndex) {
-                moveColumn(fromIndex, toIndex);
-              }
-            }}
-            title="Drag to reorder column"
           >
-            {column.label}
+            {col.label}
           </div>
         ))}
       </div>
 
-      {/* Data rows */}
-      {rows.map((row, idx) => (
-        <div key={idx} style={{ display: 'flex', borderBottom: '1px solid #eee', alignItems: 'center', fontSize: 15 }}>
-          {/* Data columns */}
-          {columns.map((column, colIdx) => (
-            <div 
-              key={column.key}
-              style={{ 
-                flex: column.width, 
-                padding: '8px 8px', 
-                textAlign: column.key === 'description' ? 'left' : 'center',
-                borderRight: colIdx < columns.length - 1 ? '1px solid #ddd' : 'none'
+      {/* Data Rows */}
+      {tableData.map((row, idx) => (
+        <div key={idx} style={rowStyle}>
+          {columns.map((col) => (
+            <div
+              key={col.key}
+              style={{
+                ...dataCellStyle,
+                width: col.width,
+                textAlign: col.align || 'center',
+                justifyContent: col.align === 'left' ? 'flex-start' : 'center',
+                background: idx % 2 === 0 ? '#f7fafc' : '#fff'
               }}
             >
-              {renderCell(row, column, idx)}
+              {/* Render correct field for each column */}
+              {col.key === 'no'
+                ? idx + 1
+                : col.key === 'description'
+                  ? row.itemDescription || row.description || ''
+                  : col.key === 'gst'
+                    ? (row.gstPercent !== undefined ? `${row.gstPercent}%` : row.gst || '')
+                    : row[col.key] !== undefined
+                      ? row[col.key]
+                      : ''}
             </div>
           ))}
         </div>
       ))}
 
-      {/* Action buttons */}
-      <div style={{ padding: 8, textAlign: 'right' }}>
-        <button 
-          onClick={addRow} 
-          style={{ background: '#444', color: '#fff', border: 'none', borderRadius: 4, padding: '6px 18px', fontSize: 15, cursor: 'pointer' }}
-        >
-          + Add Item
-        </button>
-      </div>
-
-      {/* Totals row */}
-      <div style={{ display: 'flex', background: '#f3f4f6', fontWeight: 'bold', fontSize: 16, borderTop: '2px solid #444' }}>
-        <div style={{ flex: 9.5, textAlign: 'right', padding: '8px 8px', borderRight: '1px solid #ddd' }}>Total:</div>
-        <div style={{ flex: 1.5, textAlign: 'right', padding: '8px 8px', fontVariantNumeric: 'tabular-nums' }}>
-          {rows.reduce((sum, row) => sum + row.amount, 0).toLocaleString('en-IN', { style: 'currency', currency: 'INR' })}
+      {/* Empty rows for preview */}
+      {(!data || data.length === 0) && [1, 2].map((_, idx) => (
+        <div key={`empty-${idx}`} style={rowStyle}>
+          {columns.map((col) => (
+            <div
+              key={col.key}
+              style={{
+                ...dataCellStyle,
+                width: col.width,
+                textAlign: col.align || 'center',
+                justifyContent: col.align === 'left' ? 'flex-start' : 'center',
+                background: (idx + sampleData.length) % 2 === 0 ? '#f7fafc' : '#fff',
+                color: '#a0aec0'
+              }}
+            >
+              {col.key === 'no' ? sampleData.length + idx + 1 : ''}
+            </div>
+          ))}
         </div>
-      </div>
+      ))}
     </div>
   );
-};
+}
 
 export default ItemTable; 
