@@ -75,41 +75,50 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
                     });
                 }
 
-                // Fetch Purchase Bills for the selected party (where selected party is the seller)
-                const purchasesQuery = query(
-                    collection(db, `artifacts/${appId}/users/${userId}/purchaseBills`),
-                    where("sellerId", "==", selectedPartyId)
-                );
-                const purchasesSnapshot = await new Promise(resolve => {
-                    const unsubscribe = onSnapshot(purchasesQuery, (snapshot) => {
-                        unsubscribe();
-                        resolve(snapshot);
-                    }, (error) => {
-                        console.error("Error fetching purchase transactions:", error);
-                        setMessage("Error fetching purchase transactions.");
-                        resolve(null);
-                    });
-                });
-
-                if (purchasesSnapshot) {
-                    purchasesSnapshot.forEach(doc => {
-                        const data = doc.data();
-                        const total = parseFloat(data.totalAmount) || 0;
-                        const paid = parseFloat(data.amountPaid) || 0;
-                        const outstanding = total - paid;
-                        runningBalance -= outstanding;
-                        transactions.push({
-                            id: doc.id,
-                            type: 'Purchase',
-                            date: data.purchaseDate,
-                            description: data.items.map(item => `${item.itemName} (${item.quantity} ${item.quantityMeasurement})`).join(', '),
-                            totalAmount: total,
-                            amountPaid: paid,
-                            outstanding: outstanding.toFixed(2),
-                            paymentProgress: data.paymentProgress,
-                            runningBalance: runningBalance.toFixed(2)
+                // Fetch Purchase Bills and Orders for the selected party (where selected party is the seller)
+                const purchaseTypes = [
+                    { collection: 'purchaseBills' },
+                    { collection: 'purchaseOrders' }
+                ];
+                for (const type of purchaseTypes) {
+                    const purchasesQuery = query(
+                        collection(db, `artifacts/${appId}/users/${userId}/${type.collection}`),
+                        where("party", "==", selectedPartyId)
+                    );
+                    const purchasesSnapshot = await new Promise(resolve => {
+                        const unsubscribe = onSnapshot(purchasesQuery, (snapshot) => {
+                            unsubscribe();
+                            resolve(snapshot);
+                        }, (error) => {
+                            console.error("Error fetching purchase transactions:", error);
+                            setMessage("Error fetching purchase transactions.");
+                            resolve(null);
                         });
                     });
+                    if (purchasesSnapshot) {
+                        purchasesSnapshot.forEach(doc => {
+                            const data = doc.data();
+                            const total = parseFloat(data.amount) || 0;
+                            const payments = Array.isArray(data.payments) ? data.payments : [];
+                            const paid = payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+                            const outstanding = total - paid;
+                            runningBalance -= outstanding;
+                            const itemsDesc = Array.isArray(data.rows)
+                                ? data.rows.map(item => `${item.item || ''} (${item.nos || 0})`).join(', ')
+                                : '';
+                            transactions.push({
+                                id: doc.id,
+                                type: 'Purchase',
+                                date: data.billDate,
+                                description: itemsDesc,
+                                totalAmount: total,
+                                amountPaid: paid,
+                                outstanding: outstanding.toFixed(2),
+                                paymentStatus: data.paymentStatus,
+                                runningBalance: runningBalance.toFixed(2)
+                            });
+                        });
+                    }
                 }
 
                 transactions.sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -307,7 +316,7 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
                             {purchaseBills.map(bill => (
                                 <tr key={bill.id}>
                                     <td className="px-4 py-2">{bill.id}</td>
-                                    <td className="px-4 py-2">{bill.purchaseDate}</td>
+                                    <td className="px-4 py-2">{bill.billDate}</td>
                                     <td className="px-4 py-2">{bill.sellerFirmName}</td>
                                     <td className="px-4 py-2">₹{bill.totalAmount}</td>
                                 </tr>

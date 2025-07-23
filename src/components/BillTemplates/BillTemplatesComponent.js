@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, addDoc, setDoc, doc, deleteDoc } from "firebase/firestore";
+import { collection, getDocs, addDoc, setDoc, doc, deleteDoc, onSnapshot } from "firebase/firestore";
 import ItemTable from './ItemTable';
 import GstDetailsTable from './GstDetailsTable';
 
@@ -42,6 +42,7 @@ const BLOCK_LIBRARY = [
   { key: "terms", label: "Terms and Conditions" },
   { key: "notes", label: "Additional Notes" },
   { key: "footer", label: "Footer" },
+  { key: "receiverSignature", label: "Receiver Signature" },
 ];
 
 // Default layout with correct order and widths
@@ -55,7 +56,7 @@ const defaultLayout = [
   { columns: 1, cells: ["footer"], height: 20 }
 ];
 
-const BillTemplates = ({ db, userId, isAuthReady }) => {
+const BillTemplatesComponent = ({ db, userId, isAuthReady, appId }) => {
   // Basic state
   const [selectedType, setSelectedType] = useState(DOCUMENT_TYPES[0].key);
   const [paperSize, setPaperSize] = useState(PAPER_SIZES[0].key);
@@ -71,6 +72,7 @@ const BillTemplates = ({ db, userId, isAuthReady }) => {
   const [editingLayoutId, setEditingLayoutId] = useState(null);
   const [savedLayouts, setSavedLayouts] = useState([]);
   const [loadingLayouts, setLoadingLayouts] = useState(false);
+  const [companyDetails, setCompanyDetails] = useState({});
   
   // Calculate paper dimensions and available width
   const selectedPaperSize = PAPER_SIZES.find(p => p.key === paperSize);
@@ -85,6 +87,16 @@ const BillTemplates = ({ db, userId, isAuthReady }) => {
       width: availableWidth
     })));
   }, [paperW, margin.left, margin.right, availableWidth]);
+
+  // Fetch company details
+  useEffect(() => {
+    if (db && userId && isAuthReady && appId) {
+      const companyDocRef = doc(db, `artifacts/${appId}/users/${userId}/companyDetails`, 'myCompany');
+      onSnapshot(companyDocRef, (docSnap) => {
+        if (docSnap.exists()) setCompanyDetails(docSnap.data());
+      });
+    }
+  }, [db, userId, isAuthReady, appId]);
 
   // Basic handlers
   const handleZoomIn = () => setZoom(z => Math.min(z + 0.1, 3));
@@ -230,11 +242,12 @@ const BillTemplates = ({ db, userId, isAuthReady }) => {
         return (
           <div className="p-2 text-sm">
             <div className="font-bold">Bank & Payment Details</div>
-            <div>Bank Name</div>
-            <div>Account Number</div>
-            <div>IFSC Code</div>
-            <div>UPI ID</div>
-            <div>QR Code</div>
+            <div>Bank Name: {companyDetails.bankName || '-'}</div>
+            <div>Account Number: {companyDetails.bankAccount || '-'}</div>
+            <div>IFSC Code: {companyDetails.bankIfsc || '-'}</div>
+            <div>UPI ID: {companyDetails.upiId || '-'}</div>
+            {companyDetails.upiQrUrl && <div className="mt-2"><img src={companyDetails.upiQrUrl} alt="UPI QR" className="h-20" /></div>}
+            {companyDetails.paymentGatewayLink && <div className="mt-2"><a href={companyDetails.paymentGatewayLink} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">Pay Online</a></div>}
           </div>
         );
       case 'totals':
@@ -252,7 +265,7 @@ const BillTemplates = ({ db, userId, isAuthReady }) => {
         return (
           <div className="p-2 text-sm">
             <div className="font-bold">Terms and Conditions</div>
-            <div>Terms Text</div>
+            <div>{companyDetails.terms || '-'}</div>
           </div>
         );
       case 'header':
@@ -266,7 +279,14 @@ const BillTemplates = ({ db, userId, isAuthReady }) => {
       case 'footer':
         return (
           <div className="p-2 text-center text-sm">
-            <div>Footer Text</div>
+            <div>{companyDetails.footer || '-'}</div>
+          </div>
+        );
+      case 'receiverSignature':
+        return (
+          <div className="p-2 text-sm text-center mt-8">
+            <div style={{ borderTop: '1px solid #333', width: '60%', margin: '0 auto', marginTop: '24px' }}></div>
+            <div className="mt-2">Receiver Signature</div>
           </div>
         );
       default:
@@ -494,4 +514,4 @@ const BillTemplates = ({ db, userId, isAuthReady }) => {
   );
 };
 
-export default BillTemplates; 
+export default BillTemplatesComponent; 

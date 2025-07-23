@@ -64,6 +64,16 @@ const Dashboard = ({ db, userId, isAuthReady, appId }) => {
             const sevenDaysAgo = new Date(today);
             sevenDaysAgo.setDate(today.getDate() - 7);
 
+            // Calculate Indian financial year range
+            let fyStart, fyEnd;
+            if (today.getMonth() >= 3) { // April (3) or later
+                fyStart = new Date(today.getFullYear(), 3, 1); // April 1st this year
+                fyEnd = new Date(today.getFullYear() + 1, 2, 31, 23, 59, 59, 999); // March 31st next year
+            } else {
+                fyStart = new Date(today.getFullYear() - 1, 3, 1); // April 1st last year
+                fyEnd = new Date(today.getFullYear(), 2, 31, 23, 59, 59, 999); // March 31st this year
+            }
+
             // Fetch Sales data
             const salesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/salesBills`);
             const unsubscribeSales = onSnapshot(salesCollectionRef, (snapshot) => {
@@ -72,9 +82,11 @@ const Dashboard = ({ db, userId, isAuthReady, appId }) => {
                 let outstandingReceivables = 0;
                 snapshot.forEach((doc) => {
                     const billData = doc.data();
-                    const billDate = new Date(billData.billDate);
-                    const totalAmount = parseFloat(billData.totalAmount) || 0;
-                    const paymentAmount = parseFloat(billData.paymentAmount) || 0;
+                    const billDate = new Date(billData.invoiceDate || billData.date);
+                    const totalAmount = parseFloat(billData.amount) || 0;
+                    const payments = Array.isArray(billData.payments) ? billData.payments : [];
+                    const totalPaid = payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+                    const paymentStatus = billData.paymentStatus || 'Pending';
 
                     // Check for current month sales
                     if (billDate >= firstDayOfMonth && billDate <= today) {
@@ -86,9 +98,13 @@ const Dashboard = ({ db, userId, isAuthReady, appId }) => {
                         sevenDaysSales += totalAmount;
                     }
 
-                    // Calculate outstanding receivables
-                    if (billData.paymentProgress !== 'Payment Received' && totalAmount > paymentAmount) {
-                        outstandingReceivables += (totalAmount - paymentAmount);
+                    // Calculate outstanding receivables for Indian financial year
+                    if (
+                        billDate >= fyStart && billDate <= fyEnd &&
+                        paymentStatus !== 'Paid' &&
+                        totalAmount > totalPaid
+                    ) {
+                        outstandingReceivables += (totalAmount - totalPaid);
                     }
                 });
                 setTotalSalesThisMonth(monthlySales.toFixed(2));
@@ -100,24 +116,34 @@ const Dashboard = ({ db, userId, isAuthReady, appId }) => {
             });
 
             // Fetch Purchases data
-            const purchasesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/purchaseBills`);
-            const unsubscribePurchases = onSnapshot(purchasesCollectionRef, (snapshot) => {
+            const purchaseTypes = [
+                { collection: 'purchaseBills' },
+                { collection: 'purchaseOrders' }
+            ];
+            let unsubscribePurchasesArr = [];
                 let monthlyPurchases = 0;
                 let outstandingPayables = 0;
+            purchaseTypes.forEach(type => {
+                const purchasesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/${type.collection}`);
+                const unsubscribe = onSnapshot(purchasesCollectionRef, (snapshot) => {
                 snapshot.forEach((doc) => {
                     const billData = doc.data();
-                    const billDate = new Date(billData.purchaseDate);
-                    const totalAmount = parseFloat(billData.totalAmount) || 0;
-                    const amountPaid = parseFloat(billData.amountPaid) || 0; // Use amountPaid for purchases
-
+                        const billDate = new Date(billData.billDate);
+                        const totalAmount = parseFloat(billData.amount) || 0;
+                        const payments = Array.isArray(billData.payments) ? billData.payments : [];
+                        const totalPaid = payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+                        const paymentStatus = billData.paymentStatus || 'Pending';
                     // Check for current month purchases
                     if (billDate >= firstDayOfMonth && billDate <= today) {
                         monthlyPurchases += totalAmount;
                     }
-
-                    // Calculate outstanding payables
-                    if (billData.paymentProgress !== 'Payment Paid' && totalAmount > amountPaid) { // Assuming 'Payment Paid' for purchases
-                        outstandingPayables += (totalAmount - amountPaid);
+                        // Calculate outstanding payables for Indian financial year
+                        if (
+                            billDate >= fyStart && billDate <= fyEnd &&
+                            paymentStatus !== 'Paid' &&
+                            totalAmount > totalPaid
+                        ) {
+                            outstandingPayables += (totalAmount - totalPaid);
                     }
                 });
                 setTotalPurchasesThisMonth(monthlyPurchases.toFixed(2));
@@ -125,6 +151,8 @@ const Dashboard = ({ db, userId, isAuthReady, appId }) => {
             }, (error) => {
                 console.error("Error fetching purchases for dashboard:", error);
                 setMessage("Error fetching purchase data for dashboard.");
+                });
+                unsubscribePurchasesArr.push(unsubscribe);
             });
 
             // Cleanup listeners on unmount
@@ -132,7 +160,7 @@ const Dashboard = ({ db, userId, isAuthReady, appId }) => {
                 unsubscribeParties();
                 unsubscribeItems();
                 unsubscribeSales();
-                unsubscribePurchases();
+                unsubscribePurchasesArr.forEach(unsub => unsub()); // Unsubscribe all purchase listeners
                 unsubscribeCompany();
             };
         }

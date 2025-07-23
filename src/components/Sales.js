@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { collection, onSnapshot, doc, addDoc, serverTimestamp, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
+import { collection, onSnapshot, doc, addDoc, serverTimestamp, getDoc, setDoc, deleteDoc, getDocs } from 'firebase/firestore';
 import BillTemplates from './BillTemplates';
 
 const initialItemRow = {
@@ -70,6 +70,14 @@ function Sales({ db, userId, isAuthReady, appId }) {
   const [paymentStatus, setPaymentStatus] = useState('Pending');
   const [notes, setNotes] = useState('');
   const [rows, setRows] = useState([{ ...initialItemRow }]);
+  // Payment state variables
+  const [payments, setPayments] = useState([]);
+  const [newPayment, setNewPayment] = useState({ amount: '', date: new Date().toISOString().split('T')[0], mode: 'Cash', reference: '' });
+  const addPayment = () => {
+    if (!newPayment.amount || parseFloat(newPayment.amount) <= 0) return;
+    setPayments([...payments, { ...newPayment }]);
+    setNewPayment({ amount: '', date: new Date().toISOString().split('T')[0], mode: 'Cash', reference: '' });
+  };
   // Remove template selection, always use SunriseTemplate
   // Remove print-related state and function
   // Remove: const [showPrint, setShowPrint] = useState(false);
@@ -117,6 +125,18 @@ function Sales({ db, userId, isAuthReady, appId }) {
 
   // State for bills of the selected type
   const [bills, setBills] = useState([]);
+
+  // Add state to track GST type for each row (for UI feedback)
+  const [gstTypes, setGstTypes] = useState(rows.map(() => ''));
+
+  // Add state for editing bill
+  const [editingBillId, setEditingBillId] = useState(null);
+
+  // Add state for custom fields
+  const [customFields, setCustomFields] = useState({ ewayBillNo: '', ewayQr: '', ewayDate: '' });
+
+  // Add at the top:
+  const [errorMessage, setErrorMessage] = useState('');
 
   // Fetch parties
   useEffect(() => {
@@ -193,13 +213,15 @@ function Sales({ db, userId, isAuthReady, appId }) {
         snapshot.forEach((doc) => {
           arr.push({ id: doc.id, ...doc.data() });
         });
-        // LIFO sort by number (descending)
         arr.sort((a, b) => {
           const aNum = a.number || '';
           const bNum = b.number || '';
           return bNum.localeCompare(aNum);
         });
         setBills(arr);
+      }, (error) => {
+        console.error('Error fetching bills:', error);
+        setBills([]);
       });
       return () => unsubscribe();
     }
@@ -207,6 +229,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
 
   // Auto-generate number for the selected type
   useEffect(() => {
+    if (editingBillId) return; // Do not auto-generate when editing
     const selected = docTypeOptions.find(opt => opt.value === docType);
     if (!selected) return;
     const fy = getFinancialYear(invoiceDate);
@@ -218,10 +241,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
     const nextSerial = (serials.length ? Math.max(...serials) : 0) + 1;
     const paddedSerial = nextSerial.toString().padStart(4, '0');
     setInvoiceNumber(`${fy}/${paddedSerial}`);
-  }, [invoiceDate, bills, docType]);
-
-  // Add state to track GST type for each row (for UI feedback)
-  const [gstTypes, setGstTypes] = useState(rows.map(() => ''));
+  }, [invoiceDate, bills, docType, editingBillId]);
 
   // When party changes, update GST for all rows
   useEffect(() => {
@@ -421,6 +441,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
   const totalCGST = round2(rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0) / 100), 0));
   const totalIGST = round2(rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0) / 100), 0));
   const grandTotal = round2(subtotal + totalSGST + totalCGST + totalIGST);
+  const totalPaid = round2(payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0));
 
   // Seller details from company
   const seller = {
@@ -464,10 +485,80 @@ function Sales({ db, userId, isAuthReady, appId }) {
       alert("Please select a party and add at least one item.");
       return;
     }
+    // Validation logic for duplicate number and date/number order
+    const allBillCollections = ['salesBills', 'challans', 'quotations', 'purchaseBills', 'purchaseOrders'];
+    let allBills = [];
+    for (const coll of allBillCollections) {
+      const billsSnap = await getDocs(collection(db, `artifacts/${appId}/users/${userId}/${coll}`));
+      billsSnap.forEach(doc => allBills.push({ ...doc.data(), id: doc.id, collection: coll }));
+    }
+    // 1. Check for duplicate number
+    if (allBills.some(b => b.number === invoiceNumber && (editingBillId ? b.id !== editingBillId : true))) {
+      setErrorMessage('Bill number already exists in another document. Please use a unique number.');
+      return;
+    }
+    // 2. Gap/date check: allow if any bill in FY has the same date
+    const fy = getFinancialYear(invoiceDate);
+    const fyBills = allBills.filter(b => (b.number || '').startsWith(fy));
+    const thisSerial = parseInt((invoiceNumber || '').split('/')[1], 10);
+    const thisDate = new Date(invoiceDate);
+    const sameDateExists = fyBills.some(b => {
+      if (!b.number || (!b.invoiceDate && !b.billDate)) return false;
+      if (b.id === editingBillId) return false;
+      const date = new Date(b.invoiceDate || b.billDate);
+      return date.getTime() === thisDate.getTime();
+    });
+    if (!sameDateExists) {
+      // Find previous and next serials
+      const sortedBills = fyBills
+        .filter(b => b.id !== editingBillId && b.number)
+        .map(b => ({
+          serial: parseInt((b.number || '').split('/')[1], 10),
+          date: new Date(b.invoiceDate || b.billDate),
+        }))
+        .sort((a, b) => a.serial - b.serial);
+      let prev = null, next = null;
+      for (let i = 0; i < sortedBills.length; i++) {
+        if (sortedBills[i].serial < thisSerial) prev = sortedBills[i];
+        if (sortedBills[i].serial > thisSerial) { next = sortedBills[i]; break; }
+      }
+      if (prev && thisDate.getTime() < prev.date.getTime()) {
+        setErrorMessage(`Date must be on or after previous bill (${prev.serial}) date: ${prev.date.toLocaleDateString()}`);
+        return;
+      }
+      if (next && thisDate.getTime() > next.date.getTime()) {
+        setErrorMessage(`Date must be on or before next bill (${next.serial}) date: ${next.date.toLocaleDateString()}`);
+        return;
+      }
+    }
+    // 2. Block if any lower bill number exists with a later date
+    for (const b of fyBills) {
+      if (!b.number || (!b.invoiceDate && !b.billDate)) continue;
+      if (b.id === editingBillId) continue;
+      const serial = parseInt((b.number || '').split('/')[1], 10);
+      const date = new Date(b.invoiceDate || b.billDate);
+      if (serial < thisSerial && date.getTime() > thisDate.getTime()) {
+        setErrorMessage('A lower bill number exists with a later date. Please correct the date or number.');
+        return;
+      }
+    }
+    // 3. Block if any higher bill number exists with an earlier date
+    for (const b of fyBills) {
+      if (!b.number || (!b.invoiceDate && !b.billDate)) continue;
+      if (b.id === editingBillId) continue;
+      const serial = parseInt((b.number || '').split('/')[1], 10);
+      const date = new Date(b.invoiceDate || b.billDate);
+      if (serial > thisSerial && date.getTime() < thisDate.getTime()) {
+        setErrorMessage('A higher bill number exists with an earlier date. Please correct the date or number.');
+        return;
+      }
+    }
     const selected = docTypeOptions.find(opt => opt.value === docType);
     if (!selected) return;
     const collectionRef = collection(db, `artifacts/${appId}/users/${userId}/${selected.collection}`);
     const stockCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/stock`);
+    const totalPaid = payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+    const paymentStatus = totalPaid >= grandTotal ? 'Paid' : totalPaid > 0 ? 'Partial' : 'Pending';
     const billData = {
       number: invoiceNumber,
       invoiceDate,
@@ -476,7 +567,9 @@ function Sales({ db, userId, isAuthReady, appId }) {
       notes,
       rows,
       amount: grandTotal,
+      payments, // <-- store payments array
       createdAt: serverTimestamp(),
+      customFields,
     };
     try {
       let savedBill;
@@ -515,6 +608,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
       setNotes('');
       setRows([{ ...initialItemRow }]);
       setEditingBillId(null);
+      setPayments([]);
     } catch (err) {
       alert("Error saving invoice: " + err.message);
     }
@@ -523,7 +617,6 @@ function Sales({ db, userId, isAuthReady, appId }) {
   // Modal and action state for View/Edit/Delete
   const [viewBill, setViewBill] = useState(null); // Bill to view in modal
   const [showViewModal, setShowViewModal] = useState(false);
-  const [editingBillId, setEditingBillId] = useState(null); // Bill id being edited
   const [deletingBillId, setDeletingBillId] = useState(null); // Bill id being deleted
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   // Add import for BillTemplates and modal state
@@ -541,9 +634,9 @@ function Sales({ db, userId, isAuthReady, appId }) {
     setInvoiceNumber(bill.number || '');
     setInvoiceDate(bill.invoiceDate || '');
     setParty(bill.party || '');
-    setPaymentStatus(bill.paymentStatus || 'Pending');
     setNotes(bill.notes || '');
     setRows(bill.rows || [{ ...initialItemRow }]);
+    setPayments(bill.payments || []);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
   // Handler to delete bill
@@ -652,6 +745,12 @@ function Sales({ db, userId, isAuthReady, appId }) {
 
     return (
     <div className="min-h-screen bg-gray-100 flex flex-col items-center py-8">
+      {errorMessage && (
+        <div className="fixed top-6 left-1/2 transform -translate-x-1/2 bg-red-100 border border-red-400 text-red-700 px-6 py-3 rounded shadow-lg z-50 flex items-center gap-4">
+          <span>{errorMessage}</span>
+          <button onClick={() => setErrorMessage('')} className="ml-4 text-red-700 font-bold text-lg">&times;</button>
+        </div>
+      )}
       <div className="w-full max-w-5xl mb-6">
         <div className="flex gap-2 justify-center mb-4">
           {docTypeOptions.map(opt => (
@@ -694,20 +793,32 @@ function Sales({ db, userId, isAuthReady, appId }) {
                 {parties.map(p => <option key={p.id} value={p.id}>{p.firmName}</option>)}
                         </select>
                     </div>
-                    <div>
-              <label className="block text-sm font-medium text-gray-700">Payment Status</label>
-              <select value={paymentStatus} onChange={e => setPaymentStatus(e.target.value)}
-                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2">
-                <option>Pending</option>
-                <option>Paid</option>
-                <option>Partial</option>
-                        </select>
-                    </div>
+                    {/* Remove Payment Status dropdown from the top form section */}
                     </div>
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-700">Notes</label>
             <textarea value={notes} onChange={e => setNotes(e.target.value)}
               className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2" />
+                    </div>
+          <div className="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <h4 className="text-lg font-semibold mb-2">E-way Bill Details</h4>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700">E-way Bill No</label>
+                <input type="text" value={customFields.ewayBillNo} onChange={e => setCustomFields(f => ({ ...f, ewayBillNo: e.target.value }))}
+                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">QR Code URL</label>
+                <input type="text" value={customFields.ewayQr} onChange={e => setCustomFields(f => ({ ...f, ewayQr: e.target.value }))}
+                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">E-way Bill Date</label>
+                <input type="date" value={customFields.ewayDate} onChange={e => setCustomFields(f => ({ ...f, ewayDate: e.target.value }))}
+                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2" />
+              </div>
+            </div>
                     </div>
           <h3 className="text-xl font-bold text-gray-800 mb-2">Invoice Items</h3>
           <div className="overflow-x-auto rounded-lg border border-gray-200 mb-4">
@@ -819,6 +930,75 @@ function Sales({ db, userId, isAuthReady, appId }) {
               <div className="flex justify-between mb-1"><span>Total CGST:</span><span>₹{totalCGST}</span></div>
               <div className="flex justify-between mb-1"><span>Total IGST:</span><span>₹{totalIGST}</span></div>
               <div className="flex justify-between mt-2 font-bold text-lg"><span>Grand Total (Incl. GST):</span><span className="text-blue-700">₹{grandTotal}</span></div>
+            </div>
+          </div>
+          {/* Payment Section */}
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6 w-full md:w-2/3 mx-auto">
+            <h4 className="text-lg font-semibold mb-2">Payment Details</h4>
+            <div className="mb-2">
+              <span className="font-medium">Status: </span>
+              {totalPaid >= grandTotal ? 'Paid' : totalPaid > 0 ? 'Partial' : 'Unpaid'}
+              <span className="ml-4 font-medium">Total Paid: </span>₹{totalPaid.toFixed(2)}
+              <span className="ml-4 font-medium text-red-600">Remaining Due: </span>₹{(grandTotal - totalPaid).toFixed(2)}
+            </div>
+            <table className="w-full text-sm mb-2 border">
+              <thead>
+                <tr className="bg-gray-100">
+                  <th className="border px-2 py-1">Amount</th>
+                  <th className="border px-2 py-1">Date</th>
+                  <th className="border px-2 py-1">Mode</th>
+                  <th className="border px-2 py-1">Reference/Notes</th>
+                  <th className="border px-2 py-1">Remove</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payments.map((p, idx) => (
+                  <tr key={idx}>
+                    <td className="border px-2 py-1 text-right">₹{parseFloat(p.amount).toFixed(2)}</td>
+                    <td className="border px-2 py-1">{p.date}</td>
+                    <td className="border px-2 py-1">{p.mode}</td>
+                    <td className="border px-2 py-1">{p.reference}</td>
+                    <td className="border px-2 py-1 text-center">
+                      <button type="button" className="text-red-600 font-bold" onClick={() => setPayments(payments.filter((_, i) => i !== idx))}>X</button>
+                    </td>
+                  </tr>
+                ))}
+                {payments.length === 0 && (
+                  <tr><td colSpan={5} className="text-center text-gray-400 py-2">No payments yet</td></tr>
+                )}
+              </tbody>
+            </table>
+            {/* Add Payment Form */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Amount</label>
+                <input type="number" min="0" step="0.01" value={newPayment.amount || ''} onChange={e => setNewPayment({ ...newPayment, amount: e.target.value })}
+                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Date</label>
+                <input type="date" value={newPayment.date || new Date().toISOString().split('T')[0]} onChange={e => setNewPayment({ ...newPayment, date: e.target.value })}
+                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Mode</label>
+                <select value={newPayment.mode || 'Cash'} onChange={e => setNewPayment({ ...newPayment, mode: e.target.value })}
+                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2">
+                  <option>Cash</option>
+                  <option>Bank</option>
+                  <option>UPI</option>
+                  <option>Cheque</option>
+                  <option>Other</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Reference/Notes</label>
+                <input type="text" value={newPayment.reference || ''} onChange={e => setNewPayment({ ...newPayment, reference: e.target.value })}
+                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2" />
+              </div>
+              <div className="md:col-span-4 mt-2">
+                <button type="button" className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md" onClick={addPayment}>Add Payment</button>
+              </div>
                         </div>
                     </div>
           <div className="flex flex-col md:flex-row gap-4">
@@ -970,7 +1150,8 @@ function Sales({ db, userId, isAuthReady, appId }) {
                             ...bill,
                             companyDetails: company,
                             partyDetails: parties.find(p => p.id === bill.party) || {},
-                            items: items
+                            items: items,
+                            docType: docType // Pass the current document type
                           }); setShowInvoiceModal(true); }} className="text-blue-600 hover:text-blue-900 font-medium">
                             {docTypeOptions.find(opt => opt.value === docType)?.label || 'Invoice'}
                           </button>

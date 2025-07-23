@@ -1918,18 +1918,62 @@ const BillTemplates = ({ db, userId, isAuthReady, appId, billOverride }) => {
                         <div>{companyDetails.terms || 'Thank you for your business!'}</div>
                       </div>
                     );
-                  case 'footer':
-                    return (
-                      <div key={colIdx} style={{ flex: 1, textAlign: 'center', fontSize: 12, color: '#888' }}>
-                        {companyDetails.footer || `Generated on ${new Date().toLocaleDateString('en-IN')} | ${companyDetails.firmName || ''}`}
-                      </div>
-                    );
                   default:
                     return <div key={colIdx} style={{ flex: 1 }} />;
                 }
               })}
               </div>
           ))}
+          {/* Payment Details Section (after all layout rows) */}
+          {billOverride && (() => {
+            const payments = billOverride.payments || [];
+            const rows = billOverride.rows || [];
+            const subtotal = rows.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0);
+            const totalSGST = rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.sgst) || 0) / 100), 0);
+            const totalCGST = rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0) / 100), 0);
+            const totalIGST = rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0) / 100), 0);
+            const grandTotal = subtotal + totalSGST + totalCGST + totalIGST;
+            const totalPaid = payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+            const remainingDue = round2(grandTotal - totalPaid);
+            return (
+              <div className="bill-payments-section mt-2" style={{ maxWidth: 600, margin: '0 auto', fontSize: '12px' }}>
+                <b>Payment Details:</b>
+                <div className="mb-1">
+                  <span className="font-medium">Status: </span>{totalPaid >= grandTotal ? 'Paid' : totalPaid > 0 ? 'Partial' : 'Unpaid'}
+                  <span className="ml-4 font-medium">Total Paid: </span>₹{totalPaid.toFixed(2)}
+                  <span className="ml-4 font-medium text-red-600">Remaining Due: </span>₹{remainingDue.toFixed(2)}
+                </div>
+                <table className="w-full text-xs mb-2 border">
+                  <thead>
+                    <tr className="bg-gray-100">
+                      <th className="border px-2 py-1">Amount</th>
+                      <th className="border px-2 py-1">Date</th>
+                      <th className="border px-2 py-1">Mode</th>
+                      <th className="border px-2 py-1">Reference/Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {payments.map((p, idx) => (
+                      <tr key={idx}>
+                        <td className="border px-2 py-1 text-right">₹{parseFloat(p.amount).toFixed(2)}</td>
+                        <td className="border px-2 py-1">{p.date}</td>
+                        <td className="border px-2 py-1">{p.mode}</td>
+                        <td className="border px-2 py-1">{p.reference}</td>
+                      </tr>
+                    ))}
+                    {payments.length === 0 && (
+                      <tr><td colSpan={4} className="text-center text-gray-400 py-2">No payments yet</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })()}
+          {companyDetails.footer && (
+            <div style={{ textAlign: 'center', fontSize: 12, color: '#888', marginTop: 12 }}>
+              {companyDetails.footer || `Generated on ${new Date().toLocaleDateString('en-IN')} | ${companyDetails.firmName || ''}`}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -2998,73 +3042,98 @@ function DefaultTemplate({ data, companyDetails, partyDetails, bankDetails }) {
     }
   }, [data]);
 
+  // --- FIX: Define all required variables in scope ---
+  const isPurchaseBill = data?.docType === 'purchaseBill' || data?.type === 'purchaseBill';
+  const isPurchaseOrder = data?.docType === 'purchaseOrder' || data?.type === 'purchaseOrder';
+  const isPurchase = isPurchaseBill || isPurchaseOrder || data?.type === 'purchase';
+  let headerLabel = 'TAX INVOICE';
+  if (isPurchaseBill) {
+    headerLabel = 'PURCHASE BILL';
+  } else if (isPurchaseOrder) {
+    headerLabel = 'PURCHASE ORDER';
+  } else if (data?.docType === 'challan') {
+    headerLabel = 'CHALLAN';
+  } else if (data?.docType === 'quotation') {
+    headerLabel = 'QUOTATION';
+  }
+  // For purchase, swap billed by/to
+  const billedBy = isPurchase ? partyDetails : companyDetails;
+  const billedTo = isPurchase ? companyDetails : partyDetails;
+  // Logo
+  const logoUrl = billedTo?.logoUrl || billedBy?.logoUrl || companyDetails?.logoUrl;
+  // Section labels for purchase
+  let leftSectionLabel = 'Billed By:';
+  let rightSectionLabel = 'Billed To:';
+  if (isPurchaseBill) {
+    leftSectionLabel = 'Received To:';
+    rightSectionLabel = 'Received From:';
+  } else if (isPurchaseOrder) {
+    leftSectionLabel = 'Ordered By:';
+    rightSectionLabel = 'Ordered To:';
+  }
+  // --- END FIX ---
+
   return (
     <div className="p-8 max-w-4xl mx-auto bg-white print:p-4 print:max-w-none print:mx-0">
-      {/* Header with Company Details */}
-      <div className="text-center mb-8 print:mb-4">
-        <h1 className="text-2xl font-bold text-gray-800 print:text-xl">{companyDetails?.firmName || 'Company Name'}</h1>
-        <p className="text-gray-600">{companyDetails?.address || 'Company Address'}</p>
-        <p className="text-gray-600">
-          {companyDetails?.city || ''} {companyDetails?.state ? `, ${companyDetails.state}` : ''} 
-          {companyDetails?.pincode ? ` - ${companyDetails.pincode}` : ''}
-        </p>
-        <p className="text-gray-600">GSTIN: {companyDetails?.gstin || 'GSTIN'}</p>
-        <p className="text-gray-600">Contact: {companyDetails?.contactNumber || ''}</p>
-        <p className="text-gray-600">Email: {companyDetails?.email || ''}</p>
-      </div>
-
-      {/* Document Type and Number */}
-      <div className="flex justify-between mb-6 print:mb-4">
-        <div>
-          <h2 className="text-xl font-bold text-gray-800 print:text-lg">
-            {data?.docType === 'challan' ? 'CHALLAN' : 
-             data?.docType === 'quotation' ? 'QUOTATION' : 'TAX INVOICE'}
-          </h2>
+      {/* Header with Logo and Company Details */}
+      <div className="flex items-center justify-between mb-8 print:mb-4">
+        <div className="text-left">
+          <h1 className="text-2xl font-bold text-gray-800 print:text-xl">{headerLabel}</h1>
           <p className="text-gray-600">No: {data?.number || ''}</p>
-          <p className="text-gray-600">Date: {formatDate(data?.date)}</p>
+          <p className="text-gray-600">Date: {formatDate(data?.date || data?.billDate)}</p>
+        </div>
+        <div className="text-right">
+          {logoUrl ? (
+            <img src={logoUrl} alt="Logo" style={{ maxHeight: 60, maxWidth: 120, objectFit: 'contain', display: 'block', marginLeft: 'auto' }} />
+          ) : (
+            <span className="text-gray-400">No Logo</span>
+          )}
         </div>
       </div>
 
-      {/* Bill To / Ship To Details */}
+      {/* Main sections: for purchases, do NOT render Ship To */}
       <div className="grid grid-cols-2 gap-8 mb-6 print:mb-4 print:gap-4">
         <div className="border p-3 rounded print:border-gray-300">
-          <h3 className="font-bold text-gray-800 mb-2">Bill To:</h3>
-          <p className="font-semibold">{partyDetails?.firmName || ''}</p>
-          <p>{partyDetails?.address || ''}</p>
+          <h3 className="font-bold text-gray-800 mb-2">{leftSectionLabel}</h3>
+          <p className="font-semibold">{billedBy?.firmName || ''}</p>
+          <p>{billedBy?.address || ''}</p>
           <p>
-            {partyDetails?.city || ''} {partyDetails?.state ? `, ${partyDetails.state}` : ''}
-            {partyDetails?.pincode ? ` - ${partyDetails.pincode}` : ''}
+            {billedBy?.city || ''} {billedBy?.state ? `, ${billedBy.state}` : ''}
+            {billedBy?.pincode ? ` - ${billedBy.pincode}` : ''}
           </p>
-          <p>GSTIN: {partyDetails?.gstin || ''}</p>
-          <p>Contact: {partyDetails?.contactNumber || ''}</p>
+          <p>GSTIN: {billedBy?.gstin || ''}</p>
+          <p>Contact: {billedBy?.contactNumber || ''}</p>
         </div>
         <div className="border p-3 rounded print:border-gray-300">
-          <h3 className="font-bold text-gray-800 mb-2">Ship To:</h3>
-          <p className="font-semibold">{partyDetails?.firmName || ''}</p>
-          <p>{partyDetails?.address || ''}</p>
+          <h3 className="font-bold text-gray-800 mb-2">{rightSectionLabel}</h3>
+          <p className="font-semibold">{billedTo?.firmName || ''}</p>
+          <p>{billedTo?.address || ''}</p>
           <p>
-            {partyDetails?.city || ''} {partyDetails?.state ? `, ${partyDetails.state}` : ''}
-            {partyDetails?.pincode ? ` - ${partyDetails.pincode}` : ''}
+            {billedTo?.city || ''} {billedTo?.state ? `, ${billedTo.state}` : ''}
+            {billedTo?.pincode ? ` - ${billedTo.pincode}` : ''}
           </p>
-          <p>GSTIN: {partyDetails?.gstin || ''}</p>
-          <p>Contact: {partyDetails?.contactNumber || ''}</p>
+          <p>GSTIN: {billedTo?.gstin || ''}</p>
+          <p>Contact: {billedTo?.contactNumber || ''}</p>
         </div>
       </div>
 
       {/* Bank Details */}
       <div className="border-t pt-4 mb-6 print:mb-4">
-        <h3 className="font-bold text-gray-800 mb-2">Bank Details:</h3>
+        <h3 className="font-bold text-gray-800 mb-2">Bank & Payment Details:</h3>
         <p>Bank Name: {companyDetails?.bankName || ''}</p>
         <p>Account No: {companyDetails?.bankAccount || ''}</p>
         <p>IFSC Code: {companyDetails?.bankIfsc || ''}</p>
         {companyDetails?.upiId && <p>UPI ID: {companyDetails.upiId}</p>}
+        {companyDetails?.upiQrUrl && <div className="mt-2"><img src={companyDetails.upiQrUrl} alt="UPI QR" className="h-20" /></div>}
+        {companyDetails?.paymentGatewayLink && <div className="mt-2"><a href={companyDetails.paymentGatewayLink} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">Pay Online</a></div>}
+        <pre style={{fontSize: '10px', color: 'red'}}>{JSON.stringify(companyDetails, null, 2)}</pre>
       </div>
 
       {/* Terms & Signature */}
       <div className="grid grid-cols-2 gap-4">
         <div>
           <h3 className="font-bold text-gray-800 mb-2">Terms & Conditions:</h3>
-          <p className="text-sm text-gray-600 whitespace-pre-wrap">{companyDetails?.terms || 
+          <p className="text-sm text-gray-600 whitespace-pre-wrap">{companyDetails?.terms ||
             '1. Goods once sold will not be taken back.\n' +
             '2. Interest @18% p.a. will be charged on overdue bills.\n' +
             '3. Subject to local jurisdiction.'}</p>
@@ -3077,6 +3146,21 @@ function DefaultTemplate({ data, companyDetails, partyDetails, bankDetails }) {
           </div>
         </div>
       </div>
+
+      {/* Receiver Signature Section */}
+      <div className="mt-12 flex justify-end">
+        <div className="text-center">
+          <div style={{ borderTop: '1px solid #333', width: '200px', margin: '0 auto', marginTop: '24px' }}></div>
+          <div className="mt-2">Receiver Signature</div>
+        </div>
+      </div>
+
+      {/* Footer Section */}
+      {companyDetails?.footer && (
+        <div className="mt-8 text-center text-xs text-gray-500">
+          {companyDetails.footer}
+        </div>
+      )}
     </div>
   );
 }

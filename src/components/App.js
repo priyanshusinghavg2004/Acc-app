@@ -21,7 +21,20 @@ const items = [
   { id: '1', name: 'Flex Banner', sgst: 9, cgst: 9, igst: 0 },
   { id: '2', name: 'Vinyl Print', sgst: 6, cgst: 6, igst: 0 },
 ];
+const [uid, setUid] = useState("");
 
+useEffect(() => {
+  onAuthStateChanged(auth, (user) => {
+    if (user) setUid(user.uid);
+    else setUid("Not logged in");
+  });
+}, []);
+
+return (
+  <div>
+    <h2>User UID: {uid}</h2>
+  </div>
+);
 function App() {
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);
@@ -150,6 +163,7 @@ function App() {
                     <input type="number" value={row.rate} min={0} onChange={e => handleRowChange(idx, 'rate', e.target.value)}
                       className="border border-gray-300 rounded-md p-1 w-16" />
                   </td>
+                  
                   <td className="px-2 py-1">
                     <input type="number" value={row.amount} min={0} readOnly
                       className="border border-gray-300 rounded-md p-1 w-20 bg-gray-100" />

@@ -9,7 +9,7 @@ const firebaseConfig = {
   projectId: "acc-app-e5316",
   storageBucket: "acc-app-e5316.firebasestorage.app",
   messagingSenderId: "447193481869",
-  appId: "1:447193481869:web:6bdc560f454c2f894e98c4",
+  appId: "acc-app-e5316",
   measurementId: "G-PLY7P9M3F8"
 };
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { getAuth } from 'firebase/auth';
 
 const indianStates = [
     'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal', 'Andaman and Nicobar Islands', 'Chandigarh', 'Dadra and Nagar Haveli and Daman and Diu', 'Delhi', 'Jammu and Kashmir', 'Ladakh', 'Lakshadweep', 'Puducherry'
@@ -36,8 +37,20 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
     const [signProgress, setSignProgress] = useState(0);
     const [sealUploading, setSealUploading] = useState(false);
     const [sealProgress, setSealProgress] = useState(0);
+    // Add new state variables
+    const [upiId, setUpiId] = useState('');
+    const [upiQrUrl, setUpiQrUrl] = useState('');
+    const [upiQrPreview, setUpiQrPreview] = useState('');
+    const [upiQrUploading, setUpiQrUploading] = useState(false);
+    const [upiQrProgress, setUpiQrProgress] = useState(0);
+    const [paymentGatewayLink, setPaymentGatewayLink] = useState('');
+    // Add state at the top:
+    const [terms, setTerms] = useState('');
+    const [footer, setFooter] = useState('');
 
     useEffect(() => {
+        const auth = getAuth();
+        const currentUser = auth.currentUser;
         if (db && userId && isAuthReady) {
             const companyDocRef = doc(db, `artifacts/${appId}/users/${userId}/companyDetails`, 'myCompany');
             const unsubscribe = onSnapshot(companyDocRef, (docSnap) => {
@@ -59,8 +72,13 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
                     setLogoUrl(data.logoUrl || '');
                     setSignUrl(data.signUrl || '');
                     setSealUrl(data.sealUrl || '');
+                    setUpiId(data.upiId || '');
+                    setUpiQrUrl(data.upiQrUrl || '');
+                    setPaymentGatewayLink(data.paymentGatewayLink || '');
+                    setTerms(data.terms || '');
+                    setFooter(data.footer || '');
                 } else {
-                    setFirmName(''); setGstin(''); setAddress(''); setCity(''); setState(''); setPincode(''); setContactNumber(''); setEmail(''); setPan(''); setGstinType(''); setBankName(''); setBankAccount(''); setBankIfsc(''); setLogoUrl(''); setSignUrl(''); setSealUrl('');
+                    setFirmName(''); setGstin(''); setAddress(''); setCity(''); setState(''); setPincode(''); setContactNumber(''); setEmail(''); setPan(''); setGstinType(''); setBankName(''); setBankAccount(''); setBankIfsc(''); setLogoUrl(''); setSignUrl(''); setSealUrl(''); setUpiId(''); setUpiQrUrl(''); setPaymentGatewayLink(''); setTerms(''); setFooter('');
                 }
             }, (error) => {
                 console.error("Error fetching company details:", error);
@@ -75,8 +93,8 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
         const file = e.target.files[0];
         console.log('Selected file:', file);
         if (!file) return;
-        if (file.size > 1024 * 1024) { // 1 MB
-            setMessage('File size must be less than 1 MB.');
+        if (file.size > 3 * 1024 * 1024) { // 3 MB
+            setMessage('File size must be less than 3 MB.');
             console.warn('File too large:', file.size);
             return;
         }
@@ -158,6 +176,11 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
                 logoUrl,
                 signUrl,
                 sealUrl,
+                upiId,
+                upiQrUrl,
+                paymentGatewayLink,
+                terms,
+                footer,
                 timestamp: serverTimestamp()
             }, { merge: true });
             setMessage("Company details saved successfully!");
@@ -295,6 +318,37 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
                       </div>
                     )}
                 </div>
+                <div>
+                    <label htmlFor="companyUpiId" className="block text-sm font-medium text-gray-700">UPI ID</label>
+                    <input type="text" id="companyUpiId" value={upiId} onChange={e => setUpiId(e.target.value)}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="e.g., yourname@upi" />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-gray-700">UPI QR Code</label>
+                    {upiQrUrl && <img src={upiQrPreview || upiQrUrl} alt="UPI QR Code" className="h-24 w-24 object-contain border mb-2" />}
+                    <input type="file" accept="image/*" onChange={e => handleImageChange(e, setUpiQrUrl, 'upiQr', setUpiQrPreview, setUpiQrUploading, setUpiQrProgress)} />
+                    {upiQrUploading && <div className="text-xs text-blue-600">Uploading: {upiQrProgress}%</div>}
+                    {upiQrUrl && <button type="button" className="text-red-500 text-xs mt-1" onClick={() => { setUpiQrUrl(''); setUpiQrPreview(''); }}>Remove</button>}
+                </div>
+                <div>
+                    <label htmlFor="companyPaymentGatewayLink" className="block text-sm font-medium text-gray-700">Payment Gateway Link</label>
+                    <input type="text" id="companyPaymentGatewayLink" value={paymentGatewayLink} onChange={e => setPaymentGatewayLink(e.target.value)}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="e.g., https://yourpaymentgateway.com/pay/123" />
+                </div>
+                <div>
+                    <label htmlFor="companyTerms" className="block text-sm font-medium text-gray-700">Terms and Conditions</label>
+                    <textarea id="companyTerms" value={terms} onChange={e => setTerms(e.target.value)}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="Enter terms and conditions for your bills..." rows={3} />
+                </div>
+                <div>
+                    <label htmlFor="companyFooter" className="block text-sm font-medium text-gray-700">Footer</label>
+                    <textarea id="companyFooter" value={footer} onChange={e => setFooter(e.target.value)}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="Enter footer text for your bills..." rows={2} />
+                </div>
             </div>
             <div className="flex gap-4 mt-4">
                 <button
@@ -328,6 +382,11 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
                 <p className="text-gray-700"><strong>Logo:</strong> {logoUrl && <img src={logoUrl} alt="Logo" className="inline h-8 align-middle" />}</p>
                 <p className="text-gray-700"><strong>Sign:</strong> {signUrl && <img src={signUrl} alt="Sign" className="inline h-8 align-middle" />}</p>
                 <p className="text-gray-700"><strong>Seal:</strong> {sealUrl && <img src={sealUrl} alt="Seal" className="inline h-8 align-middle" />}</p>
+                <p className="text-gray-700"><strong>UPI ID:</strong> {upiId || 'N/A'}</p>
+                <p className="text-gray-700"><strong>UPI QR Code:</strong> {upiQrUrl && <img src={upiQrPreview || upiQrUrl} alt="UPI QR Code" className="inline h-8 align-middle" />}</p>
+                <p className="text-gray-700"><strong>Payment Gateway Link:</strong> {paymentGatewayLink || 'N/A'}</p>
+                <p className="text-gray-700"><strong>Terms and Conditions:</strong> {terms || 'N/A'}</p>
+                <p className="text-gray-700"><strong>Footer:</strong> {footer || 'N/A'}</p>
             </div>
         </div>
     );

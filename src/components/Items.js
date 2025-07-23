@@ -276,7 +276,7 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
                                 >
                                     {unit}
                                 </div>
-                            ))}
+                        ))}
                             {filteredUnits.length === 0 && <div className="px-3 py-1 text-gray-400">No units found</div>}
                         </div>
                     )}
