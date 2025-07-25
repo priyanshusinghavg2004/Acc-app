@@ -20,6 +20,10 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
     const [purchaseBills, setPurchaseBills] = useState([]);
     const [salesBills, setSalesBills] = useState([]);
     const [stockMap, setStockMap] = useState({});
+    // Add new state for composition GST and raw material
+    const [compositionGstRate, setCompositionGstRate] = useState('');
+    const [isRawMaterial, setIsRawMaterial] = useState(false);
+    const [rawMaterialType, setRawMaterialType] = useState('Base Material');
 
     // 1. Add 'Nos.' to predefinedUnits, alphabetically
     const predefinedUnits = [
@@ -111,6 +115,9 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
         setEditingItemId(null);
         setMessage('');
         setCustomUnit('');
+        setCompositionGstRate('');
+        setIsRawMaterial(false);
+        setRawMaterialType('Base Material');
     };
 
     // Handle adding/updating an item
@@ -123,7 +130,6 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
             setMessage("Item Name is required.");
             return;
         }
-        // Removed obsolete GST split validation
         let sgstRate = 0, cgstRate = 0;
         if (parseFloat(gstSplitRate) > 0) {
             sgstRate = (parseFloat(gstSplitRate) / 2).toFixed(2);
@@ -138,6 +144,9 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
                 itemType,
                 hsnCode: hsnCode,
                 gstPercentage: parseFloat(gstPercentage) || 0,
+                compositionGstRate: parseFloat(compositionGstRate) || 0,
+                isRawMaterial: itemType === 'Goods' ? isRawMaterial : false,
+                rawMaterialType: itemType === 'Goods' && isRawMaterial ? rawMaterialType : '',
                 description,
                 purchasePrice: parseFloat(purchasePrice) || 0,
                 salePrice: parseFloat(salePrice) || 0,
@@ -172,6 +181,9 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
         setItemType(item.itemType);
         setHsnCode(item.hsnCode || '');
         setGstPercentage(item.gstPercentage || '');
+        setCompositionGstRate(item.compositionGstRate || '');
+        setIsRawMaterial(item.isRawMaterial || false);
+        setRawMaterialType(item.rawMaterialType || 'Base Material');
         setDescription(item.description || '');
         setPurchasePrice(item.purchasePrice?.toString() || '0');
         setSalePrice(item.salePrice?.toString() || '0');
@@ -303,14 +315,48 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
                 </div>
                 <div>
                     <label htmlFor="itemType" className="block text-sm font-medium text-gray-700">Item Type</label>
-                    <select id="itemType" value={itemType} onChange={(e) => setItemType(e.target.value)}
-                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                        required>
-                        <option value="Service">Service</option>
-                        <option value="Raw Material">Raw Material</option>
-                        <option value="Finished Good">Finished Good</option>
+                    <select id="itemType" value={itemType} onChange={e => setItemType(e.target.value)}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500" required>
+                        <option value="Goods">Goods</option>
+                        <option value="Services">Services</option>
+                        <option value="Restaurant">Restaurant</option>
                         <option value="Other">Other</option>
                     </select>
+                </div>
+                {(itemType === 'Goods') && (
+                    <div className="col-span-1 md:col-span-2 lg:col-span-1">
+                        <label className="block text-sm font-medium text-gray-700">Raw Material</label>
+                        <div className="flex items-center gap-2 mt-1">
+                            <input type="checkbox" id="isRawMaterial" checked={isRawMaterial} onChange={e => setIsRawMaterial(e.target.checked)} />
+                            <label htmlFor="isRawMaterial" className="text-sm">Is this a Raw Material?</label>
+                        </div>
+                        {isRawMaterial && (
+                            <div className="mt-2">
+                                <label htmlFor="rawMaterialType" className="block text-xs font-medium text-gray-600">Raw Material Type</label>
+                                <select id="rawMaterialType" value={rawMaterialType} onChange={e => setRawMaterialType(e.target.value)}
+                                    className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500">
+                                    <option value="Base Material">Base Material</option>
+                                    <option value="Consumable">Consumable</option>
+                                    <option value="Packing Material">Packing Material</option>
+                                    <option value="Other">Other</option>
+                                </select>
+                            </div>
+                        )}
+                    </div>
+                )}
+                <div>
+                    <label htmlFor="compositionGstRate" className="block text-sm font-medium text-gray-700">GST Rate for Composition (%)</label>
+                    <input
+                        type="number"
+                        id="compositionGstRate"
+                        value={compositionGstRate}
+                        onChange={e => setCompositionGstRate(e.target.value)}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="e.g., 1, 5, 6"
+                        min="0"
+                        max="100"
+                        step="0.01"
+                    />
                 </div>
                 <div className="md:col-span-2">
                     <label htmlFor="description" className="block text-sm font-medium text-gray-700">Description</label>
