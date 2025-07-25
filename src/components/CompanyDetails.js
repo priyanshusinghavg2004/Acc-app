@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { getAuth } from 'firebase/auth';
+import imageCompression from 'browser-image-compression';
 
 const indianStates = [
     'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal', 'Andaman and Nicobar Islands', 'Chandigarh', 'Dadra and Nagar Haveli and Daman and Diu', 'Delhi', 'Jammu and Kashmir', 'Ladakh', 'Lakshadweep', 'Puducherry'
@@ -9,6 +10,17 @@ const indianStates = [
 
 // Indian PAN validation regex (5 letters + 4 digits + 1 letter)
 const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
+
+const stateCodeMap = {
+    'Andhra Pradesh': '37', 'Arunachal Pradesh': '12', 'Assam': '18', 'Bihar': '10', 'Chhattisgarh': '22',
+    'Goa': '30', 'Gujarat': '24', 'Haryana': '06', 'Himachal Pradesh': '02', 'Jharkhand': '20',
+    'Karnataka': '29', 'Kerala': '32', 'Madhya Pradesh': '23', 'Maharashtra': '27', 'Manipur': '14',
+    'Meghalaya': '17', 'Mizoram': '15', 'Nagaland': '13', 'Odisha': '21', 'Punjab': '03',
+    'Rajasthan': '08', 'Sikkim': '11', 'Tamil Nadu': '33', 'Telangana': '36', 'Tripura': '16',
+    'Uttar Pradesh': '09', 'Uttarakhand': '05', 'West Bengal': '19',
+    'Andaman and Nicobar Islands': '35', 'Chandigarh': '04', 'Dadra and Nagar Haveli and Daman and Diu': '26',
+    'Delhi': '07', 'Jammu and Kashmir': '01', 'Ladakh': '38', 'Lakshadweep': '31', 'Puducherry': '34'
+};
 
 const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => {
     const [firmName, setFirmName] = useState('');
@@ -21,6 +33,9 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
     const [email, setEmail] = useState('');
     const [pan, setPan] = useState('');
     const [gstinType, setGstinType] = useState('');
+    const [gstinTypeWarning, setGstinTypeWarning] = useState('');
+    const [gstinStateError, setGstinStateError] = useState('');
+    const prevGstinType = useRef('');
     const [bankName, setBankName] = useState('');
     const [bankAccount, setBankAccount] = useState('');
     const [bankIfsc, setBankIfsc] = useState('');
@@ -45,8 +60,10 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
     const [upiQrProgress, setUpiQrProgress] = useState(0);
     const [paymentGatewayLink, setPaymentGatewayLink] = useState('');
     // Add state at the top:
-    const [terms, setTerms] = useState('');
+    const [salesTerms, setSalesTerms] = useState('');
+    const [purchaseTerms, setPurchaseTerms] = useState('');
     const [footer, setFooter] = useState('');
+    const [quotationTerms, setQuotationTerms] = useState('');
 
     useEffect(() => {
         const auth = getAuth();
@@ -75,10 +92,12 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
                     setUpiId(data.upiId || '');
                     setUpiQrUrl(data.upiQrUrl || '');
                     setPaymentGatewayLink(data.paymentGatewayLink || '');
-                    setTerms(data.terms || '');
+                    setSalesTerms(data.salesTerms || data.terms || '');
+                    setPurchaseTerms(data.purchaseTerms || '');
                     setFooter(data.footer || '');
+                    setQuotationTerms(data.quotationTerms || '');
                 } else {
-                    setFirmName(''); setGstin(''); setAddress(''); setCity(''); setState(''); setPincode(''); setContactNumber(''); setEmail(''); setPan(''); setGstinType(''); setBankName(''); setBankAccount(''); setBankIfsc(''); setLogoUrl(''); setSignUrl(''); setSealUrl(''); setUpiId(''); setUpiQrUrl(''); setPaymentGatewayLink(''); setTerms(''); setFooter('');
+                    setFirmName(''); setGstin(''); setAddress(''); setCity(''); setState(''); setPincode(''); setContactNumber(''); setEmail(''); setPan(''); setGstinType(''); setBankName(''); setBankAccount(''); setBankIfsc(''); setLogoUrl(''); setSignUrl(''); setSealUrl(''); setUpiId(''); setUpiQrUrl(''); setPaymentGatewayLink(''); setSalesTerms(''); setPurchaseTerms(''); setFooter(''); setQuotationTerms('');
                 }
             }, (error) => {
                 console.error("Error fetching company details:", error);
@@ -88,53 +107,86 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
         }
     }, [db, userId, isAuthReady, appId]);
 
+    useEffect(() => {
+        prevGstinType.current = gstinType;
+    }, []);
+
+    const handleGstinTypeChange = (e) => {
+        const newType = e.target.value;
+        if (prevGstinType.current && prevGstinType.current !== newType) {
+            setGstinTypeWarning('Warning: Changing GST Type will affect all future invoices and billing logic.');
+        } else {
+            setGstinTypeWarning('');
+        }
+        setGstinType(newType);
+        prevGstinType.current = newType;
+    };
+
+    const validateGstinState = (gstin, state) => {
+        if (!gstin || !state) return '';
+        const code = gstin.substring(0, 2);
+        const expectedCode = stateCodeMap[state];
+        if (expectedCode && code !== expectedCode) {
+            return `GSTIN state code (${code}) does not match selected state (${state}, code ${expectedCode}).`;
+        }
+        return '';
+    };
+
+    useEffect(() => {
+        if (gstinType === 'Regular' || gstinType === 'Composition') {
+            setGstinStateError(validateGstinState(gstin, state));
+        } else {
+            setGstinStateError('');
+        }
+    }, [gstin, state, gstinType]);
+
     // REPLACE handleImageChange with Firebase upload logic
-    const handleImageChange = (e, setter, type, previewSetter, setUploading, setProgress) => {
+    const handleImageChange = async (e, setter, type, previewSetter, setUploading, setProgress) => {
         const file = e.target.files[0];
-        console.log('Selected file:', file);
         if (!file) return;
         if (file.size > 3 * 1024 * 1024) { // 3 MB
             setMessage('File size must be less than 3 MB.');
-            console.warn('File too large:', file.size);
             return;
         }
         setUploading(true);
         setProgress(0);
-        // Show local preview immediately
-        const localUrl = URL.createObjectURL(file);
-        previewSetter(localUrl);
         try {
+            // Compress and resize image
+            const options = {
+                maxSizeMB: 0.08, // 80KB
+                maxWidthOrHeight: 200, // px
+                useWebWorker: true,
+            };
+            const compressedFile = await imageCompression(file, options);
+            // Show preview from compressed file
+            const previewUrl = URL.createObjectURL(compressedFile);
+            previewSetter(previewUrl);
+            // Upload compressed file to Firebase Storage
             const storage = getStorage();
             const storageRef = ref(storage, `companyAssets/${userId}/${type}_${Date.now()}`);
-            // Use uploadBytesResumable for progress
-            const uploadTask = uploadBytesResumable(storageRef, file);
+            const uploadTask = uploadBytesResumable(storageRef, compressedFile);
             uploadTask.on('state_changed',
                 (snapshot) => {
                     const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
                     setProgress(Math.round(progress));
-                    console.log(`[${type}] Upload progress:`, progress, '%');
                 },
                 (error) => {
                     setMessage('Image upload failed. Please try again.');
                     setUploading(false);
                     setProgress(0);
-                    console.error(`[${type}] Upload error:`, error);
                 },
                 () => {
                     getDownloadURL(uploadTask.snapshot.ref).then((url) => {
-            setter(url);
-                        previewSetter(url);
+                        setter(url);
                         setUploading(false);
                         setProgress(0);
-                        console.log(`[${type}] Upload complete, URL:`, url);
                     });
                 }
             );
-        } catch (err) {
+        } catch (error) {
             setMessage('Image upload failed. Please try again.');
             setUploading(false);
             setProgress(0);
-            console.error(`[${type}] Upload exception:`, err);
         }
     };
 
@@ -148,11 +200,18 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
             setMessage("Firebase not initialized or user not authenticated.");
             return;
         }
-        if (!firmName || !gstin) {
-            setMessage("Firm Name and GSTIN are required.");
+        if (!firmName) {
+            setMessage("Firm Name is required.");
             return;
         }
-        // Validate PAN if entered
+        if ((gstinType === 'Regular' || gstinType === 'Composition') && !gstin) {
+            setMessage("GSTIN is required for Regular and Composition GST types.");
+            return;
+        }
+        if (gstinStateError) {
+            setMessage(gstinStateError);
+            return;
+        }
         if (pan && !panRegex.test(pan.toUpperCase())) {
             setMessage("Invalid PAN. Please enter a valid 10-character PAN as per Indian law (e.g., ABCDE1234F).");
             return;
@@ -161,14 +220,14 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
             const companyDocRef = doc(db, `artifacts/${appId}/users/${userId}/companyDetails`, 'myCompany');
             await setDoc(companyDocRef, {
                 firmName,
-                gstin,
+                gstin: (gstinType === 'Regular' || gstinType === 'Composition') ? gstin : '',
                 address,
                 city,
                 state,
                 pincode,
                 contactNumber,
                 email,
-                pan: pan.toUpperCase(), // Convert to uppercase for consistency
+                pan: pan.toUpperCase(),
                 gstinType,
                 bankName,
                 bankAccount,
@@ -179,8 +238,10 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
                 upiId,
                 upiQrUrl,
                 paymentGatewayLink,
-                terms,
+                salesTerms,
+                purchaseTerms,
                 footer,
+                quotationTerms,
                 timestamp: serverTimestamp()
             }, { merge: true });
             setMessage("Company details saved successfully!");
@@ -208,11 +269,25 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
                         placeholder="e.g., Your Printing Business Name" required />
                 </div>
                 <div>
-                    <label htmlFor="companyGstin" className="block text-sm font-medium text-gray-700">GSTIN</label>
-                    <input type="text" id="companyGstin" value={gstin} onChange={(e) => setGstin(e.target.value)}
-                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                        placeholder="e.g., 22ABCDE1234F1Z5" required />
+                    <label htmlFor="companyGstinType" className="block text-sm font-medium text-gray-700">GST Type<span className="text-red-500">*</span></label>
+                    <select id="companyGstinType" value={gstinType} onChange={handleGstinTypeChange}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500" required>
+                        <option value="">-- Select Type --</option>
+                        <option value="Regular">Regular</option>
+                        <option value="Composition">Composition</option>
+                        <option value="Unregistered">Unregistered</option>
+                    </select>
+                    {gstinTypeWarning && <div className="text-yellow-600 text-xs mt-1">{gstinTypeWarning}</div>}
                 </div>
+                {(gstinType === 'Regular' || gstinType === 'Composition') && (
+                    <div>
+                        <label htmlFor="companyGstin" className="block text-sm font-medium text-gray-700">GSTIN<span className="text-red-500">*</span></label>
+                        <input type="text" id="companyGstin" value={gstin} onChange={(e) => setGstin(e.target.value)}
+                            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                            placeholder="e.g., 22ABCDE1234F1Z5" required={gstinType === 'Regular' || gstinType === 'Composition'} />
+                        {gstinStateError && <div className="text-red-600 text-xs mt-1">{gstinStateError}</div>}
+                    </div>
+                )}
                 <div>
                     <label htmlFor="companyAddress" className="block text-sm font-medium text-gray-700">Address</label>
                     <input type="text" id="companyAddress" value={address} onChange={(e) => setAddress(e.target.value)}
@@ -256,16 +331,6 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
                     <input type="text" id="companyPan" value={pan} onChange={e => setPan(e.target.value)}
                         className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
                         placeholder="e.g., ABCDE1234F" />
-                </div>
-                <div>
-                    <label htmlFor="companyGstinType" className="block text-sm font-medium text-gray-700">GST Type</label>
-                    <select id="companyGstinType" value={gstinType} onChange={e => setGstinType(e.target.value)}
-                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500">
-                        <option value="">-- Select Type --</option>
-                        <option value="Regular">Regular</option>
-                        <option value="Composition">Composition</option>
-                        <option value="Unregistered">Unregistered</option>
-                    </select>
                 </div>
                 <div>
                     <label htmlFor="companyBankName" className="block text-sm font-medium text-gray-700">Bank Name</label>
@@ -338,16 +403,28 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
                         placeholder="e.g., https://yourpaymentgateway.com/pay/123" />
                 </div>
                 <div>
-                    <label htmlFor="companyTerms" className="block text-sm font-medium text-gray-700">Terms and Conditions</label>
-                    <textarea id="companyTerms" value={terms} onChange={e => setTerms(e.target.value)}
+                    <label htmlFor="companySalesTerms" className="block text-sm font-medium text-gray-700">Sales Terms and Conditions</label>
+                    <textarea id="companySalesTerms" value={salesTerms} onChange={e => setSalesTerms(e.target.value)}
                         className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
-                        placeholder="Enter terms and conditions for your bills..." rows={3} />
+                        placeholder="Enter terms and conditions for sales bills..." rows={3} />
+                </div>
+                <div>
+                    <label htmlFor="companyPurchaseTerms" className="block text-sm font-medium text-gray-700">Purchase Terms and Conditions</label>
+                    <textarea id="companyPurchaseTerms" value={purchaseTerms} onChange={e => setPurchaseTerms(e.target.value)}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="Enter terms and conditions for purchase bills..." rows={3} />
                 </div>
                 <div>
                     <label htmlFor="companyFooter" className="block text-sm font-medium text-gray-700">Footer</label>
                     <textarea id="companyFooter" value={footer} onChange={e => setFooter(e.target.value)}
                         className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
                         placeholder="Enter footer text for your bills..." rows={2} />
+                </div>
+                <div>
+                    <label htmlFor="companyQuotationTerms" className="block text-sm font-medium text-gray-700">Quotation Terms and Conditions</label>
+                    <textarea id="companyQuotationTerms" value={quotationTerms} onChange={e => setQuotationTerms(e.target.value)}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="Enter terms and conditions for quotations..." rows={3} />
                 </div>
             </div>
             <div className="flex gap-4 mt-4">
@@ -385,8 +462,11 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
                 <p className="text-gray-700"><strong>UPI ID:</strong> {upiId || 'N/A'}</p>
                 <p className="text-gray-700"><strong>UPI QR Code:</strong> {upiQrUrl && <img src={upiQrPreview || upiQrUrl} alt="UPI QR Code" className="inline h-8 align-middle" />}</p>
                 <p className="text-gray-700"><strong>Payment Gateway Link:</strong> {paymentGatewayLink || 'N/A'}</p>
-                <p className="text-gray-700"><strong>Terms and Conditions:</strong> {terms || 'N/A'}</p>
+                <p className="text-gray-700"><strong>Sales Terms and Conditions:</strong> {salesTerms || 'N/A'}</p>
+                <p className="text-gray-700"><strong>Purchase Terms and Conditions:</strong> {purchaseTerms || 'N/A'}</p>
+                <p className="text-gray-700"><strong>Terms and Conditions:</strong> {salesTerms || 'N/A'}</p>
                 <p className="text-gray-700"><strong>Footer:</strong> {footer || 'N/A'}</p>
+                <p className="text-gray-700"><strong>Quotation Terms and Conditions:</strong> {quotationTerms || 'N/A'}</p>
             </div>
         </div>
     );

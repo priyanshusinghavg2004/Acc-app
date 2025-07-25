@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { collection, onSnapshot, doc, addDoc, serverTimestamp, getDoc, setDoc, deleteDoc, getDocs } from 'firebase/firestore';
 import BillTemplates from './BillTemplates';
+import InvoiceTemplate from './BillTemplates/InvoiceTemplate';
+import ChallanTemplate from './BillTemplates/ChallanTemplate';
+import QuotationTemplate from './BillTemplates/QuotationTemplate';
+import { useLocation } from 'react-router-dom';
 
 const initialItemRow = {
   item: '',
@@ -138,6 +142,14 @@ function Sales({ db, userId, isAuthReady, appId }) {
   // Add at the top:
   const [errorMessage, setErrorMessage] = useState('');
 
+  // 1. Add state for discount type and value:
+  const [discountType, setDiscountType] = useState('percent'); // 'percent' or 'amount'
+  const [discountValue, setDiscountValue] = useState('');
+
+  const [quotationTermsOverride, setQuotationTermsOverride] = useState('');
+
+  const location = useLocation();
+
   // Fetch parties
   useEffect(() => {
     if (db && userId && isAuthReady) {
@@ -230,17 +242,16 @@ function Sales({ db, userId, isAuthReady, appId }) {
   // Auto-generate number for the selected type
   useEffect(() => {
     if (editingBillId) return; // Do not auto-generate when editing
-    const selected = docTypeOptions.find(opt => opt.value === docType);
-    if (!selected) return;
+    const prefixMap = { invoice: 'INV', challan: 'CHA', quotation: 'QUO' };
+    const prefix = prefixMap[docType] || 'INV';
     const fy = getFinancialYear(invoiceDate);
-    // Find max serial for this FY in bills
+    const fyShort = fy.split('-').map(y => y.slice(-2)).join('-');
     const serials = bills
-      .filter(bill => (bill.number || '').startsWith(fy))
+      .filter(bill => (bill.number || '').startsWith(prefix + fyShort))
       .map(bill => parseInt((bill.number || '').split('/')[1], 10))
       .filter(n => !isNaN(n));
     const nextSerial = (serials.length ? Math.max(...serials) : 0) + 1;
-    const paddedSerial = nextSerial.toString().padStart(4, '0');
-    setInvoiceNumber(`${fy}/${paddedSerial}`);
+    setInvoiceNumber(`${prefix}${fyShort}/${nextSerial}`);
   }, [invoiceDate, bills, docType, editingBillId]);
 
   // When party changes, update GST for all rows
@@ -282,44 +293,63 @@ function Sales({ db, userId, isAuthReady, appId }) {
         if (i !== idx) return row;
         let updated = { ...row, [field]: value };
 
-        // Always keep gstPercent from item
+        // If editing an existing bill, never map GST fields from item master, even if other fields change
+        if (editingBillId && field !== 'item') {
+          // Only update the changed field and recalculate total using current GST values
+          let itemObj = items.find(it => it.id === row.item);
+          const unit = itemObj ? itemObj.quantityMeasurement : '';
+          if (areaUnits.includes(unit)) {
+            updated.qty = (parseFloat(updated.nos) || 0) * (parseFloat(updated.length) || 1) * (parseFloat(updated.height) || 1);
+            updated.amount = (parseFloat(updated.qty) || 0) * (parseFloat(updated.rate) || 0);
+          } else {
+            updated.qty = (parseFloat(updated.nos) || 0) * (parseFloat(updated.length) || 1) * (parseFloat(updated.height) || 1);
+            updated.amount = (parseFloat(updated.qty) || 0) * (parseFloat(updated.rate) || 0);
+          }
+          // Always use the GST values already present in the row
+          updated.sgst = row.sgst;
+          updated.cgst = row.cgst;
+          updated.igst = row.igst;
+          const sgstAmt = (parseFloat(updated.amount) || 0) * (parseFloat(row.sgst) || 0) / 100;
+          const cgstAmt = (parseFloat(updated.amount) || 0) * (parseFloat(row.cgst) || 0) / 100;
+          const igstAmt = (parseFloat(updated.amount) || 0) * (parseFloat(row.igst) || 0) / 100;
+          updated.total = (parseFloat(updated.amount) || 0) + sgstAmt + cgstAmt + igstAmt;
+          return updated;
+        }
+
+        // If user edits SGST, CGST, or IGST directly, update only that field and recalculate total
+        if (["sgst", "cgst", "igst"].includes(field)) {
+          const sgstAmt = (parseFloat(updated.amount) || 0) * (parseFloat(updated.sgst) || 0) / 100;
+          const cgstAmt = (parseFloat(updated.amount) || 0) * (parseFloat(updated.cgst) || 0) / 100;
+          const igstAmt = (parseFloat(updated.amount) || 0) * (parseFloat(updated.igst) || 0) / 100;
+          updated.total = (parseFloat(updated.amount) || 0) + sgstAmt + cgstAmt + igstAmt;
+          return updated;
+        }
+
+        // If item is changed (new bill or edit), fetch GST from item master
         if (field === 'item') {
           let itemObj = items.find(it => it.id === value);
           updated.gstPercent = itemObj ? (itemObj.gstPercentage || 0) : 0;
-        }
-        if (updated.gstPercent === undefined) {
-          let itemObj = items.find(it => it.id === (field === 'item' ? value : row.item));
-          updated.gstPercent = itemObj ? (itemObj.gstPercentage || 0) : 0;
-        }
-
-        // Get GSTINs
-        const sellerGstin = company.gstin || '';
-        const partyObj = parties.find(p => p.id === (field === 'party' ? value : party));
-        const buyerGstin = partyObj ? (partyObj.gstin || '') : '';
-
-        // Always auto-calculate GST split if item or party is changed
-        if (field === 'item' || field === 'party') {
+          const sellerGstin = company.gstin || '';
+          const partyObj = parties.find(p => p.id === party);
+          const buyerGstin = partyObj ? (partyObj.gstin || '') : '';
           if (sellerGstin && buyerGstin && sellerGstin.length >= 2 && buyerGstin.length >= 2) {
             if (sellerGstin.substring(0, 2) === buyerGstin.substring(0, 2)) {
-              // Same state: split GST
               updated.sgst = updated.gstPercent / 2;
               updated.cgst = updated.gstPercent / 2;
               updated.igst = 0;
             } else {
-              // Different state: IGST only
               updated.sgst = 0;
               updated.cgst = 0;
               updated.igst = updated.gstPercent;
             }
           } else {
-            // Fallback: split GST
             updated.sgst = updated.gstPercent / 2;
             updated.cgst = updated.gstPercent / 2;
             updated.igst = 0;
           }
         }
 
-        // QTY calculation for area/calculative units
+        // For all other fields (new bill), preserve GST values and just recalculate total
         let itemObj = items.find(it => it.id === (field === 'item' ? value : row.item));
         const unit = itemObj ? itemObj.quantityMeasurement : '';
         if (areaUnits.includes(unit)) {
@@ -436,11 +466,21 @@ function Sales({ db, userId, isAuthReady, appId }) {
     });
   };
 
-  const subtotal = round2(rows.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0));
-  const totalSGST = round2(rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.sgst) || 0) / 100), 0));
-  const totalCGST = round2(rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0) / 100), 0));
-  const totalIGST = round2(rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0) / 100), 0));
-  const grandTotal = round2(subtotal + totalSGST + totalCGST + totalIGST);
+  // GST calculation logic
+  const getRowsForCalculation = () => {
+    if (company.gstinType !== 'Regular') {
+      // For Composition and Unregistered, set all GST to 0
+      return rows.map(row => ({ ...row, sgst: 0, cgst: 0, igst: 0 }));
+    }
+    return rows;
+  };
+
+  const discount = discountType === 'percent' ? getRowsForCalculation().reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0) * (parseFloat(discountValue) || 0) / 100 : parseFloat(discountValue) || 0;
+  const discountedSubtotal = Math.max(0, getRowsForCalculation().reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0) - discount);
+  const totalSGST = company.gstinType === 'Regular' ? round2(getRowsForCalculation().reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.sgst) || 0) / 100), 0)) : 0;
+  const totalCGST = company.gstinType === 'Regular' ? round2(getRowsForCalculation().reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0) / 100), 0)) : 0;
+  const totalIGST = company.gstinType === 'Regular' ? round2(getRowsForCalculation().reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0) / 100), 0)) : 0;
+  const grandTotal = discountedSubtotal + totalSGST + totalCGST + totalIGST;
   const totalPaid = round2(payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0));
 
   // Seller details from company
@@ -570,7 +610,10 @@ function Sales({ db, userId, isAuthReady, appId }) {
       payments, // <-- store payments array
       createdAt: serverTimestamp(),
       customFields,
+      discountType,
+      discountValue,
     };
+    if (docType === 'quotation') billData.quotationTermsOverride = quotationTermsOverride;
     try {
       let savedBill;
       if (editingBillId) {
@@ -635,9 +678,12 @@ function Sales({ db, userId, isAuthReady, appId }) {
     setInvoiceDate(bill.invoiceDate || '');
     setParty(bill.party || '');
     setNotes(bill.notes || '');
-    setRows(bill.rows || [{ ...initialItemRow }]);
+    // Always use GST values from bill.rows when editing
+    setRows((bill.rows && bill.rows.length > 0) ? bill.rows.map(row => ({ ...row })) : [{ ...initialItemRow }]);
     setPayments(bill.payments || []);
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (bill.quotationTermsOverride !== undefined) setQuotationTermsOverride(bill.quotationTermsOverride);
+    else setQuotationTermsOverride('');
   };
   // Handler to delete bill
   const handleDeleteBill = (billId) => {
@@ -743,6 +789,38 @@ function Sales({ db, userId, isAuthReady, appId }) {
     }
   };
 
+  // Add after showSuccessModal state:
+  useEffect(() => {
+    if (!showSuccessModal) return;
+    const handleEsc = (e) => {
+      if (e.key === 'Escape') setShowSuccessModal(false);
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [showSuccessModal]);
+
+  // Close invoice preview modal on Escape key
+  useEffect(() => {
+    if (!showInvoiceModal) return;
+    const handleEsc = (e) => {
+      if (e.key === 'Escape') setShowInvoiceModal(false);
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [showInvoiceModal]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const previewId = params.get('preview');
+    if (previewId && bills.length > 0) {
+      const bill = bills.find(b => b.id === previewId);
+      if (bill) {
+        setViewBill(bill); // or whatever state triggers your preview modal
+        setShowViewModal(true);
+      }
+    }
+  }, [location.search, bills]);
+
     return (
     <div className="min-h-screen bg-gray-100 flex flex-col items-center py-8">
       {errorMessage && (
@@ -832,10 +910,10 @@ function Sales({ db, userId, isAuthReady, appId }) {
                   <th className="px-2 py-1">QTY</th>
                   <th className="px-2 py-1">RATE</th>
                   <th className="px-2 py-1">AMOUNT</th>
-                  <th className="px-2 py-1">SGST</th>
-                  <th className="px-2 py-1">CGST</th>
-                  <th className="px-2 py-1">IGST</th>
-                  <th className="px-2 py-1">TOTAL</th>
+                  {company.gstinType === 'Regular' && <th className="px-2 py-1">SGST</th>}
+                  {company.gstinType === 'Regular' && <th className="px-2 py-1">CGST</th>}
+                  {company.gstinType === 'Regular' && <th className="px-2 py-1">IGST</th>}
+                  {company.gstinType === 'Regular' && <th className="px-2 py-1">TOTAL</th>}
                   <th className="px-2 py-1">REMOVE</th>
                                     </tr>
                                 </thead>
@@ -888,28 +966,36 @@ function Sales({ db, userId, isAuthReady, appId }) {
                       <input type="number" value={row.amount} min={0} readOnly
                         className="border border-gray-300 rounded-md p-1 w-20 bg-gray-100" />
                     </td>
-                    <td className="px-2 py-1">
-                      <input type="number" value={row.sgst} min={0} onChange={e => handleRowChange(idx, 'sgst', e.target.value)}
-                        className="border border-gray-300 rounded-md p-1 w-14" />
-                      {gstType === 'intra' && <div className="text-xs text-green-600">Auto: Intra-state (SGST)</div>}
-                      {gstType === 'inter' && <div className="text-xs text-gray-400">(Not used for Inter-state)</div>}
-                    </td>
-                    <td className="px-2 py-1">
-                      <input type="number" value={row.cgst} min={0} onChange={e => handleRowChange(idx, 'cgst', e.target.value)}
-                        className="border border-gray-300 rounded-md p-1 w-14" />
-                      {gstType === 'intra' && <div className="text-xs text-green-600">Auto: Intra-state (CGST)</div>}
-                      {gstType === 'inter' && <div className="text-xs text-gray-400">(Not used for Inter-state)</div>}
-                    </td>
-                    <td className="px-2 py-1">
-                      <input type="number" value={row.igst} min={0} onChange={e => handleRowChange(idx, 'igst', e.target.value)}
-                        className="border border-gray-300 rounded-md p-1 w-14" />
-                      {gstType === 'inter' && <div className="text-xs text-blue-600">Auto: Inter-state (IGST)</div>}
-                      {gstType === 'intra' && <div className="text-xs text-gray-400">(Not used for Intra-state)</div>}
-                    </td>
-                    <td className="px-2 py-1">
-                      <input type="number" value={row.total} min={0} readOnly
-                        className="border border-gray-300 rounded-md p-1 w-20 bg-green-50 font-semibold" />
-                    </td>
+                    {company.gstinType === 'Regular' && (
+                      <td className="px-2 py-1">
+                        <input type="number" value={row.sgst} min={0} onChange={e => handleRowChange(idx, 'sgst', e.target.value)}
+                          className="border border-gray-300 rounded-md p-1 w-14" />
+                        {gstType === 'intra' && <div className="text-xs text-green-600">Auto: Intra-state (SGST)</div>}
+                        {gstType === 'inter' && <div className="text-xs text-gray-400">(Not used for Inter-state)</div>}
+                      </td>
+                    )}
+                    {company.gstinType === 'Regular' && (
+                      <td className="px-2 py-1">
+                        <input type="number" value={row.cgst} min={0} onChange={e => handleRowChange(idx, 'cgst', e.target.value)}
+                          className="border border-gray-300 rounded-md p-1 w-14" />
+                        {gstType === 'intra' && <div className="text-xs text-green-600">Auto: Intra-state (CGST)</div>}
+                        {gstType === 'inter' && <div className="text-xs text-gray-400">(Not used for Inter-state)</div>}
+                      </td>
+                    )}
+                    {company.gstinType === 'Regular' && (
+                      <td className="px-2 py-1">
+                        <input type="number" value={row.igst} min={0} onChange={e => handleRowChange(idx, 'igst', e.target.value)}
+                          className="border border-gray-300 rounded-md p-1 w-14" />
+                        {gstType === 'inter' && <div className="text-xs text-blue-600">Auto: Inter-state (IGST)</div>}
+                        {gstType === 'intra' && <div className="text-xs text-gray-400">(Not used for Intra-state)</div>}
+                      </td>
+                    )}
+                    {company.gstinType === 'Regular' && (
+                      <td className="px-2 py-1">
+                        <input type="number" value={row.total} min={0} readOnly
+                          className="border border-gray-300 rounded-md p-1 w-20 bg-green-50 font-semibold" />
+                      </td>
+                    )}
                     <td className="px-2 py-1">
                       <button type="button" onClick={() => removeRow(idx)} className="text-red-600 font-bold px-2 py-1 rounded hover:bg-red-100">X</button>
                                             </td>
@@ -925,7 +1011,23 @@ function Sales({ db, userId, isAuthReady, appId }) {
               <button onClick={() => setShowAddItemModal(true)} className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md">ADD ITEM</button>
             </div>
             <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 w-full md:w-80">
-              <div className="flex justify-between mb-1"><span>Subtotal (Excl. GST):</span><span>₹{subtotal}</span></div>
+              <div className="flex justify-between mb-1"><span>Subtotal (Excl. GST):</span><span>₹{rows.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0)}</span></div>
+              <div className="flex items-center gap-2 mb-2">
+                <label className="block text-sm font-medium text-gray-700">Discount:</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={discountValue}
+                  onChange={e => setDiscountValue(e.target.value)}
+                  className="w-24 border border-gray-300 rounded-md p-2"
+                  placeholder={discountType === 'percent' ? 'Percent' : 'Amount'}
+                />
+                <select value={discountType} onChange={e => setDiscountType(e.target.value)} className="border border-gray-300 rounded-md p-2">
+                  <option value="percent">%</option>
+                  <option value="amount">₹</option>
+                </select>
+              </div>
+              <div className="flex justify-between mb-1 font-semibold"><span>Net Subtotal:</span><span>₹{discountedSubtotal.toFixed(2)}</span></div>
               <div className="flex justify-between mb-1"><span>Total SGST:</span><span>₹{totalSGST}</span></div>
               <div className="flex justify-between mb-1"><span>Total CGST:</span><span>₹{totalCGST}</span></div>
               <div className="flex justify-between mb-1"><span>Total IGST:</span><span>₹{totalIGST}</span></div>
@@ -1107,6 +1209,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
                     <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
                     <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Party</th>
                     <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
+                    <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Outstanding</th>
                     <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Payment Status</th>
                     <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                                 </tr>
@@ -1131,6 +1234,13 @@ function Sales({ db, userId, isAuthReady, appId }) {
                         <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-center">{date}</td>
                         <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-center">{partyName}</td>
                         <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-center">{amount}</td>
+                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-center">{
+                          (() => {
+                            const paid = (bill.payments || []).reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+                            const out = (typeof bill.amount === 'number' ? bill.amount : parseFloat(bill.amount) || 0) - paid;
+                            return `₹${out.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+                          })()
+                        }</td>
                         <td className="px-4 py-2 whitespace-nowrap text-sm text-center">
                           <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                             (bill.paymentStatus || 'Pending') === 'Paid' 
@@ -1185,7 +1295,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
                   const itemObj = (items || []).find(it => it.id === row.item) || {};
                   const itemName = itemObj.itemName || row.item || '?';
                   return (
-                    <li key={i}>{itemName} (Qty: {row.nos}, Rate: ₹{row.rate})</li>
+                    <li key={i}>{itemName} (Qty: {row.qty}, Rate: ₹{row.rate})</li>
                   );
                 })}
               </ul>
@@ -1209,19 +1319,137 @@ function Sales({ db, userId, isAuthReady, appId }) {
       {showInvoiceModal && invoiceBill && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
           <div className="bg-white rounded-lg shadow-lg p-0 max-w-full w-[98vw] h-[98vh] flex flex-col relative overflow-hidden">
-            <div className="flex justify-end gap-2 p-2 print:hidden bg-white sticky top-0 z-10">
-              <button className="bg-blue-600 text-white px-3 py-1 rounded print:hidden" onClick={handleInvoicePrint}>Print</button>
-              <button className="bg-green-600 text-white px-3 py-1 rounded print:hidden" onClick={handleInvoiceDownload}>Save as PDF</button>
-              <button className="bg-gray-400 text-white px-3 py-1 rounded print:hidden" onClick={() => setShowInvoiceModal(false)}>Close</button>
-              <button className="bg-gray-200 text-gray-800 px-2 py-1 rounded ml-4 print:hidden" onClick={() => setInvoiceZoom(z => Math.max(0.5, z - 0.1))}>-</button>
-              <span className="px-2 print:hidden">{Math.round(invoiceZoom * 100)}%</span>
-              <button className="bg-gray-200 text-gray-800 px-2 py-1 rounded print:hidden" onClick={() => setInvoiceZoom(z => Math.min(2, z + 0.1))}>+</button>
-            </div>
-            <div className="flex-1 overflow-auto flex justify-center items-center bg-gray-50 print:bg-white" onWheel={handleInvoiceWheel} style={{ minHeight: 0, paddingTop: invoiceZoom < 1 ? `${(1-invoiceZoom)*120}px` : '0' }}>
+            <div className="flex-1 overflow-auto flex justify-center items-start bg-gray-50 print:bg-white" onWheel={handleInvoiceWheel} style={{ minHeight: 0 }}>
               <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-start', width: '100%' }}>
-                <div ref={invoiceRef} style={{ transform: `scale(${invoiceZoom})`, transformOrigin: 'top center', transition: 'transform 0.2s', background: 'white', boxShadow: '0 0 8px #ccc', margin: '0 auto' }} className="print:shadow-none print:bg-white print:transform-none">
-                  <BillTemplates db={db} userId={userId} isAuthReady={isAuthReady} appId={appId} billOverride={invoiceBill} onClose={() => setShowInvoiceModal(false)} />
+                <div style={{ width: '80vw', display: 'flex', justifyContent: 'center' }}>
+                  <div ref={invoiceRef} style={{ transform: `scale(${invoiceZoom})`, transformOrigin: 'top center', transition: 'transform 0.2s', background: 'white', boxShadow: '0 0 8px #ccc', margin: '0 auto', width: '210mm', minHeight: '297mm', maxWidth: '100%', padding: 0 }} className="print:shadow-none print:bg-white print:transform-none print:p-0 print:m-0 print:max-w-none print:w-[210mm] print:min-h-[297mm]">
+                    {invoiceBill.docType === 'challan' ? (
+                      <ChallanTemplate
+                        billData={{
+                          ...invoiceBill,
+                          challanNumber: invoiceBill.number || invoiceBill.challanNumber || '',
+                          challanDate: invoiceBill.invoiceDate || invoiceBill.date || '',
+                          items: (invoiceBill.rows || invoiceBill.items || []).map(row => {
+                            const itemMaster = items.find(it => it.id === row.item);
+                            return {
+                              ...row,
+                              description: itemMaster?.itemName || '',
+                              hsn: itemMaster?.hsnCode || '',
+                            };
+                          }),
+                        }}
+                        companyDetails={{ ...company, gstinType: company.gstinType || company.gstinType || '' }}
+                        partyDetails={{
+                          ...parties.find(p => p.id === invoiceBill.party) || {},
+                          name: (parties.find(p => p.id === invoiceBill.party)?.firmName || parties.find(p => p.id === invoiceBill.party)?.name || ''),
+                        }}
+                        bankDetails={{
+                          name: company.bankName,
+                          account: company.bankAccount,
+                          ifsc: company.bankIfsc,
+                          upi: company.upiId,
+                          upiQrUrl: company.upiQrUrl,
+                          paymentGatewayLink: company.paymentGatewayLink,
+                          sealUrl: company.sealUrl,
+                          signUrl: company.signUrl,
+                        }}
+                        payments={invoiceBill.payments || []}
+                        pageSize={'a4'}
+                        orientation={'portrait'}
+                        previewMode={false}
+                      />
+                    ) : invoiceBill.docType === 'quotation' ? (
+                      <QuotationTemplate
+                        billData={{
+                          ...invoiceBill,
+                          quotationNumber: invoiceBill.number || invoiceBill.quotationNumber || '',
+                          date: invoiceBill.invoiceDate || invoiceBill.date || '',
+                          items: (invoiceBill.rows || invoiceBill.items || []).map(row => {
+                            const itemMaster = items.find(it => it.id === row.item);
+                            return {
+                              ...row,
+                              description: itemMaster?.itemName || '',
+                            };
+                          }),
+                        }}
+                        companyDetails={{ ...company, gstinType: company.gstinType || company.gstinType || '' }}
+                        partyDetails={{
+                          ...parties.find(p => p.id === invoiceBill.party) || {},
+                          name: (parties.find(p => p.id === invoiceBill.party)?.firmName || parties.find(p => p.id === invoiceBill.party)?.name || ''),
+                        }}
+                        bankDetails={{
+                          name: company.bankName,
+                          account: company.bankAccount,
+                          ifsc: company.bankIfsc,
+                          upi: company.upiId,
+                          upiQrUrl: company.upiQrUrl,
+                          paymentGatewayLink: company.paymentGatewayLink,
+                          sealUrl: company.sealUrl,
+                          signUrl: company.signUrl,
+                        }}
+                        payments={invoiceBill.payments || []}
+                        pageSize={'a4'}
+                        orientation={'portrait'}
+                        previewMode={false}
+                      />
+                    ) : (
+                      <InvoiceTemplate
+                        billData={{
+                          ...invoiceBill,
+                          invoiceNumber: invoiceBill.number || invoiceBill.invoiceNumber || '',
+                          date: invoiceBill.invoiceDate || invoiceBill.date || '',
+                          items: (invoiceBill.rows || invoiceBill.items || []).map(row => {
+                            const itemMaster = items.find(it => it.id === row.item);
+                            return {
+                              ...row,
+                              description: itemMaster?.itemName || '',
+                              hsn: itemMaster?.hsnCode || '',
+                            };
+                          }),
+                        }}
+                        companyDetails={{ ...company, gstinType: company.gstinType || company.gstinType || '' }}
+                        partyDetails={{
+                          ...parties.find(p => p.id === invoiceBill.party) || {},
+                          name: (parties.find(p => p.id === invoiceBill.party)?.firmName || parties.find(p => p.id === invoiceBill.party)?.name || ''),
+                        }}
+                        bankDetails={{
+                          name: company.bankName,
+                          account: company.bankAccount,
+                          ifsc: company.bankIfsc,
+                          upi: company.upiId,
+                          upiQrUrl: company.upiQrUrl,
+                          paymentGatewayLink: company.paymentGatewayLink,
+                          sealUrl: company.sealUrl,
+                          signUrl: company.signUrl,
+                        }}
+                        payments={invoiceBill.payments || []}
+                        pageSize={'a4'}
+                        orientation={'portrait'}
+                        previewMode={false}
+                      />
+                    )}
+                    <style>{`
+                      @media print {
+                        html, body, #root, .print\:w-[210mm] { width: 210mm !important; }
+                        .print\:min-h-[297mm] { min-height: 297mm !important; }
+                        .print\:max-w-none { max-width: none !important; }
+                        .print\:p-0 { padding: 0 !important; }
+                        .print\:m-0 { margin: 0 !important; }
+                      }
+                    `}</style>
+                  </div>
                 </div>
+              </div>
+            </div>
+            {/* Button row at the bottom of preview */}
+            <div className="w-full flex justify-center print:hidden mt-4">
+              <div className="flex flex-row items-center gap-3 bg-white rounded-lg shadow-md px-4 py-2">
+                <button className="bg-blue-600 text-white px-3 py-1 rounded" onClick={handleInvoicePrint}>Print</button>
+                <button className="bg-green-600 text-white px-3 py-1 rounded" onClick={handleInvoiceDownload}>Save as PDF</button>
+                <button className="bg-gray-400 text-white px-3 py-1 rounded" onClick={() => setShowInvoiceModal(false)}>Close</button>
+                <button className="bg-gray-200 text-gray-800 px-2 py-1 rounded" onClick={() => setInvoiceZoom(z => Math.max(0.5, z - 0.1))}>-</button>
+                <span className="px-2">{Math.round(invoiceZoom * 100)}%</span>
+                <button className="bg-gray-200 text-gray-800 px-2 py-1 rounded" onClick={() => setInvoiceZoom(z => Math.min(2, z + 0.1))}>+</button>
               </div>
             </div>
           </div>
@@ -1413,6 +1641,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
       {showSuccessModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
           <div className="bg-white rounded-lg shadow-lg p-6 max-w-md w-full relative">
+            <button onClick={() => setShowSuccessModal(false)} className="absolute top-2 right-2 text-gray-500 hover:text-gray-800 text-xl">&times;</button>
             <div className="text-center mb-4">
               <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
                 <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1434,7 +1663,8 @@ function Sales({ db, userId, isAuthReady, appId }) {
                       ...bill,
                       companyDetails: company,
                       partyDetails: parties.find(p => p.id === bill.party) || {},
-                      items: items
+                      items: items,
+                      docType: docType // Ensure docType is set for correct template
                     });
                     setShowInvoiceModal(true);
                   }
@@ -1471,6 +1701,19 @@ function Sales({ db, userId, isAuthReady, appId }) {
               </button>
             </div>
           </div>
+        </div>
+      )}
+      {docType === 'quotation' && (
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-gray-700">Terms and Conditions (Override)</label>
+          <textarea
+            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+            rows={3}
+            placeholder="Enter terms and conditions for this quotation (leave blank to use company default)"
+            value={quotationTermsOverride}
+            onChange={e => setQuotationTermsOverride(e.target.value)}
+          />
+          <div className="text-xs text-gray-500 mt-1">If left blank, the company's default Quotation Terms and Conditions will be used.</div>
         </div>
       )}
     </div>

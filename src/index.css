@@ -97,6 +97,16 @@
   .print\:break-inside-avoid {
     break-inside: avoid !important;
   }
+
+  img, svg {
+    display: inline !important;
+    visibility: visible !important;
+    max-width: 100% !important;
+    max-height: 100% !important;
+    background: none !important;
+    box-shadow: none !important;
+    filter: none !important;
+  }
 }
 
 body {

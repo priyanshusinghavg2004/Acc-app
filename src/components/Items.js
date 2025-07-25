@@ -14,7 +14,7 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
     const [description, setDescription] = useState('');
     const [purchasePrice, setPurchasePrice] = useState('0');
     const [salePrice, setSalePrice] = useState('0');
-    const [currentStock, setCurrentStock] = useState('0');
+    const [openingStock, setOpeningStock] = useState('0');
     const [gstSplitRate, setGstSplitRate] = useState('0');
     const [isActive, setIsActive] = useState(true);
     const [purchaseBills, setPurchaseBills] = useState([]);
@@ -105,7 +105,7 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
         setDescription('');
         setPurchasePrice('0');
         setSalePrice('0');
-        setCurrentStock('0');
+        setOpeningStock('0');
         setGstSplitRate('0');
         setIsActive(true);
         setEditingItemId(null);
@@ -141,7 +141,7 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
                 description,
                 purchasePrice: parseFloat(purchasePrice) || 0,
                 salePrice: parseFloat(salePrice) || 0,
-                currentStock: parseFloat(currentStock) || 0,
+                openingStock: parseFloat(openingStock) || 0,
                 sgstRate: parseFloat(sgstRate) || 0,
                 cgstRate: parseFloat(cgstRate) || 0,
                 isActive,
@@ -175,7 +175,7 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
         setDescription(item.description || '');
         setPurchasePrice(item.purchasePrice?.toString() || '0');
         setSalePrice(item.salePrice?.toString() || '0');
-        setCurrentStock(item.currentStock?.toString() || '0');
+        setOpeningStock(item.openingStock?.toString() || '0');
         setGstSplitRate(item.sgstRate && item.cgstRate ? (parseFloat(item.sgstRate) + parseFloat(item.cgstRate)).toString() : '0');
         setIsActive(item.isActive !== false);
         setMessage('Editing existing item.');
@@ -331,8 +331,8 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
                         min="0" />
                 </div>
                 <div>
-                    <label htmlFor="currentStock" className="block text-sm font-medium text-gray-700">Current Stock</label>
-                    <input type="number" id="currentStock" value={currentStock} onChange={(e) => setCurrentStock(e.target.value)}
+                    <label htmlFor="openingStock" className="block text-sm font-medium text-gray-700">Opening Stock</label>
+                    <input type="number" id="openingStock" value={openingStock} onChange={(e) => setOpeningStock(e.target.value)}
                         className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
                         min="0" />
                 </div>
@@ -395,31 +395,42 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
                             </tr>
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
-                            {itemsList.map((item) => (
-                                <tr key={item.id}>
-                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item.itemName}</td>
-                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item.quantityMeasurement}</td>
-                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">₹{item.defaultRate}</td>
-                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item.itemType}</td>
-                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item.hsnCode || 'N/A'}</td>
-                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{typeof item.gstPercentage !== 'undefined' ? `${item.gstPercentage}%` : '0%'}</td>
-                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{stockMap[item.id] ?? 0}</td>
-                                    <td className="px-4 py-2 whitespace-nowrap text-sm">
-                                        <button
-                                            onClick={() => handleEditItem(item)}
-                                            className="text-indigo-600 hover:text-indigo-900 font-medium mr-2"
-                                        >
-                                            Edit
-                                        </button>
-                                        <button
-                                            onClick={() => handleDeleteItem(item.id)}
-                                            className="text-red-600 hover:text-red-900 font-medium"
-                                        >
-                                            Delete
-                                        </button>
-                                    </td>
-                                </tr>
-                            ))}
+                            {itemsList.map((item) => {
+                                const opening = parseFloat(item.openingStock) || 0;
+                                // Purchases and sales up to today (for running stock)
+                                const allPurchases = purchaseBills
+                                    .flatMap(bill => (bill.rows || []).filter(row => row.item === item.id))
+                                    .reduce((sum, row) => sum + (parseFloat(row.qty) || 0), 0);
+                                const allSales = salesBills
+                                    .flatMap(bill => (bill.rows || []).filter(row => row.item === item.id))
+                                    .reduce((sum, row) => sum + (parseFloat(row.qty) || 0), 0);
+                                const liveStock = opening + allPurchases - allSales;
+                                return (
+                                    <tr key={item.id}>
+                                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item.itemName}</td>
+                                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item.quantityMeasurement}</td>
+                                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">₹{item.defaultRate}</td>
+                                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item.itemType}</td>
+                                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item.hsnCode || 'N/A'}</td>
+                                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{typeof item.gstPercentage !== 'undefined' ? `${item.gstPercentage}%` : '0%'}</td>
+                                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{liveStock}</td>
+                                        <td className="px-4 py-2 whitespace-nowrap text-sm">
+                                            <button
+                                                onClick={() => handleEditItem(item)}
+                                                className="text-indigo-600 hover:text-indigo-900 font-medium mr-2"
+                                            >
+                                                Edit
+                                            </button>
+                                            <button
+                                                onClick={() => handleDeleteItem(item.id)}
+                                                className="text-red-600 hover:text-red-900 font-medium"
+                                            >
+                                                Delete
+                                            </button>
+                                        </td>
+                                    </tr>
+                                );
+                            })}
                         </tbody>
                     </table>
                 </div>

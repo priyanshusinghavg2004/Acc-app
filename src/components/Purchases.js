@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { collection, onSnapshot, doc, addDoc, serverTimestamp, getDoc, setDoc, deleteDoc, getDocs } from 'firebase/firestore';
 import BillTemplates from './BillTemplates';
+import PurchaseBillTemplate from './BillTemplates/PurchaseBillTemplate';
+import PurchaseOrderTemplate from './BillTemplates/PurchaseOrderTemplate';
 
 const initialItemRow = {
   item: '',
@@ -54,6 +56,8 @@ function Purchases({ db, userId, isAuthReady, appId }) {
   const invoiceRef = useRef();
   const [viewBill, setViewBill] = useState(null);
   const [showViewModal, setShowViewModal] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const escListenerRef = useRef();
 
   // Define handleViewBill
   const handleViewBill = (bill) => {
@@ -155,14 +159,16 @@ function Purchases({ db, userId, isAuthReady, appId }) {
     if (editingBillId) return;
     const selected = docTypeOptions.find(opt => opt.value === docType);
     if (!selected) return;
+    const prefixMap = { purchaseBill: 'PRB', purchaseOrder: 'PRO' };
+    const prefix = prefixMap[docType] || 'PRB';
     const fy = getFinancialYear(billDate);
+    const fyShort = fy.split('-').map(y => y.slice(-2)).join('-');
     const serials = bills
-      .filter(bill => (bill.number || '').startsWith(fy))
+      .filter(bill => (bill.number || '').startsWith(prefix + fyShort))
       .map(bill => parseInt((bill.number || '').split('/')[1], 10))
       .filter(n => !isNaN(n));
     const nextSerial = (serials.length ? Math.max(...serials) : 0) + 1;
-    const paddedSerial = nextSerial.toString().padStart(4, '0');
-    setBillNumber(`${fy}/${paddedSerial}`);
+    setBillNumber(`${prefix}${fyShort}/${nextSerial}`);
   }, [billDate, bills, docType, editingBillId]);
 
   // Helper
@@ -345,6 +351,7 @@ function Purchases({ db, userId, isAuthReady, appId }) {
       setCustomFields({ ewayBillNo: '', ewayQr: '', ewayDate: '' });
       setEditingBillId(null);
       setMessage('Bill saved successfully!');
+      setShowSuccessModal(true);
     } catch (err) {
       alert("Error saving bill: " + err.message);
     }
@@ -449,6 +456,18 @@ function Purchases({ db, userId, isAuthReady, appId }) {
       });
     }
   };
+
+  useEffect(() => {
+    if (!showInvoiceModal) return;
+    const handleEsc = (e) => {
+      if (e.key === 'Escape') setShowInvoiceModal(false);
+    };
+    window.addEventListener('keydown', handleEsc);
+    escListenerRef.current = handleEsc;
+    return () => {
+      window.removeEventListener('keydown', escListenerRef.current);
+    };
+  }, [showInvoiceModal]);
 
   // UI rendering (similar to Sales)
     return (
@@ -716,19 +735,20 @@ function Purchases({ db, userId, isAuthReady, appId }) {
                         <table className="min-w-full divide-y divide-gray-200">
                             <thead className="bg-gray-50">
                                 <tr>
-                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Invoice Number</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Party</th>
                                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Amount</th>
                                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Paid</th>
                                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Outstanding</th>
                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Payment Status</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Notes</th>
-                                    <th className="px-4 py-2 whitespace-nowrap text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                                 </tr>
                             </thead>
                             <tbody className="bg-white divide-y divide-gray-200">
                 {bills.map((bill) => (
                                     <tr key={bill.id}>
+                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{bill.number}</td>
                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{bill.billDate}</td>
                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{(() => {
                       const p = parties.find(pt => pt.id === bill.party);
@@ -738,8 +758,7 @@ function Purchases({ db, userId, isAuthReady, appId }) {
                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">₹{bill.payments ? bill.payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0) : 0}</td>
                     <td className="px-4 py-2 whitespace-nowrap text-sm text-red-600">₹{bill.amount - (bill.payments ? bill.payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0) : 0)}</td>
                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{bill.paymentStatus}</td>
-                    <td className="px-4 py-2 text-sm text-gray-800 max-w-xs overflow-hidden text-ellipsis">{bill.notes}</td>
-                                        <td className="px-4 py-2 whitespace-nowrap text-sm">
+                    <td className="px-4 py-2 whitespace-nowrap text-sm">
                                             <button
                         onClick={() => handleViewBill(bill)}
                         className="text-blue-600 hover:text-blue-900 font-medium mr-2"
@@ -759,13 +778,24 @@ function Purchases({ db, userId, isAuthReady, appId }) {
                                                 Delete
                                             </button>
                                             <button
-                        onClick={() => { setInvoiceBill({
-                          ...bill,
-                          companyDetails: company,
-                          partyDetails: parties.find(p => p.id === bill.party) || {},
-                          items: items,
-                          docType: docType
-                        }); setShowInvoiceModal(true); }}
+                        onClick={() => {
+                          setInvoiceBill({
+                            ...bill,
+                            companyDetails: company,
+                            partyDetails: parties.find(p => p.id === bill.party) || {},
+                            items: (bill.rows || bill.items || []).map(row => {
+                              const itemMaster = items.find(it => it.id === row.item);
+                              return {
+                                ...row,
+                                description: itemMaster?.itemName || '',
+                                hsn: itemMaster?.hsnCode || '',
+                              };
+                            }),
+                            date: bill.billDate || bill.date || '',
+                            logoUrl: company.logoUrl || '',
+                          });
+                          setShowInvoiceModal(true);
+                        }}
                         className="text-green-600 hover:text-green-900 font-medium"
                       >
                         {docType === 'purchaseBill' ? 'Purchase Bill' : docType === 'purchaseOrder' ? 'Purchase Order' : 'Bill'}
@@ -781,19 +811,37 @@ function Purchases({ db, userId, isAuthReady, appId }) {
             {showInvoiceModal && invoiceBill && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
           <div className="bg-white rounded-lg shadow-lg p-0 max-w-full w-[98vw] h-[98vh] flex flex-col relative overflow-hidden">
-            <div className="flex justify-end gap-2 p-2 print:hidden bg-white sticky top-0 z-10">
-              <button className="bg-blue-600 text-white px-3 py-1 rounded print:hidden" onClick={handleInvoicePrint}>Print</button>
-              <button className="bg-green-600 text-white px-3 py-1 rounded print:hidden" onClick={handleInvoiceDownload}>Save as PDF</button>
-              <button className="bg-gray-400 text-white px-3 py-1 rounded print:hidden" onClick={() => setShowInvoiceModal(false)}>Close</button>
-              <button className="bg-gray-200 text-gray-800 px-2 py-1 rounded ml-4 print:hidden" onClick={() => setInvoiceZoom(z => Math.max(0.5, z - 0.1))}>-</button>
-              <span className="px-2 print:hidden">{Math.round(invoiceZoom * 100)}%</span>
-              <button className="bg-gray-200 text-gray-800 px-2 py-1 rounded print:hidden" onClick={() => setInvoiceZoom(z => Math.min(2, z + 0.1))}>+</button>
-            </div>
             <div className="flex-1 overflow-auto flex justify-center items-center bg-gray-50 print:bg-white" onWheel={handleInvoiceWheel} style={{ minHeight: 0, paddingTop: invoiceZoom < 1 ? `${(1-invoiceZoom)*120}px` : '0' }}>
               <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-start', width: '100%' }}>
                 <div ref={invoiceRef} style={{ transform: `scale(${invoiceZoom})`, transformOrigin: 'top center', transition: 'transform 0.2s', background: 'white', boxShadow: '0 0 8px #ccc', margin: '0 auto' }} className="print:shadow-none print:bg-white print:transform-none">
-                  <BillTemplates db={db} userId={userId} isAuthReady={isAuthReady} appId={appId} billOverride={invoiceBill} />
+                  {docType === 'purchaseBill' ? (
+                    <PurchaseBillTemplate
+                      billData={invoiceBill}
+                      companyDetails={{ ...company, gstinType: company.gstinType || '', logoUrl: company.logoUrl || '' }}
+                      partyDetails={parties.find(p => p.id === invoiceBill.party) || {}}
+                      payments={invoiceBill.payments || []}
+                    />
+                  ) : docType === 'purchaseOrder' ? (
+                    <PurchaseOrderTemplate
+                      billData={invoiceBill}
+                      companyDetails={{ ...company, gstinType: company.gstinType || '', logoUrl: company.logoUrl || '' }}
+                      partyDetails={parties.find(p => p.id === invoiceBill.party) || {}}
+                      payments={invoiceBill.payments || []}
+                    />
+                  ) : (
+                    <BillTemplates db={db} userId={userId} isAuthReady={isAuthReady} appId={appId} billOverride={invoiceBill} companyDetails={{ ...company, gstinType: company.gstinType || '' }} />
+                  )}
                 </div>
+              </div>
+            </div>
+            <div className="w-full flex justify-center print:hidden mt-4">
+              <div className="flex flex-row items-center gap-3 bg-white rounded-lg shadow-md px-4 py-2">
+                <button className="bg-blue-600 text-white px-3 py-1 rounded print:hidden" onClick={handleInvoicePrint}>Print</button>
+                <button className="bg-green-600 text-white px-3 py-1 rounded print:hidden" onClick={handleInvoiceDownload}>Save as PDF</button>
+                <button className="bg-gray-400 text-white px-3 py-1 rounded print:hidden" onClick={() => setShowInvoiceModal(false)}>Close</button>
+                <button className="bg-gray-200 text-gray-800 px-2 py-1 rounded ml-4 print:hidden" onClick={() => setInvoiceZoom(z => Math.max(0.5, z - 0.1))}>-</button>
+                <span className="px-2 print:hidden">{Math.round(invoiceZoom * 100)}%</span>
+                <button className="bg-gray-200 text-gray-800 px-2 py-1 rounded print:hidden" onClick={() => setInvoiceZoom(z => Math.min(2, z + 0.1))}>+</button>
               </div>
             </div>
           </div>
@@ -818,13 +866,30 @@ function Purchases({ db, userId, isAuthReady, appId }) {
                   const itemObj = (items || []).find(it => it.id === row.item) || {};
                   const itemName = itemObj.itemName || row.item || '?';
                   return (
-                    <li key={i}>{itemName} (Qty: {row.nos}, Rate: ₹{row.rate})</li>
+                    <li key={i}>{itemName} (Qty: {row.qty}, Rate: ₹{row.rate})</li>
                   );
                 })}
               </ul>
             </div>
                     </div>
                 </div>
+            )}
+            {showSuccessModal && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+                <div className="bg-white rounded-lg shadow-lg p-6 max-w-md w-full relative">
+                  <button onClick={() => setShowSuccessModal(false)} className="absolute top-2 right-2 text-gray-500 hover:text-gray-800 text-xl">&times;</button>
+                  <h3 className="text-xl font-bold mb-4 text-center">Success!</h3>
+                  <p className="text-center text-gray-700 mb-4">Your {docType} has been saved successfully.</p>
+                  <div className="flex justify-center">
+                    <button
+                      onClick={() => setShowSuccessModal(false)}
+                      className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md"
+                    >
+                      OK
+                    </button>
+                  </div>
+                </div>
+              </div>
             )}
     </div>
     );
