@@ -2,27 +2,60 @@ import React, { useState, useEffect } from 'react';
 import { collection, onSnapshot, query, where, doc, getDoc } from 'firebase/firestore';
 import InvoiceTemplate from './BillTemplates/InvoiceTemplate';
 import { useNavigate } from 'react-router-dom';
+import * as XLSX from 'xlsx';
+import JSZip from 'jszip';
+// Use jsPDF from the global window object
+const jsPDF = window.jspdf.jsPDF;
+console.log('autoTable on jsPDF:', typeof jsPDF.prototype.autoTable);
 
-const REPORT_TYPES = [
-  { value: 'partywise-sales', label: 'Partywise Sales' },
-  { value: 'partywise-purchase', label: 'Partywise Purchase' },
-  { value: 'itemwise-report', label: 'Itemwise Report' },
-  { value: 'stock', label: 'Stock/Inventory' },
-  { value: 'gst-summary-regular', label: 'GST Summary (Regular)' },
-  { value: 'gst-summary-composition', label: 'GST Summary (Composition)' },
-  { value: 'daybook', label: 'Daybook/Cashbook' },
-  { value: 'sales-register', label: 'Sales Register' },
-  { value: 'purchase-register', label: 'Purchase Register' },
-  { value: 'purchase-orders', label: 'Purchase Orders' },
-  { value: 'challan', label: 'Challan List' },
-  { value: 'quotation', label: 'Quotation List' },
-  { value: 'profit-loss', label: 'Profit & Loss' },
-  { value: 'ledger', label: 'Ledger' },
-  { value: 'customer-ledger', label: 'Customer Ledger (Khata)' },
-  { value: 'supplier-ledger', label: 'Supplier Ledger' },
-  { value: 'outstanding', label: 'Outstanding Report' },
-  { value: 'daily-sales-receipts', label: 'Daily Sales & Receipts' },
-  { value: 'bill-register', label: 'Bill Register' },
+// Replace REPORT_TYPES with grouped structure
+const REPORT_GROUPS = [
+  {
+    label: 'Sales & Purchases (Partywise)',
+    options: [
+      { value: 'partywise-sales', label: 'Partywise Sales' },
+      { value: 'partywise-purchase', label: 'Partywise Purchase' },
+      { value: 'partywise-challan', label: 'Partywise Challan' },
+      { value: 'partywise-quotation', label: 'Partywise Quotation' },
+      { value: 'partywise-purchase-orders', label: 'Partywise Purchase Orders' },
+      { value: 'profit-loss', label: 'Profit & Loss' },
+    ],
+  },
+  {
+    label: 'Inventory & Items',
+    options: [
+      { value: 'itemwise-report', label: 'Itemwise Report' },
+      { value: 'stock', label: 'Stock/Inventory' },
+    ],
+  },
+  {
+    label: 'GST / Income Tax',
+    options: [
+      { value: 'gst-summary-regular', label: 'GST Summary (Regular)' },
+      { value: 'gst-summary-composition', label: 'GST Summary (Composition)' },
+    ],
+  },
+  {
+    label: 'Party/Account Ledgers',
+    options: [
+      { value: 'ledger', label: 'Ledger' },
+      { value: 'customer-ledger', label: 'Customer Ledger (Khata)' },
+      { value: 'supplier-ledger', label: 'Supplier Ledger (Khata)' },
+    ],
+  },
+  {
+    label: 'Documents/Transactions',
+    options: [
+      { value: 'daybook', label: 'Daybook/Cashbook' },
+      { value: 'bills', label: 'Bills' },
+    ],
+  },
+  {
+    label: 'Expenses',
+    options: [
+      { value: 'expenses', label: 'Expenses' },
+    ],
+  },
 ];
 
 const Reports = ({ db, userId, isAuthReady, appId }) => {
@@ -49,6 +82,13 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
   // Add state for itemwise sales and purchase arrays
   const [itemwiseSalesArr, setItemwiseSalesArr] = useState([]);
   const [itemwisePurchaseArr, setItemwisePurchaseArr] = useState([]);
+  
+  // Add state for all collections to get available financial years
+  const [salesBills, setSalesBills] = useState([]);
+  const [challans, setChallans] = useState([]);
+  const [quotations, setQuotations] = useState([]);
+  const [purchaseBills, setPurchaseBills] = useState([]);
+  const [purchaseOrders, setPurchaseOrders] = useState([]);
 
   // Add state for selectedBillSummary and showBillSummaryModal
   const [selectedBillSummary, setSelectedBillSummary] = useState(null);
@@ -67,6 +107,23 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
   // Add at the top of the Reports component, after useState imports:
   const [partywiseSortConfig, setPartywiseSortConfig] = useState({ key: '', direction: 'asc' });
   const [sortConfigs, setSortConfigs] = useState({});
+
+  // Add export format state
+  const [exportFormat, setExportFormat] = useState('csv');
+
+  // Time filter state variables (updated to match Payments.js)
+  const [timeFilter, setTimeFilter] = useState('all'); // 'all', 'custom', 'financial'
+  const [customDateFrom, setCustomDateFrom] = useState('');
+  const [customDateTo, setCustomDateTo] = useState('');
+  const [selectedFinancialYear, setSelectedFinancialYear] = useState('');
+  const [selectedSubFilter, setSelectedSubFilter] = useState(''); // 'month' or 'quarter'
+
+  // Add state for expenses
+  const [expenses, setExpenses] = useState([]);
+  const [expenseHead, setExpenseHead] = useState('');
+
+  // Add state for payments
+  const [payments, setPayments] = useState([]);
 
   // Helper: returns sort function for each table type
   const getSortFns = (table) => {
@@ -153,6 +210,55 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
     getDoc(companyDocRef).then(docSnap => {
       if (docSnap.exists()) setCompanyDetails(docSnap.data());
     });
+  }, [db, userId, isAuthReady, appId]);
+
+  // Fetch all collections for financial year calculation
+  useEffect(() => {
+    if (!db || !userId || !isAuthReady) return;
+    
+    const salesRef = collection(db, `artifacts/${appId}/users/${userId}/salesBills`);
+    const challansRef = collection(db, `artifacts/${appId}/users/${userId}/challans`);
+    const quotationsRef = collection(db, `artifacts/${appId}/users/${userId}/quotations`);
+    const purchaseBillsRef = collection(db, `artifacts/${appId}/users/${userId}/purchaseBills`);
+    const purchaseOrdersRef = collection(db, `artifacts/${appId}/users/${userId}/purchaseOrders`);
+    
+    const unsubSales = onSnapshot(salesRef, (snap) => {
+      const arr = [];
+      snap.forEach(doc => arr.push({ id: doc.id, ...doc.data() }));
+      setSalesBills(arr);
+    });
+    
+    const unsubChallans = onSnapshot(challansRef, (snap) => {
+      const arr = [];
+      snap.forEach(doc => arr.push({ id: doc.id, ...doc.data() }));
+      setChallans(arr);
+    });
+    
+    const unsubQuotations = onSnapshot(quotationsRef, (snap) => {
+      const arr = [];
+      snap.forEach(doc => arr.push({ id: doc.id, ...doc.data() }));
+      setQuotations(arr);
+    });
+    
+    const unsubPurchaseBills = onSnapshot(purchaseBillsRef, (snap) => {
+      const arr = [];
+      snap.forEach(doc => arr.push({ id: doc.id, ...doc.data() }));
+      setPurchaseBills(arr);
+    });
+    
+    const unsubPurchaseOrders = onSnapshot(purchaseOrdersRef, (snap) => {
+      const arr = [];
+      snap.forEach(doc => arr.push({ id: doc.id, ...doc.data() }));
+      setPurchaseOrders(arr);
+    });
+    
+    return () => {
+      unsubSales();
+      unsubChallans();
+      unsubQuotations();
+      unsubPurchaseBills();
+      unsubPurchaseOrders();
+    };
   }, [db, userId, isAuthReady, appId]);
 
   // Fetch report data (Partywise Sales as template, add Challan, Quotation, Purchase Orders)
@@ -246,6 +352,30 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
       });
       return () => unsubSales();
     }
+    
+    // GST Summary reports need sales and purchase data
+    if (reportType === 'gst-summary-regular' || reportType === 'gst-summary-composition') {
+      setLoading(true); setError('');
+      const salesRef = collection(db, `artifacts/${appId}/users/${userId}/salesBills`);
+      const purchaseRef = collection(db, `artifacts/${appId}/users/${userId}/purchaseBills`);
+      const unsubSales = onSnapshot(salesRef, (snap) => {
+        let salesArr = [];
+        snap.forEach(doc => salesArr.push({ id: doc.id, ...doc.data() }));
+        if (dateFrom) salesArr = salesArr.filter(bill => bill.invoiceDate >= dateFrom);
+        if (dateTo) salesArr = salesArr.filter(bill => bill.invoiceDate <= dateTo);
+        setItemwiseSalesArr(salesArr);
+        onSnapshot(purchaseRef, (psnap) => {
+          let purchaseArr = [];
+          psnap.forEach(doc => purchaseArr.push({ id: doc.id, ...doc.data() }));
+          if (dateFrom) purchaseArr = purchaseArr.filter(bill => bill.billDate >= dateFrom);
+          if (dateTo) purchaseArr = purchaseArr.filter(bill => bill.billDate <= dateTo);
+          setItemwisePurchaseArr(purchaseArr);
+          setLoading(false);
+        });
+      });
+      return () => unsubSales();
+    }
+    
     // TODO: Add other report types here
   }, [db, userId, isAuthReady, appId, reportType, dateFrom, dateTo, selectedParty, partyList]);
 
@@ -311,7 +441,7 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
       });
     }, err => { setError('Error fetching ledger'); setLoading(false); });
     return () => unsubSales();
-  }, [db, userId, isAuthReady, appId, reportType, selectedParty, dateFrom, dateTo]);
+  }, [db, userId, isAuthReady, appId, reportType, selectedParty, timeFilter, customDateFrom, customDateTo, selectedFinancialYear, selectedSubFilter, selectedMonth, selectedQuarter]);
 
   // Supplier Ledger (Khata) report logic
   useEffect(() => {
@@ -329,8 +459,9 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
       snap.forEach(doc => {
         const bill = { id: doc.id, ...doc.data() };
         if (bill.party === selectedParty) {
-          if (!dateFrom || bill.billDate >= dateFrom) {
-            if (!dateTo || bill.billDate <= dateTo) {
+          const { effectiveDateFrom, effectiveDateTo } = getEffectiveDateRange();
+          if (!effectiveDateFrom || bill.billDate >= effectiveDateFrom) {
+            if (!effectiveDateTo || bill.billDate <= effectiveDateTo) {
               bills.push({
                 type: 'bill',
                 date: bill.billDate,
@@ -375,7 +506,7 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
       });
     }, err => { setError('Error fetching supplier ledger'); setLoading(false); });
     return () => unsubPurchase();
-  }, [db, userId, isAuthReady, appId, reportType, selectedParty, dateFrom, dateTo]);
+  }, [db, userId, isAuthReady, appId, reportType, selectedParty, timeFilter, customDateFrom, customDateTo, selectedFinancialYear, selectedSubFilter, selectedMonth, selectedQuarter]);
 
   // Outstanding Report logic
   useEffect(() => {
@@ -433,14 +564,15 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
       let arr = [];
       snap.forEach(doc => {
         const bill = { id: doc.id, ...doc.data() };
-        if ((!dateFrom || bill.invoiceDate >= dateFrom) && (!dateTo || bill.invoiceDate <= dateTo)) {
+        const { effectiveDateFrom, effectiveDateTo } = getEffectiveDateRange();
+        if ((!effectiveDateFrom || bill.invoiceDate >= effectiveDateFrom) && (!effectiveDateTo || bill.invoiceDate <= effectiveDateTo)) {
           arr.push(bill);
         }
       });
       setData(arr);
       setLoading(false);
     }, err => { setError('Error fetching bill register'); setLoading(false); });
-  }, [db, userId, isAuthReady, appId, reportType, dateFrom, dateTo]);
+  }, [db, userId, isAuthReady, appId, reportType, timeFilter, customDateFrom, customDateTo, selectedFinancialYear, selectedSubFilter, selectedMonth, selectedQuarter]);
 
   // Add Partywise Purchase report logic
   useEffect(() => {
@@ -511,12 +643,139 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
       to: fyEnd.toISOString().split('T')[0],
     };
   }
+
+  // Helper function to get financial year date range (from Payments.js)
+  const getFinancialYearRange = (financialYear) => {
+    const [startYear] = financialYear.split('-');
+    // Handle both formats: "2025-26" and "25-26"
+    const yearNum = startYear.length === 4 ? parseInt(startYear) : parseInt('20' + startYear);
+    const startDate = new Date(yearNum, 3, 1); // April 1st (month 3 = April)
+    const endDate = new Date(yearNum + 1, 2, 31); // March 31st (month 2 = March)
+    return { startDate, endDate };
+  };
+
+  // Helper function to get month date range (from Payments.js)
+  const getMonthRange = (monthYear) => {
+    const [month, year] = monthYear.split('-');
+    const yearNum = parseInt('20' + year); // Convert 25 to 2025
+    const startDate = new Date(yearNum, parseInt(month) - 1, 1);
+    const endDate = new Date(yearNum, parseInt(month), 0);
+    return { startDate, endDate };
+  };
+
+  // Helper function to get quarter date range (from Payments.js)
+  const getQuarterRange = (quarterYear) => {
+    const [quarter, year] = quarterYear.split('-');
+    const yearNum = parseInt('20' + year); // Convert 25 to 2025
+    let startMonth, endMonth;
+    
+    switch(quarter) {
+      case 'Q1': // April to June
+        startMonth = 3; // April (0-indexed)
+        endMonth = 5; // June (0-indexed)
+        break;
+      case 'Q2': // July to September
+        startMonth = 6; // July (0-indexed)
+        endMonth = 8; // September (0-indexed)
+        break;
+      case 'Q3': // October to December
+        startMonth = 9; // October (0-indexed)
+        endMonth = 11; // December (0-indexed)
+        break;
+      case 'Q4': // January to March
+        startMonth = 0; // January (0-indexed)
+        endMonth = 2; // March (0-indexed)
+        break;
+      default:
+        startMonth = 0;
+        endMonth = 11;
+    }
+    
+    const startDate = new Date(yearNum, startMonth, 1);
+    const endDate = new Date(yearNum, endMonth + 1, 0);
+    return { startDate, endDate };
+  };
+
+  // Helper function to get current financial year (from Payments.js)
+  const getCurrentFinancialYear = () => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth() + 1; // getMonth() returns 0-11
+    return month >= 4 ? `${year}-${(year + 1).toString().slice(-2)}` : `${year - 1}-${year.toString().slice(-2)}`;
+  };
+
+  // Helper function to get quarters for current financial year only (from Payments.js)
+  const getCurrentFinancialYearQuarters = () => {
+    const currentFY = getCurrentFinancialYear();
+    const [startYear] = currentFY.split('-');
+    const yearNum = startYear.length === 4 ? parseInt(startYear) : parseInt('20' + startYear);
+    
+    return [
+      { value: `Q1-${yearNum.toString().slice(-2)}`, label: `Q1 (Apr-Jun) ${yearNum}` },
+      { value: `Q2-${yearNum.toString().slice(-2)}`, label: `Q2 (Jul-Sep) ${yearNum}` },
+      { value: `Q3-${yearNum.toString().slice(-2)}`, label: `Q3 (Oct-Dec) ${yearNum}` },
+      { value: `Q4-${(yearNum + 1).toString().slice(-2)}`, label: `Q4 (Jan-Mar) ${yearNum + 1}` }
+    ];
+  };
+
+  // Helper function to get effective date range based on time filter (from Payments.js)
+  const getEffectiveDateRange = () => {
+    let effectiveDateFrom = '';
+    let effectiveDateTo = '';
+
+    if (timeFilter === 'custom' && customDateFrom && customDateTo) {
+      effectiveDateFrom = customDateFrom;
+      effectiveDateTo = customDateTo;
+    } else if (timeFilter === 'financial' && selectedFinancialYear) {
+      // If sub-filter is selected, use that specific range
+      if (selectedSubFilter === 'month' && selectedMonth) {
+        const monthRange = getMonthRange(selectedMonth);
+        effectiveDateFrom = monthRange.startDate.toISOString().split('T')[0];
+        effectiveDateTo = monthRange.endDate.toISOString().split('T')[0];
+      } else if (selectedSubFilter === 'quarter' && selectedQuarter) {
+        const quarterRange = getQuarterRange(selectedQuarter);
+        effectiveDateFrom = quarterRange.startDate.toISOString().split('T')[0];
+        effectiveDateTo = quarterRange.endDate.toISOString().split('T')[0];
+      } else {
+        // Use full financial year range
+        const yearRange = getFinancialYearRange(selectedFinancialYear);
+        effectiveDateFrom = yearRange.startDate.toISOString().split('T')[0];
+        effectiveDateTo = yearRange.endDate.toISOString().split('T')[0];
+      }
+    }
+
+    return { effectiveDateFrom, effectiveDateTo };
+  };
   // Set default date range to current FY on mount
   useEffect(() => {
     const { from, to } = getCurrentFinancialYearRange();
     if (!dateFrom) setDateFrom(from);
     if (!dateTo) setDateTo(to);
   }, []);
+
+  // Set default financial year when data is loaded
+  useEffect(() => {
+    const availableYears = getAvailableFinancialYears();
+    console.log('Available Financial Years in Reports:', availableYears);
+    console.log('Current Data Counts:', {
+      salesBills: salesBills.length,
+      challans: challans.length,
+      quotations: quotations.length,
+      purchaseBills: purchaseBills.length,
+      purchaseOrders: purchaseOrders.length,
+      itemwiseSalesArr: itemwiseSalesArr.length,
+      itemwisePurchaseArr: itemwisePurchaseArr.length,
+      data: data.length
+    });
+    
+    if (availableYears.length > 0 && !selectedFinancialYear) {
+      // Set to current financial year if available, otherwise use the first available year
+      const currentFY = getCurrentFinancialYear();
+      const defaultYear = availableYears.includes(currentFY) ? currentFY : availableYears[0];
+      console.log('Setting default financial year in Reports:', { currentFY, defaultYear, availableYears });
+      setSelectedFinancialYear(defaultYear);
+    }
+  }, [salesBills, challans, quotations, purchaseBills, purchaseOrders, itemwiseSalesArr, itemwisePurchaseArr, data, selectedFinancialYear]);
 
   // Itemwise Report logic
   useEffect(() => {
@@ -614,16 +873,771 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
     }, err => { setError('Error fetching itemwise report'); setLoading(false); });
   }, [db, userId, isAuthReady, appId, reportType, dateFrom, dateTo, selectedItem, itemList]);
 
-  // Export placeholder
-  const handleExport = () => {
-    alert('Export feature coming soon!');
+  // Helper functions to calculate totals for different report types
+  const calculatePartywiseTotals = (data) => {
+    const totals = data.reduce((acc, row) => {
+      const totalPaid = (row.bills || []).reduce((sum, bill) => sum + ((bill.payments || []).reduce((s, p) => s + (parseFloat(p.amount) || 0), 0)), 0);
+      const outstanding = (row.total || 0) - totalPaid;
+      return {
+        total: acc.total + (row.total || 0),
+        totalPaid: acc.totalPaid + totalPaid,
+        outstanding: acc.outstanding + outstanding,
+        billCount: acc.billCount + (row.billCount || 0)
+      };
+    }, { total: 0, totalPaid: 0, outstanding: 0, billCount: 0 });
+    
+    return {
+      ...totals,
+      partyCount: data.length
+    };
+  };
+
+  const calculateItemwiseTotals = (data) => {
+    const totals = data.reduce((acc, row) => ({
+      totalSales: acc.totalSales + (row.totalSales || 0),
+      totalPurchases: acc.totalPurchases + (row.totalPurchases || 0),
+      profitLoss: acc.profitLoss + (row.profitLoss || 0),
+      salesBills: acc.salesBills + (row.salesBills || 0),
+      purchaseBills: acc.purchaseBills + (row.purchaseBills || 0)
+    }), { totalSales: 0, totalPurchases: 0, profitLoss: 0, salesBills: 0, purchaseBills: 0 });
+    
+    return {
+      ...totals,
+      itemCount: data.length
+    };
+  };
+
+  const calculateStockTotals = (data) => {
+    const totals = data.reduce((acc, row) => ({
+      openingStock: acc.openingStock + (row.openingStock || 0),
+      purchased: acc.purchased + (row.purchased || 0),
+      totalQty: acc.totalQty + (row.totalQty || 0),
+      sold: acc.sold + (row.sold || 0),
+      stock: acc.stock + (row.stock || 0),
+      salesBills: acc.salesBills + (row.salesBills || 0),
+      purchaseBills: acc.purchaseBills + (row.purchaseBills || 0)
+    }), { openingStock: 0, purchased: 0, totalQty: 0, sold: 0, stock: 0, salesBills: 0, purchaseBills: 0 });
+    
+    return {
+      ...totals,
+      itemCount: data.length
+    };
+  };
+
+  const calculateOutstandingTotals = (data) => {
+    const totals = data.reduce((acc, row) => ({
+      total: acc.total + (row.total || 0),
+      paid: acc.paid + (row.paid || 0),
+      outstanding: acc.outstanding + (row.outstanding || 0)
+    }), { total: 0, paid: 0, outstanding: 0 });
+    
+    return {
+      ...totals,
+      partyCount: data.length
+    };
+  };
+
+  const calculateBillRegisterTotals = (data) => {
+    const totals = data.reduce((acc, row) => ({
+      totalAmount: acc.totalAmount + (row.totalAmount || 0)
+    }), { totalAmount: 0 });
+    
+    return {
+      ...totals,
+      billCount: data.length
+    };
+  };
+
+  const calculateChallanQuotationTotals = (data) => {
+    const totals = data.reduce((acc, row) => ({
+      amount: acc.amount + (row.amount || 0)
+    }), { amount: 0 });
+    
+    return {
+      ...totals,
+      documentCount: data.length
+    };
+  };
+
+  const calculateLedgerTotals = (data) => {
+    const totals = data.reduce((acc, row) => ({
+      billAmount: acc.billAmount + (row.billAmount || 0),
+      payment: acc.payment + (row.payment || 0)
+    }), { billAmount: 0, payment: 0 });
+    
+    // Get the final balance from the last row
+    const finalBalance = data.length > 0 ? data[data.length - 1]?.balance || 0 : 0;
+    
+    return {
+      ...totals,
+      finalBalance,
+      entryCount: data.length
+    };
+  };
+
+  const calculateGSTTotals = (data) => {
+    const totals = data.reduce((acc, row) => ({
+      taxable: acc.taxable + (row.taxable || 0),
+      cgst: acc.cgst + (row.cgst || 0),
+      sgst: acc.sgst + (row.sgst || 0),
+      igst: acc.igst + (row.igst || 0),
+      net: acc.net + (row.net || 0)
+    }), { taxable: 0, cgst: 0, sgst: 0, igst: 0, net: 0 });
+    
+    return {
+      ...totals,
+      documentCount: data.length
+    };
+  };
+
+  // Utility: Convert array of objects to CSV string
+  const arrayToCSV = (arr, columns) => {
+    const escape = (str) => `"${String(str).replace(/"/g, '""')}"`;
+    const header = columns.map(col => escape(col.label)).join(',');
+    const rows = arr.map(row => columns.map(col => escape(row[col.key] ?? '')).join(','));
+    return [header, ...rows].join('\r\n');
+  };
+
+  // Utility: Export to Excel
+  const arrayToExcel = (arr, columns, filename) => {
+    const wsData = [columns.map(col => col.label), ...arr.map(row => columns.map(col => row[col.key] ?? ''))];
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Report');
+    XLSX.writeFile(wb, filename);
+  };
+
+  // Utility: Export to PDF with letterhead
+  const arrayToPDF = async (arr, columns, filename, title = 'Report') => {
+    const doc = new jsPDF();
+    let y = 16;
+    // Draw logo if available
+    if (companyDetails.logoUrl) {
+      try {
+        // Fetch image as base64
+        const imgData = await fetch(companyDetails.logoUrl)
+          .then(res => res.blob())
+          .then(blob => new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          }));
+        doc.addImage(imgData, 'PNG', 14, 10, 24, 24); // x, y, width, height
+      } catch (e) {
+        console.warn('Could not load logo for PDF:', e);
+      }
+    }
+    // Company details (name, address, GSTIN, etc.)
+    const leftX = companyDetails.logoUrl ? 40 : 14;
+    doc.setFontSize(14);
+    doc.text(companyDetails.firmName || '', leftX, 16);
+    doc.setFontSize(10);
+    let detailsY = 22;
+    if (companyDetails.address) {
+      doc.text(companyDetails.address, leftX, detailsY);
+      detailsY += 6;
+    }
+    if (companyDetails.city || companyDetails.state || companyDetails.pincode) {
+      doc.text(
+        [companyDetails.city, companyDetails.state, companyDetails.pincode].filter(Boolean).join(', '),
+        leftX, detailsY
+      );
+      detailsY += 6;
+    }
+    if (companyDetails.gstin) {
+      doc.text('GSTIN: ' + companyDetails.gstin, leftX, detailsY);
+      detailsY += 6;
+    }
+    if (companyDetails.contactNumber) {
+      doc.text('Contact: ' + companyDetails.contactNumber, leftX, detailsY);
+      detailsY += 6;
+    }
+    if (companyDetails.email) {
+      doc.text('Email: ' + companyDetails.email, leftX, detailsY);
+      detailsY += 6;
+    }
+    // Report title
+    doc.setFontSize(12);
+    doc.text(title, 14, detailsY + 6);
+    // Table
+    doc.autoTable({
+      head: [columns.map(col => col.label)],
+      body: arr.map(row => columns.map(col => row[col.key] ?? '')),
+      startY: detailsY + 12,
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [41, 128, 185] },
+      bodyStyles: { fontSize: 8 },
+      alternateRowStyles: { fillColor: [248, 249, 250] },
+      didParseCell: function(data) {
+        // Apply custom styling to total rows
+        if (data.row.index < arr.length) {
+          const row = arr[data.row.index];
+          const isTotalRow = row.partyName?.includes('TOTAL') || 
+                            row.itemName?.includes('TOTAL') || 
+                            row.invoiceNumber?.includes('TOTAL') ||
+                            row.number?.includes('TOTAL') ||
+                            row.date?.includes('TOTAL');
+          
+          if (isTotalRow) {
+            data.cell.styles.fontStyle = 'bold';
+            data.cell.styles.fillColor = [240, 240, 240];
+            data.cell.styles.textColor = [0, 0, 0];
+          }
+        }
+      }
+    });
+    doc.save(filename);
+  };
+
+  // Utility: Build GST Summary tables for rendering and export
+  function getGSTSummaryTables(itemwiseSalesArr, itemwisePurchaseArr, itemList, partyList) {
+    // 1. Sales/Outward GST Table
+    const salesRows = [];
+    itemwiseSalesArr.forEach(bill => {
+      const partyName = partyList.find(p => p.id === bill.party)?.firmName || bill.party || 'Unknown';
+      const gstMap = {};
+      (bill.rows || []).forEach(row => {
+        const gstPercent = (parseFloat(row.sgst || 0) + parseFloat(row.cgst || 0) + parseFloat(row.igst || 0)) || 0;
+        const key = gstPercent;
+        if (!gstMap[key]) gstMap[key] = { gstPercent, taxable: 0, cgst: 0, sgst: 0, igst: 0 };
+        gstMap[key].taxable += parseFloat(row.amount) || 0;
+        gstMap[key].cgst += ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0)) / 100;
+        gstMap[key].sgst += ((parseFloat(row.amount) || 0) * (parseFloat(row.sgst) || 0)) / 100;
+        gstMap[key].igst += ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0)) / 100;
+      });
+      const gstArr = Object.values(gstMap);
+      gstArr.forEach((g, idx) => {
+        salesRows.push({
+          invoiceNumber: idx === 0 ? (bill.invoiceNumber || bill.number || bill.id) : '',
+          bill: idx === 0 ? bill : null,
+          partyName: idx === 0 ? partyName : '',
+          gstPercent: g.gstPercent,
+          taxable: g.taxable,
+          cgst: g.cgst,
+          sgst: g.sgst,
+          igst: g.igst,
+          net: g.cgst + g.sgst + g.igst,
+          showButton: idx === 0,
+        });
+      });
+    });
+    // 2. Purchase/Inward GST Table
+    const purchaseRows = [];
+    itemwisePurchaseArr.forEach(bill => {
+      const partyName = partyList.find(p => p.id === bill.party)?.firmName || bill.party || 'Unknown';
+      const gstMap = {};
+      (bill.rows || []).forEach(row => {
+        const gstPercent = (parseFloat(row.sgst || 0) + parseFloat(row.cgst || 0) + parseFloat(row.igst || 0)) || 0;
+        const key = gstPercent;
+        if (!gstMap[key]) gstMap[key] = { gstPercent, taxable: 0, cgst: 0, sgst: 0, igst: 0 };
+        gstMap[key].taxable += parseFloat(row.amount) || 0;
+        gstMap[key].cgst += ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0)) / 100;
+        gstMap[key].sgst += ((parseFloat(row.amount) || 0) * (parseFloat(row.sgst) || 0)) / 100;
+        gstMap[key].igst += ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0)) / 100;
+      });
+      const gstArr = Object.values(gstMap);
+      gstArr.forEach((g, idx) => {
+        purchaseRows.push({
+          invoiceNumber: idx === 0 ? (bill.invoiceNumber || bill.number || bill.id) : '',
+          bill: idx === 0 ? bill : null,
+          partyName: idx === 0 ? partyName : '',
+          gstPercent: g.gstPercent,
+          taxable: g.taxable,
+          cgst: g.cgst,
+          sgst: g.sgst,
+          igst: g.igst,
+          net: g.cgst + g.sgst + g.igst,
+          showButton: idx === 0,
+        });
+      });
+    });
+    // 3. Item-wise GST summary
+    const itemSummaryMap = {};
+    itemList.forEach(item => {
+      itemSummaryMap[item.id] = {
+        itemName: item.itemName || '',
+        hsn: item.hsnCode || item.hsn || 'N/A',
+        gstPercent: null,
+        taxableOut: 0, outputCGST: 0, outputSGST: 0, outputIGST: 0,
+        taxableIn: 0, inputCGST: 0, inputSGST: 0, inputIGST: 0
+      };
+    });
+    // Sales (Output Tax)
+    itemwiseSalesArr.forEach(bill => {
+      (bill.rows || []).forEach(row => {
+        const itemId = row.item;
+        if (!itemSummaryMap[itemId]) return;
+        const gstPercent = (parseFloat(row.sgst || 0) + parseFloat(row.cgst || 0) + parseFloat(row.igst || 0)) || 0;
+        itemSummaryMap[itemId].gstPercent = gstPercent;
+        itemSummaryMap[itemId].taxableOut += parseFloat(row.amount) || 0;
+        itemSummaryMap[itemId].outputCGST += ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0)) / 100;
+        itemSummaryMap[itemId].outputSGST += ((parseFloat(row.amount) || 0) * (parseFloat(row.sgst) || 0)) / 100;
+        itemSummaryMap[itemId].outputIGST += ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0)) / 100;
+      });
+    });
+    // Purchases (Input Tax)
+    itemwisePurchaseArr.forEach(bill => {
+      (bill.rows || []).forEach(row => {
+        const itemId = row.item;
+        if (!itemSummaryMap[itemId]) return;
+        const gstPercent = (parseFloat(row.sgst || 0) + parseFloat(row.cgst || 0) + parseFloat(row.igst || 0)) || 0;
+        itemSummaryMap[itemId].gstPercent = gstPercent;
+        itemSummaryMap[itemId].taxableIn += parseFloat(row.amount) || 0;
+        itemSummaryMap[itemId].inputCGST += ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0)) / 100;
+        itemSummaryMap[itemId].inputSGST += ((parseFloat(row.amount) || 0) * (parseFloat(row.sgst) || 0)) / 100;
+        itemSummaryMap[itemId].inputIGST += ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0)) / 100;
+      });
+    });
+    const itemSummaryArr = Object.values(itemSummaryMap).filter(row => row.taxableOut > 0 || row.taxableIn > 0);
+    return { salesRows, purchaseRows, itemSummaryArr };
+  }
+
+  // Export logic for multi-table reports
+  const handleExport = async () => {
+    let filename = 'report';
+    let tables = [];
+    let title = '';
+    if (reportType === 'gst-summary-regular' || reportType === 'gst-summary-composition') {
+      const { salesRows, purchaseRows, itemSummaryArr } = getGSTSummaryTables(itemwiseSalesArr, itemwisePurchaseArr, itemList, partyList);
+      
+      // Calculate totals for sales
+      const salesTotals = calculateGSTTotals(salesRows);
+      const salesTotalRow = {
+        invoiceNumber: `TOTAL (${salesTotals.documentCount} invoices)`,
+        partyName: '',
+        taxable: salesTotals.taxable,
+        gstPercent: '',
+        cgst: salesTotals.cgst,
+        sgst: salesTotals.sgst,
+        igst: salesTotals.igst,
+        net: salesTotals.net,
+      };
+      
+      // Calculate totals for purchases
+      const purchaseTotals = calculateGSTTotals(purchaseRows);
+      const purchaseTotalRow = {
+        invoiceNumber: `TOTAL (${purchaseTotals.documentCount} invoices)`,
+        partyName: '',
+        taxable: purchaseTotals.taxable,
+        gstPercent: '',
+        cgst: purchaseTotals.cgst,
+        sgst: purchaseTotals.sgst,
+        igst: purchaseTotals.igst,
+        net: purchaseTotals.net,
+      };
+      
+      // Calculate totals for item summary
+      const itemTotals = itemSummaryArr.reduce((acc, row) => ({
+        taxableOut: acc.taxableOut + (row.taxableOut || 0),
+        outputCGST: acc.outputCGST + (row.outputCGST || 0),
+        outputSGST: acc.outputSGST + (row.outputSGST || 0),
+        outputIGST: acc.outputIGST + (row.outputIGST || 0),
+        taxableIn: acc.taxableIn + (row.taxableIn || 0),
+        inputCGST: acc.inputCGST + (row.inputCGST || 0),
+        inputSGST: acc.inputSGST + (row.inputSGST || 0),
+        inputIGST: acc.inputIGST + (row.inputIGST || 0),
+      }), { taxableOut: 0, outputCGST: 0, outputSGST: 0, outputIGST: 0, taxableIn: 0, inputCGST: 0, inputSGST: 0, inputIGST: 0 });
+      
+      const itemTotalRow = {
+        itemName: `TOTAL (${itemSummaryArr.length} items)`,
+        hsn: '',
+        gstPercent: '',
+        taxableOut: itemTotals.taxableOut,
+        outputCGST: itemTotals.outputCGST,
+        outputSGST: itemTotals.outputSGST,
+        outputIGST: itemTotals.outputIGST,
+        taxableIn: itemTotals.taxableIn,
+        inputCGST: itemTotals.inputCGST,
+        inputSGST: itemTotals.inputSGST,
+        inputIGST: itemTotals.inputIGST,
+      };
+      
+      tables = [
+        { arr: [...salesRows, salesTotalRow], columns: [
+          { key: 'invoiceNumber', label: 'Invoice Number' },
+          { key: 'partyName', label: 'Party Name' },
+          { key: 'taxable', label: 'Taxable Outward' },
+          { key: 'gstPercent', label: 'GST %' },
+          { key: 'cgst', label: 'OTW CGST' },
+          { key: 'sgst', label: 'OTW SGST' },
+          { key: 'igst', label: 'OTW IGST' },
+          { key: 'net', label: 'OTW NET' },
+        ], tableTitle: 'Sales/Outward GST (Invoice-wise)' },
+        { arr: [...purchaseRows, purchaseTotalRow], columns: [
+          { key: 'invoiceNumber', label: 'Invoice Number' },
+          { key: 'partyName', label: 'Party Name' },
+          { key: 'taxable', label: 'Taxable Inward' },
+          { key: 'gstPercent', label: 'GST %' },
+          { key: 'cgst', label: 'ITW CGST' },
+          { key: 'sgst', label: 'ITW SGST' },
+          { key: 'igst', label: 'ITW IGST' },
+          { key: 'net', label: 'ITW NET' },
+        ], tableTitle: 'Purchase/Inward GST (Invoice-wise)' },
+        { arr: [...itemSummaryArr, itemTotalRow], columns: [
+          { key: 'itemName', label: 'Item Name' },
+          { key: 'hsn', label: 'HSN' },
+          { key: 'gstPercent', label: 'GST %' },
+          { key: 'taxableOut', label: 'Taxable Outward' },
+          { key: 'outputCGST', label: 'Output CGST' },
+          { key: 'outputSGST', label: 'Output SGST' },
+          { key: 'outputIGST', label: 'Output IGST' },
+          { key: 'taxableIn', label: 'Taxable Inward' },
+          { key: 'inputCGST', label: 'Input CGST' },
+          { key: 'inputSGST', label: 'Input SGST' },
+          { key: 'inputIGST', label: 'Input IGST' },
+        ], tableTitle: 'Item-wise GST Summary' },
+      ];
+      filename = reportType;
+      title = reportType === 'gst-summary-regular' ? 'GST Summary (Regular)' : 'GST Summary (Composition)';
+    } else {
+      // Fallback: single-table export for other reports
+      let columns = [];
+      let rows = [];
+      title = '';
+      if (reportType === 'partywise-sales' || reportType === 'partywise-purchase') {
+        columns = [
+          { key: 'partyName', label: 'Party Name' },
+          { key: 'partyType', label: 'Party Type' },
+          { key: 'gstin', label: 'GSTIN' },
+          { key: 'total', label: 'Total' },
+          { key: 'totalPaid', label: 'Total Paid' },
+          { key: 'outstanding', label: 'Outstanding' },
+          { key: 'billCount', label: 'No. of Bills' },
+        ];
+        const preparedData = data.map(row => {
+          const totalPaid = (row.bills || []).reduce((sum, bill) => sum + ((bill.payments || []).reduce((s, p) => s + (parseFloat(p.amount) || 0), 0)), 0);
+          const outstanding = (row.total || 0) - totalPaid;
+          return { ...row, totalPaid, outstanding };
+        });
+        
+        // Calculate totals
+        const totals = calculatePartywiseTotals(data);
+        const totalRow = {
+          partyName: `TOTAL (${totals.partyCount} parties)`,
+          partyType: '',
+          gstin: '',
+          total: totals.total,
+          totalPaid: totals.totalPaid,
+          outstanding: totals.outstanding,
+          billCount: totals.billCount
+        };
+        
+        rows = [...preparedData, totalRow];
+        filename = reportType;
+        title = reportType === 'partywise-sales' ? 'Partywise Sales' : 'Partywise Purchase';
+      } else if (reportType === 'itemwise-report') {
+        columns = [
+          { key: 'itemName', label: 'Item Name' },
+          { key: 'hsn', label: 'HSN' },
+          { key: 'totalSales', label: 'Total Sales (₹)' },
+          { key: 'totalPurchases', label: 'Total Purchases (₹)' },
+          { key: 'profitLoss', label: 'Profit/Loss (₹)' },
+          { key: 'salesBills', label: 'No. of Sales Bills' },
+          { key: 'purchaseBills', label: 'No. of Purchase Bills' },
+        ];
+        const salesArr = itemwiseSalesArr;
+        const purchaseArr = itemwisePurchaseArr;
+        const grouped = {};
+        salesArr.forEach(bill => {
+          (bill.rows || []).forEach(row => {
+            const itemId = row.item || 'Unknown';
+            if (!grouped[itemId]) grouped[itemId] = { sales: 0, purchases: 0, salesBills: 0, purchaseBills: 0, hsn: row.hsn || '' };
+            grouped[itemId].sales += (parseFloat(row.amount) || 0);
+            grouped[itemId].hsn = row.hsn || grouped[itemId].hsn;
+            grouped[itemId].salesBills += 1;
+          });
+        });
+        purchaseArr.forEach(bill => {
+          (bill.rows || []).forEach(row => {
+            const itemId = row.item || 'Unknown';
+            if (!grouped[itemId]) grouped[itemId] = { sales: 0, purchases: 0, salesBills: 0, purchaseBills: 0, hsn: row.hsn || '' };
+            grouped[itemId].purchases += (parseFloat(row.amount) || 0);
+            grouped[itemId].hsn = row.hsn || grouped[itemId].hsn;
+            grouped[itemId].purchaseBills += 1;
+          });
+        });
+        const itemwiseData = Object.entries(grouped).map(([itemId, g]) => {
+          const item = itemList.find(i => i.id === itemId);
+          return {
+            itemName: item?.itemName || itemId,
+            hsn: item?.hsnCode || g.hsn,
+            totalSales: g.sales,
+            totalPurchases: g.purchases,
+            profitLoss: g.sales - g.purchases,
+            salesBills: g.salesBills,
+            purchaseBills: g.purchaseBills,
+          };
+        });
+        
+        // Calculate totals
+        const totals = calculateItemwiseTotals(itemwiseData);
+        const totalRow = {
+          itemName: `TOTAL (${totals.itemCount} items)`,
+          hsn: '',
+          totalSales: totals.totalSales,
+          totalPurchases: totals.totalPurchases,
+          profitLoss: totals.profitLoss,
+          salesBills: totals.salesBills,
+          purchaseBills: totals.purchaseBills,
+        };
+        
+        rows = [...itemwiseData, totalRow];
+        filename = 'itemwise-report';
+        title = 'Itemwise Report';
+      } else if (reportType === 'stock') {
+        columns = [
+          { key: 'itemName', label: 'Item Name' },
+          { key: 'hsn', label: 'HSN' },
+          { key: 'openingStock', label: 'Opening Stock' },
+          { key: 'purchased', label: 'Quantity Purchased' },
+          { key: 'totalQty', label: 'Total Qty (Opening + Purchase)' },
+          { key: 'sold', label: 'Quantity Sold' },
+          { key: 'stock', label: 'Quantity in Hand' },
+          { key: 'salesBills', label: 'No. of Sales Bills' },
+          { key: 'purchaseBills', label: 'No. of Purchase Bills' },
+        ];
+        const salesArr = itemwiseSalesArr;
+        const purchaseArr = itemwisePurchaseArr;
+        const grouped = {};
+        salesArr.forEach(bill => {
+          (bill.rows || []).forEach(row => {
+            const itemId = row.item || 'Unknown';
+            if (!grouped[itemId]) grouped[itemId] = { sold: 0, purchased: 0, stock: 0, itemId, hsn: row.hsn || '', salesBills: 0, purchaseBills: 0 };
+            grouped[itemId].sold += parseFloat(row.qty || 0);
+            grouped[itemId].hsn = row.hsn || grouped[itemId].hsn;
+            grouped[itemId].salesBills += 1;
+          });
+        });
+        purchaseArr.forEach(bill => {
+          (bill.rows || []).forEach(row => {
+            const itemId = row.item || 'Unknown';
+            if (!grouped[itemId]) grouped[itemId] = { sold: 0, purchased: 0, stock: 0, itemId, hsn: row.hsn || '', salesBills: 0, purchaseBills: 0 };
+            grouped[itemId].purchased += parseFloat(row.qty || 0);
+            grouped[itemId].hsn = row.hsn || grouped[itemId].hsn;
+            grouped[itemId].purchaseBills += 1;
+          });
+        });
+        itemList.forEach(item => {
+          if (!grouped[item.id]) grouped[item.id] = { sold: 0, purchased: 0, stock: 0, itemId: item.id, hsn: item.hsnCode || '', salesBills: 0, purchaseBills: 0 };
+        });
+        Object.keys(grouped).forEach(itemId => {
+          grouped[itemId].stock = 0;
+        });
+        const stockData = Object.values(grouped).map(g => {
+          const item = itemList.find(i => i.id === g.itemId);
+          const openingStock = typeof item?.openingStock === 'number' ? item.openingStock : parseFloat(item?.openingStock) || 0;
+          const allPurchases = purchaseArr
+            .filter(bill => (!dateTo || (bill.billDate <= dateTo)))
+            .flatMap(bill => (bill.rows || []).filter(row => row.item === g.itemId))
+            .reduce((sum, row) => sum + (parseFloat(row.qty) || 0), 0);
+          const allSales = salesArr
+            .filter(bill => (!dateTo || (bill.invoiceDate <= dateTo)))
+            .flatMap(bill => (bill.rows || []).filter(row => row.item === g.itemId))
+            .reduce((sum, row) => sum + (parseFloat(row.qty) || 0), 0);
+          const periodPurchases = purchaseArr
+            .filter(bill => (!dateFrom || bill.billDate >= dateFrom) && (!dateTo || bill.billDate <= dateTo))
+            .flatMap(bill => (bill.rows || []).filter(row => row.item === g.itemId))
+            .reduce((sum, row) => sum + (parseFloat(row.qty) || 0), 0);
+          return {
+            itemName: item?.itemName || '',
+            hsn: item?.hsnCode || g.hsn,
+            openingStock: openingStock,
+            purchased: g.purchased,
+            totalQty: openingStock + periodPurchases,
+            sold: g.sold,
+            stock: openingStock + allPurchases - allSales,
+            salesBills: g.salesBills,
+            purchaseBills: g.purchaseBills,
+          };
+        });
+        
+        // Calculate totals
+        const totals = calculateStockTotals(stockData);
+        const totalRow = {
+          itemName: `TOTAL (${totals.itemCount} items)`,
+          hsn: '',
+          openingStock: totals.openingStock,
+          purchased: totals.purchased,
+          totalQty: totals.totalQty,
+          sold: totals.sold,
+          stock: totals.stock,
+          salesBills: totals.salesBills,
+          purchaseBills: totals.purchaseBills,
+        };
+        
+        rows = [...stockData, totalRow];
+        filename = 'stock-report';
+        title = 'Stock Report';
+      } else if (reportType === 'outstanding') {
+        columns = [
+          { key: 'partyName', label: 'Party Name' },
+          { key: 'total', label: 'Total Billed' },
+          { key: 'paid', label: 'Total Paid' },
+          { key: 'outstanding', label: 'Outstanding' },
+        ];
+        
+        // Calculate totals
+        const totals = calculateOutstandingTotals(data);
+        const totalRow = {
+          partyName: `TOTAL (${totals.partyCount} parties)`,
+          total: totals.total,
+          paid: totals.paid,
+          outstanding: totals.outstanding,
+        };
+        
+        rows = [...data, totalRow];
+        filename = 'outstanding-report';
+        title = 'Outstanding Report';
+      } else if (reportType === 'bill-register') {
+        columns = [
+          { key: 'invoiceNumber', label: 'Invoice No.' },
+          { key: 'invoiceDate', label: 'Date' },
+          { key: 'party', label: 'Party' },
+          { key: 'totalAmount', label: 'Amount' },
+          { key: 'paymentStatus', label: 'Status' },
+        ];
+        const billData = data.map(row => ({
+          invoiceNumber: row.invoiceNumber || row.number || row.id,
+          invoiceDate: row.invoiceDate || row.date || '',
+          party: partyList.find(p => p.id === (row.party || row.customerId))?.firmName || row.party || row.customerId || '',
+          totalAmount: row.totalAmount || row.amount || 0,
+          paymentStatus: row.paymentStatus || 'Unpaid',
+        }));
+        
+        // Calculate totals
+        const totals = calculateBillRegisterTotals(billData);
+        const totalRow = {
+          invoiceNumber: `TOTAL (${totals.billCount} bills)`,
+          invoiceDate: '',
+          party: '',
+          totalAmount: totals.totalAmount,
+          paymentStatus: '',
+        };
+        
+        rows = [...billData, totalRow];
+        filename = 'bill-register';
+        title = 'Bill Register';
+      } else if (reportType === 'challan' || reportType === 'quotation' || reportType === 'purchase-orders') {
+        columns = [
+          { key: 'number', label: reportType === 'challan' ? 'Challan No.' : reportType === 'quotation' ? 'Quotation No.' : 'Order No.' },
+          { key: 'date', label: 'Date' },
+          { key: 'party', label: 'Party' },
+          { key: 'amount', label: 'Amount' },
+        ];
+        const documentData = data.map(row => ({
+          number: row.challanNumber || row.quotationNumber || row.orderNumber || row.id,
+          date: row.date || row.challanDate || row.quotationDate || row.orderDate || '',
+          party: row.partyName || row.party || '',
+          amount: row.amount || 0,
+        }));
+        
+        // Calculate totals
+        const totals = calculateChallanQuotationTotals(documentData);
+        const totalRow = {
+          number: `TOTAL (${totals.documentCount} ${reportType === 'challan' ? 'challans' : reportType === 'quotation' ? 'quotations' : 'orders'})`,
+          date: '',
+          party: '',
+          amount: totals.amount,
+        };
+        
+        rows = [...documentData, totalRow];
+        filename = reportType;
+        title = reportType === 'challan' ? 'Challan List' : reportType === 'quotation' ? 'Quotation List' : 'Purchase Orders';
+      } else if (reportType === 'customer-ledger' || reportType === 'supplier-ledger') {
+        columns = [
+          { key: 'date', label: 'Date' },
+          { key: 'description', label: 'Description' },
+          { key: 'billAmount', label: 'Bill Amount' },
+          { key: 'payment', label: 'Payment' },
+          { key: 'balance', label: 'Balance' },
+        ];
+        const ledgerData = data.map(row => ({
+          date: row.date,
+          description: row.description,
+          billAmount: row.type === 'bill' ? row.amount : '',
+          payment: row.type === 'payment' ? row.amount : '',
+          balance: row.balance,
+        }));
+        
+        // Calculate totals
+        const totals = calculateLedgerTotals(ledgerData);
+        const totalRow = {
+          date: `TOTAL (${totals.entryCount} entries)`,
+          description: '',
+          billAmount: totals.billAmount,
+          payment: totals.payment,
+          balance: totals.finalBalance,
+        };
+        
+        rows = [...ledgerData, totalRow];
+        filename = reportType;
+        title = reportType === 'customer-ledger' ? 'Customer Ledger' : 'Supplier Ledger';
+      } else if (reportType === 'daybook' || reportType === 'sales-register' || reportType === 'purchase-register' || reportType === 'profit-loss' || reportType === 'ledger' || reportType === 'daily-sales-receipts') {
+        columns = Object.keys(data[0] || {}).map(k => ({ key: k, label: k }));
+        rows = data;
+        filename = reportType;
+        title = REPORT_GROUPS.find(group => group.options.some(opt => opt.value === reportType))?.label || reportType;
+      } else if (reportType === 'expenses') {
+        const columns = [
+          { key: 'date', label: 'Date' },
+          { key: 'head', label: 'Expense Head' },
+          { key: 'amount', label: 'Amount' },
+          { key: 'description', label: 'Description' },
+          { key: 'receiptUrl', label: 'Receipt' },
+        ];
+        const rows = expenses
+          .filter(e => (!dateFrom || e.date >= dateFrom) && (!dateTo || e.date <= dateTo) && (!expenseHead || e.head === expenseHead));
+        await multiTableCSV([{ arr: rows, columns, tableTitle: 'Expenses' }], 'expenses');
+        multiTableExcel([{ arr: rows, columns, tableTitle: 'Expenses' }], 'expenses.xlsx');
+        await arrayToPDF(rows, columns, 'expenses.pdf', 'Expenses');
+        return;
+      } else {
+        alert('Export is not supported for this report type yet.');
+        return;
+      }
+      // Wrap single-table in tables array for export helpers
+      tables = [
+        { arr: rows, columns, tableTitle: title }
+      ];
+    }
+    // Export logic
+    if (exportFormat === 'pdf') {
+      await multiTablePDF(tables, filename + '.pdf', title);
+    } else if (exportFormat === 'excel') {
+      multiTableExcel(tables, filename + '.xlsx');
+    } else if (exportFormat === 'csv') {
+      await multiTableCSV(tables, filename);
+    }
   };
 
   // Handler for viewing bills in Itemwise Report
   function handleViewBills(itemId) {
-    const salesBills = itemwiseSalesArr.filter(bill => (bill.rows || []).some(row2 => row2.item === itemId)).map(bill => ({ ...bill, _billType: 'Sales' }));
-    const purchaseBills = itemwisePurchaseArr.filter(bill => (bill.rows || []).some(row2 => row2.item === itemId)).map(bill => ({ ...bill, _billType: 'Purchase' }));
-    setModalBills([...salesBills, ...purchaseBills]);
+    // Simple logic: Find bills containing this item
+    const salesBills = itemwiseSalesArr
+      .filter(bill => (bill.rows || []).some(row => row.item === itemId))
+      .map(bill => ({ 
+        ...bill, 
+        _billType: 'Sales',
+        displayNumber: bill.invoiceNumber || bill.number || bill.id
+      }));
+    
+    const purchaseBills = itemwisePurchaseArr
+      .filter(bill => (bill.rows || []).some(row => row.item === itemId))
+      .map(bill => ({ 
+        ...bill, 
+        _billType: 'Purchase',
+        displayNumber: bill.billNumber || bill.number || bill.id
+      }));
+    
+    // Combine and sort by date
+    const allBills = [...salesBills, ...purchaseBills].sort((a, b) => {
+      const dateA = a.invoiceDate || a.billDate || a.date || '';
+      const dateB = b.invoiceDate || b.billDate || b.date || '';
+      return dateB.localeCompare(dateA);
+    });
+    
+    setModalBills(allBills);
     setShowModal(true);
   }
 
@@ -632,22 +1646,153 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
     <div className="flex flex-wrap gap-4 mb-4 items-end">
       <div>
         <label className="block text-xs font-medium text-gray-700">Report Type</label>
-        <select value={reportType} onChange={e => setReportType(e.target.value)} className="border rounded p-2">
-          {REPORT_TYPES.map(rt => <option key={rt.value} value={rt.value}>{rt.label}</option>)}
+        <select value={reportType} onChange={e => setReportType(e.target.value)} className="border rounded p-2 min-w-[160px]">
+          {REPORT_GROUPS.map(group => (
+            <optgroup key={group.label} label={group.label}>
+              {group.options.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </optgroup>
+          ))}
         </select>
       </div>
-      <div>
-        <label className="block text-xs font-medium text-gray-700">From</label>
-        <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="border rounded p-2" />
+      
+      {/* Time Filter Section (updated to match Payments.js) */}
+      <div className="flex flex-wrap gap-4 items-end">
+        <div>
+          <label className="block text-xs font-medium text-gray-700">Time Filter</label>
+          <select
+            value={timeFilter}
+            onChange={(e) => {
+              setTimeFilter(e.target.value);
+              // Reset sub-filters when changing main filter
+              setSelectedSubFilter('');
+              setSelectedMonth('');
+              setSelectedQuarter('');
+            }}
+            className="border rounded p-2 min-w-[120px]"
+          >
+            <option value="all">All Time</option>
+            <option value="custom">Custom</option>
+            <option value="financial">Financial Year</option>
+          </select>
+        </div>
+
+        {/* Custom Date Range */}
+        {timeFilter === 'custom' && (
+          <>
+            <div>
+              <label className="block text-xs font-medium text-gray-700">From Date</label>
+              <input
+                type="date"
+                value={customDateFrom}
+                onChange={(e) => setCustomDateFrom(e.target.value)}
+                className="border rounded p-2 min-w-[140px]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700">To Date</label>
+              <input
+                type="date"
+                value={customDateTo}
+                onChange={(e) => setCustomDateTo(e.target.value)}
+                className="border rounded p-2 min-w-[140px]"
+              />
+            </div>
+          </>
+        )}
+
+        {/* Financial Year Filter */}
+        {timeFilter === 'financial' && (
+          <>
+            <div>
+              <label className="block text-xs font-medium text-gray-700">Financial Year</label>
+              <select
+                value={selectedFinancialYear}
+                onChange={(e) => {
+                  setSelectedFinancialYear(e.target.value);
+                  // Reset sub-filters when changing financial year
+                  setSelectedSubFilter('');
+                  setSelectedMonth('');
+                  setSelectedQuarter('');
+                }}
+                className="border rounded p-2 min-w-[140px]"
+              >
+                <option value="">Select Financial Year</option>
+                {getAvailableFinancialYears().map(year => (
+                  <option key={year} value={year}>{year}</option>
+                ))}
+              </select>
+            </div>
+            
+            {/* Sub-filter for Financial Year */}
+            <div>
+              <label className="block text-xs font-medium text-gray-700">Filter Type</label>
+              <select
+                value={selectedSubFilter}
+                onChange={(e) => {
+                  setSelectedSubFilter(e.target.value);
+                  setSelectedMonth('');
+                  setSelectedQuarter('');
+                }}
+                className="border rounded p-2 min-w-[160px]"
+              >
+                <option value="">Full Financial Year</option>
+                <option value="month">Specific Month</option>
+                <option value="quarter">Specific Quarter</option>
+              </select>
+            </div>
+            
+            {/* Month Filter (only when sub-filter is 'month') */}
+            {selectedSubFilter === 'month' && (
+              <div>
+                <label className="block text-xs font-medium text-gray-700">Month</label>
+                <select
+                  value={selectedMonth}
+                  onChange={(e) => setSelectedMonth(e.target.value)}
+                  className="border rounded p-2 min-w-[140px]"
+                >
+                  <option value="">Select Month</option>
+                  <option value="04-25">April 2025</option>
+                  <option value="05-25">May 2025</option>
+                  <option value="06-25">June 2025</option>
+                  <option value="07-25">July 2025</option>
+                  <option value="08-25">August 2025</option>
+                  <option value="09-25">September 2025</option>
+                  <option value="10-25">October 2025</option>
+                  <option value="11-25">November 2025</option>
+                  <option value="12-25">December 2025</option>
+                  <option value="01-26">January 2026</option>
+                  <option value="02-26">February 2026</option>
+                  <option value="03-26">March 2026</option>
+                </select>
+              </div>
+            )}
+            
+            {/* Quarter Filter (only when sub-filter is 'quarter') */}
+            {selectedSubFilter === 'quarter' && (
+              <div>
+                <label className="block text-xs font-medium text-gray-700">Quarter</label>
+                <select
+                  value={selectedQuarter}
+                  onChange={(e) => setSelectedQuarter(e.target.value)}
+                  className="border rounded p-2 min-w-[160px]"
+                >
+                  <option value="">Select Quarter</option>
+                  {getCurrentFinancialYearQuarters().map(quarter => (
+                    <option key={quarter.value} value={quarter.value}>{quarter.label}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </>
+        )}
       </div>
-      <div>
-        <label className="block text-xs font-medium text-gray-700">To</label>
-        <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="border rounded p-2" />
-      </div>
+      
       {(reportType.startsWith('partywise')) && (
         <div>
           <label className="block text-xs font-medium text-gray-700">Party</label>
-          <select value={selectedParty} onChange={e => setSelectedParty(e.target.value)} className="border rounded p-2">
+          <select value={selectedParty} onChange={e => setSelectedParty(e.target.value)} className="border rounded p-2 min-w-[140px]">
             <option value="">All Parties</option>
             {partyList.map(p => <option key={p.id} value={p.id}>{p.firmName}</option>)}
           </select>
@@ -656,12 +1801,20 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
       {(reportType.startsWith('itemwise') || reportType === 'stock') && (
         <div>
           <label className="block text-xs font-medium text-gray-700">Item</label>
-          <select value={selectedItem} onChange={e => setSelectedItem(e.target.value)} className="border rounded p-2">
+          <select value={selectedItem} onChange={e => setSelectedItem(e.target.value)} className="border rounded p-2 min-w-[140px]">
             <option value="">All Items</option>
             {itemList.map(i => <option key={i.id} value={i.id}>{i.itemName}</option>)}
           </select>
         </div>
       )}
+      <div>
+        <label className="block text-xs font-medium text-gray-700">Export Format</label>
+        <select value={exportFormat} onChange={e => setExportFormat(e.target.value)} className="border rounded p-2 min-w-[100px]">
+          <option value="csv">CSV</option>
+          <option value="excel">Excel</option>
+          <option value="pdf">PDF</option>
+        </select>
+      </div>
       <button onClick={handleExport} className="bg-green-600 text-white px-4 py-2 rounded shadow">Export</button>
     </div>
   );
@@ -673,6 +1826,20 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
       const outstanding = (row.total || 0) - totalPaid;
       return { ...row, totalPaid, outstanding };
     });
+    
+    // Calculate totals
+    const totals = calculatePartywiseTotals(data);
+    const totalRow = {
+      partyName: `TOTAL (${totals.partyCount} parties)`,
+      partyType: '',
+      gstin: '',
+      total: totals.total,
+      totalPaid: totals.totalPaid,
+      outstanding: totals.outstanding,
+      billCount: totals.billCount,
+      bills: []
+    };
+    
     const sortFns = getSortFns('partywise-sales');
     const config = sortConfigs['partywise-sales'] || { key: '', direction: 'asc' };
     let sortedData = [...preparedData];
@@ -682,6 +1849,8 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
         return config.direction === 'asc' ? res : -res;
       });
     }
+    // Add total row at the end
+    sortedData.push(totalRow);
     return (
       <div className="overflow-x-auto rounded-lg border border-gray-200">
         <table className="min-w-full divide-y divide-gray-200 text-sm">
@@ -705,17 +1874,20 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
             </tr>
           </thead>
           <tbody>
-            {sortedData.map((row, idx) => (
-              <tr key={idx} className="hover:bg-blue-50">
-                <td className="px-4 py-2 text-center font-semibold">{row.partyName}</td>
-                <td className="px-4 py-2 text-center">{row.partyType}</td>
-                <td className="px-4 py-2 text-center">{row.gstin}</td>
-                <td className="px-4 py-2 text-center">₹{(row.total || 0).toLocaleString('en-IN')}</td>
-                <td className="px-4 py-2 text-center">₹{(row.totalPaid || 0).toLocaleString('en-IN')}</td>
-                <td className="px-4 py-2 text-center font-bold">₹{(row.outstanding || 0).toLocaleString('en-IN')}</td>
-                <td className="px-4 py-2 text-center text-blue-700 underline cursor-pointer" onClick={() => { setModalBills(row.bills); setShowModal(true); }}>{row.billCount}</td>
-              </tr>
-            ))}
+            {sortedData.map((row, idx) => {
+              const isTotalRow = row.partyName?.includes('TOTAL');
+              return (
+                <tr key={idx} className={isTotalRow ? "bg-gray-100 font-bold" : "hover:bg-blue-50"}>
+                  <td className="px-4 py-2 text-center font-semibold">{row.partyName}</td>
+                  <td className="px-4 py-2 text-center">{row.partyType}</td>
+                  <td className="px-4 py-2 text-center">{row.gstin}</td>
+                  <td className="px-4 py-2 text-center">₹{(row.total || 0).toLocaleString('en-IN')}</td>
+                  <td className="px-4 py-2 text-center">₹{(row.totalPaid || 0).toLocaleString('en-IN')}</td>
+                  <td className="px-4 py-2 text-center font-bold">₹{(row.outstanding || 0).toLocaleString('en-IN')}</td>
+                  <td className="px-4 py-2 text-center text-blue-700 underline cursor-pointer" onClick={() => { setModalBills(row.bills); setShowModal(true); }}>{row.billCount}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -733,6 +1905,19 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
         return config.direction === 'asc' ? res : -res;
       });
     }
+    
+    // Calculate totals
+    const totals = calculateChallanQuotationTotals(data);
+    const totalRow = {
+      challanNumber: `TOTAL (${totals.documentCount} challans)`,
+      date: '',
+      partyName: '',
+      amount: totals.amount
+    };
+    
+    // Add total row at the end
+    sortedData.push(totalRow);
+    
     return (
       <div className="overflow-x-auto rounded-lg border border-gray-200">
         <table className="min-w-full divide-y divide-gray-200 text-sm">
@@ -745,14 +1930,17 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
             </tr>
           </thead>
           <tbody>
-            {sortedData.map((row, idx) => (
-              <tr key={idx} className="hover:bg-blue-50">
-                <td className="px-4 py-2 text-center">{row.challanNumber || row.id}</td>
-                <td className="px-4 py-2 text-center">{row.date || row.challanDate}</td>
-                <td className="px-4 py-2 text-center">{row.partyName || row.party || ''}</td>
-                <td className="px-4 py-2 text-center">₹{(row.amount || 0).toLocaleString('en-IN')}</td>
-              </tr>
-            ))}
+            {sortedData.map((row, idx) => {
+              const isTotalRow = row.challanNumber?.includes('TOTAL');
+              return (
+                <tr key={idx} className={isTotalRow ? "bg-gray-100 font-bold" : "hover:bg-blue-50"}>
+                  <td className="px-4 py-2 text-center">{row.challanNumber || row.id}</td>
+                  <td className="px-4 py-2 text-center">{row.date || row.challanDate}</td>
+                  <td className="px-4 py-2 text-center">{row.partyName || row.party || ''}</td>
+                  <td className="px-4 py-2 text-center">₹{(row.amount || 0).toLocaleString('en-IN')}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -770,6 +1958,19 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
         return config.direction === 'asc' ? res : -res;
       });
     }
+    
+    // Calculate totals
+    const totals = calculateChallanQuotationTotals(data);
+    const totalRow = {
+      quotationNumber: `TOTAL (${totals.documentCount} quotations)`,
+      date: '',
+      partyName: '',
+      amount: totals.amount
+    };
+    
+    // Add total row at the end
+    sortedData.push(totalRow);
+    
     return (
       <div className="overflow-x-auto rounded-lg border border-gray-200">
         <table className="min-w-full divide-y divide-gray-200 text-sm">
@@ -782,14 +1983,17 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
             </tr>
           </thead>
           <tbody>
-            {sortedData.map((row, idx) => (
-              <tr key={idx} className="hover:bg-blue-50">
-                <td className="px-4 py-2 text-center">{row.quotationNumber || row.id}</td>
-                <td className="px-4 py-2 text-center">{row.date || row.quotationDate}</td>
-                <td className="px-4 py-2 text-center">{row.partyName || row.party || ''}</td>
-                <td className="px-4 py-2 text-center">₹{(row.amount || 0).toLocaleString('en-IN')}</td>
-              </tr>
-            ))}
+            {sortedData.map((row, idx) => {
+              const isTotalRow = row.quotationNumber?.includes('TOTAL');
+              return (
+                <tr key={idx} className={isTotalRow ? "bg-gray-100 font-bold" : "hover:bg-blue-50"}>
+                  <td className="px-4 py-2 text-center">{row.quotationNumber || row.id}</td>
+                  <td className="px-4 py-2 text-center">{row.date || row.quotationDate}</td>
+                  <td className="px-4 py-2 text-center">{row.partyName || row.party || ''}</td>
+                  <td className="px-4 py-2 text-center">₹{(row.amount || 0).toLocaleString('en-IN')}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -807,6 +2011,19 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
         return config.direction === 'asc' ? res : -res;
       });
     }
+    
+    // Calculate totals
+    const totals = calculateChallanQuotationTotals(data);
+    const totalRow = {
+      orderNumber: `TOTAL (${totals.documentCount} orders)`,
+      date: '',
+      partyName: '',
+      amount: totals.amount
+    };
+    
+    // Add total row at the end
+    sortedData.push(totalRow);
+    
     return (
       <div className="overflow-x-auto rounded-lg border border-gray-200">
         <table className="min-w-full divide-y divide-gray-200 text-sm">
@@ -819,14 +2036,17 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
             </tr>
           </thead>
           <tbody>
-            {sortedData.map((row, idx) => (
-              <tr key={idx} className="hover:bg-blue-50">
-                <td className="px-4 py-2 text-center">{row.orderNumber || row.id}</td>
-                <td className="px-4 py-2 text-center">{row.date || row.orderDate}</td>
-                <td className="px-4 py-2 text-center">{row.partyName || row.party || ''}</td>
-                <td className="px-4 py-2 text-center">₹{(row.amount || 0).toLocaleString('en-IN')}</td>
-              </tr>
-            ))}
+            {sortedData.map((row, idx) => {
+              const isTotalRow = row.orderNumber?.includes('TOTAL');
+              return (
+                <tr key={idx} className={isTotalRow ? "bg-gray-100 font-bold" : "hover:bg-blue-50"}>
+                  <td className="px-4 py-2 text-center">{row.orderNumber || row.id}</td>
+                  <td className="px-4 py-2 text-center">{row.date || row.orderDate}</td>
+                  <td className="px-4 py-2 text-center">{row.partyName || row.party || ''}</td>
+                  <td className="px-4 py-2 text-center">₹{(row.amount || 0).toLocaleString('en-IN')}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -840,26 +2060,48 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
         <div className="bg-white rounded-lg shadow-lg p-6 max-w-2xl w-full relative">
           <button onClick={() => setShowModal(false)} className="absolute top-2 right-2 text-gray-500 hover:text-gray-800 text-xl">&times;</button>
           <h3 className="text-lg font-bold mb-4">Bill List</h3>
-          <table className="min-w-full divide-y divide-gray-200 text-sm">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-4 py-2 text-center">Type</th>
-                <th className="px-4 py-2 text-center">Invoice No.</th>
-                <th className="px-4 py-2 text-center">Date</th>
-                <th className="px-4 py-2 text-center">Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              {modalBills.map((bill, idx) => (
-                <tr key={idx} className="hover:bg-blue-50">
-                  <td className="px-4 py-2 text-center">{bill._billType}</td>
-                  <td className="px-4 py-2 text-center text-blue-700 underline cursor-pointer" onClick={() => { setSelectedBillSummary(bill); setShowBillSummaryModal(true); }}>{bill.invoiceNumber || bill.number || bill.id}</td>
-                  <td className="px-4 py-2 text-center">{bill.invoiceDate || bill.billDate || bill.date || ''}</td>
-                  <td className="px-4 py-2 text-center">₹{(bill.totalAmount || bill.amount || 0).toLocaleString('en-IN')}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {modalBills.length > 0 ? (
+            <>
+              <div className="text-sm text-gray-600 mb-4">
+                Showing {modalBills.length} bills for the selected item
+              </div>
+              <table className="min-w-full divide-y divide-gray-200 text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-2 text-center">Type</th>
+                    <th className="px-4 py-2 text-center">Bill No.</th>
+                    <th className="px-4 py-2 text-center">Date</th>
+                    <th className="px-4 py-2 text-center">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {modalBills.map((bill, idx) => (
+                    <tr key={idx} className="hover:bg-blue-50">
+                      <td className="px-4 py-2 text-center">{bill._billType}</td>
+                      <td className="px-4 py-2 text-center">
+                        <span 
+                          className="text-blue-700 underline cursor-pointer" 
+                          onClick={(e) => { 
+                            e.preventDefault(); 
+                            setSelectedBillSummary(bill); 
+                            setShowBillSummaryModal(true); 
+                          }}
+                        >
+                          {bill.displayNumber || bill.invoiceNumber || bill.billNumber || bill.number || bill.id}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 text-center">{bill.invoiceDate || bill.billDate || bill.date || ''}</td>
+                      <td className="px-4 py-2 text-center">₹{(bill.totalAmount || bill.amount || 0).toLocaleString('en-IN')}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          ) : (
+            <div className="text-center py-8 text-gray-500">
+              <p>No bills found for the selected item.</p>
+            </div>
+          )}
         </div>
       </div>
     )
@@ -945,6 +2187,19 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
         return config.direction === 'asc' ? res : -res;
       });
     }
+    
+    // Calculate totals
+    const totals = calculateOutstandingTotals(data);
+    const totalRow = {
+      partyName: `TOTAL (${totals.partyCount} parties)`,
+      total: totals.total,
+      paid: totals.paid,
+      outstanding: totals.outstanding
+    };
+    
+    // Add total row at the end
+    sortedData.push(totalRow);
+    
     return (
       <div className="overflow-x-auto rounded-lg border border-gray-200">
         <table className="min-w-full divide-y divide-gray-200 text-sm">
@@ -957,14 +2212,17 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
             </tr>
           </thead>
           <tbody>
-            {sortedData.map((row, idx) => (
-              <tr key={idx} className="hover:bg-blue-50">
-                <td className="px-4 py-2 text-center">{row.partyName}</td>
-                <td className="px-4 py-2 text-center">₹{(row.total || 0).toLocaleString('en-IN')}</td>
-                <td className="px-4 py-2 text-center">₹{(row.paid || 0).toLocaleString('en-IN')}</td>
-                <td className="px-4 py-2 text-center font-bold">₹{(row.outstanding || 0).toLocaleString('en-IN')}</td>
-              </tr>
-            ))}
+            {sortedData.map((row, idx) => {
+              const isTotalRow = row.partyName?.includes('TOTAL');
+              return (
+                <tr key={idx} className={isTotalRow ? "bg-gray-100 font-bold" : "hover:bg-blue-50"}>
+                  <td className="px-4 py-2 text-center">{row.partyName}</td>
+                  <td className="px-4 py-2 text-center">₹{(row.total || 0).toLocaleString('en-IN')}</td>
+                  <td className="px-4 py-2 text-center">₹{(row.paid || 0).toLocaleString('en-IN')}</td>
+                  <td className="px-4 py-2 text-center font-bold">₹{(row.outstanding || 0).toLocaleString('en-IN')}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -978,6 +2236,20 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
       const outstanding = (row.total || 0) - totalPaid;
       return { ...row, totalPaid, outstanding };
     });
+    
+    // Calculate totals
+    const totals = calculatePartywiseTotals(data);
+    const totalRow = {
+      partyName: `TOTAL (${totals.partyCount} parties)`,
+      partyType: '',
+      gstin: '',
+      total: totals.total,
+      totalPaid: totals.totalPaid,
+      outstanding: totals.outstanding,
+      billCount: totals.billCount,
+      bills: []
+    };
+    
     const sortFns = getSortFns('partywise-purchase');
     const config = sortConfigs['partywise-purchase'] || { key: '', direction: 'asc' };
     let sortedData = [...preparedData];
@@ -987,6 +2259,8 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
         return config.direction === 'asc' ? res : -res;
       });
     }
+    // Add total row at the end
+    sortedData.push(totalRow);
     return (
       <div className="overflow-x-auto rounded-lg border border-gray-200">
         <table className="min-w-full divide-y divide-gray-200 text-sm">
@@ -1002,17 +2276,20 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
             </tr>
           </thead>
           <tbody>
-            {sortedData.map((row, idx) => (
-              <tr key={idx} className="hover:bg-blue-50">
-                <td className="px-4 py-2 text-center font-semibold">{row.partyName}</td>
-                <td className="px-4 py-2 text-center">{row.partyType}</td>
-                <td className="px-4 py-2 text-center">{row.gstin}</td>
-                <td className="px-4 py-2 text-center">₹{(row.total || 0).toLocaleString('en-IN')}</td>
-                <td className="px-4 py-2 text-center">₹{(row.totalPaid || 0).toLocaleString('en-IN')}</td>
-                <td className="px-4 py-2 text-center font-bold">₹{(row.outstanding || 0).toLocaleString('en-IN')}</td>
-                <td className="px-4 py-2 text-center text-blue-700 underline cursor-pointer" onClick={() => { setModalBills(row.bills); setShowModal(true); }}>{row.billCount}</td>
-              </tr>
-            ))}
+            {sortedData.map((row, idx) => {
+              const isTotalRow = row.partyName?.includes('TOTAL');
+              return (
+                <tr key={idx} className={isTotalRow ? "bg-gray-100 font-bold" : "hover:bg-blue-50"}>
+                  <td className="px-4 py-2 text-center font-semibold">{row.partyName}</td>
+                  <td className="px-4 py-2 text-center">{row.partyType}</td>
+                  <td className="px-4 py-2 text-center">{row.gstin}</td>
+                  <td className="px-4 py-2 text-center">₹{(row.total || 0).toLocaleString('en-IN')}</td>
+                  <td className="px-4 py-2 text-center">₹{(row.totalPaid || 0).toLocaleString('en-IN')}</td>
+                  <td className="px-4 py-2 text-center font-bold">₹{(row.outstanding || 0).toLocaleString('en-IN')}</td>
+                  <td className="px-4 py-2 text-center text-blue-700 underline cursor-pointer" onClick={() => { setModalBills(row.bills); setShowModal(true); }}>{row.billCount}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -1057,6 +2334,19 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
         purchaseBills: g.purchaseBills,
       };
     });
+    // Calculate totals
+    const totals = calculateItemwiseTotals(result);
+    const totalRow = {
+      itemId: 'total',
+      itemName: `TOTAL (${totals.itemCount} items)`,
+      hsn: '',
+      totalSales: totals.totalSales,
+      totalPurchases: totals.totalPurchases,
+      profitLoss: totals.profitLoss,
+      salesBills: totals.salesBills,
+      purchaseBills: totals.purchaseBills,
+    };
+    
     // Render new itemwise report table
     const sortFns = getSortFns('itemwise-report');
     const config = sortConfigs['itemwise-report'] || { key: '', direction: 'asc' };
@@ -1067,6 +2357,8 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
         return config.direction === 'asc' ? res : -res;
       });
     }
+    // Add total row at the end
+    sortedResult.push(totalRow);
     return (
       <div className="overflow-x-auto rounded-lg border border-gray-200">
         <table className="min-w-full divide-y divide-gray-200 text-sm">
@@ -1081,20 +2373,27 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
             </tr>
           </thead>
           <tbody>
-            {sortedResult.map(row => (
-              <tr key={row.itemId}>
-                <td className="px-4 py-2 text-center">{row.itemName}</td>
-                <td className="px-4 py-2 text-center">{row.hsn}</td>
-                <td className="px-4 py-2 text-center">₹{(row.totalSales || 0).toLocaleString('en-IN')}</td>
-                <td className="px-4 py-2 text-center">₹{(row.totalPurchases || 0).toLocaleString('en-IN')}</td>
-                <td className="px-4 py-2 text-center font-bold {row.profitLoss >= 0 ? 'text-green-700' : 'text-red-700'}">₹{(row.profitLoss || 0).toLocaleString('en-IN')}</td>
-                <td className="px-4 py-2 text-center">
-                  <a href="#" onClick={() => handleViewBills(row.itemId)} className="text-blue-700 underline cursor-pointer">
-                    {row.salesBills} / {row.purchaseBills}
-                  </a>
-                </td>
-              </tr>
-            ))}
+            {sortedResult.map(row => {
+              const isTotalRow = row.itemName?.includes('TOTAL');
+              return (
+                <tr key={row.itemId} className={isTotalRow ? "bg-gray-100 font-bold" : ""}>
+                  <td className="px-4 py-2 text-center">{row.itemName}</td>
+                  <td className="px-4 py-2 text-center">{row.hsn}</td>
+                  <td className="px-4 py-2 text-center">₹{(row.totalSales || 0).toLocaleString('en-IN')}</td>
+                  <td className="px-4 py-2 text-center">₹{(row.totalPurchases || 0).toLocaleString('en-IN')}</td>
+                  <td className="px-4 py-2 text-center font-bold {row.profitLoss >= 0 ? 'text-green-700' : 'text-red-700'}">₹{(row.profitLoss || 0).toLocaleString('en-IN')}</td>
+                  <td className="px-4 py-2 text-center">
+                    {isTotalRow ? (
+                      `${row.salesBills} / ${row.purchaseBills}`
+                    ) : (
+                      <a href="#" onClick={(e) => { e.preventDefault(); handleViewBills(row.itemId); }} className="text-blue-700 underline cursor-pointer">
+                        {row.salesBills} / {row.purchaseBills}
+                      </a>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -1165,6 +2464,21 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
         purchaseBills: g.purchaseBills,
       };
     });
+    // Calculate totals
+    const totals = calculateStockTotals(result);
+    const totalRow = {
+      itemId: 'total',
+      itemName: `TOTAL (${totals.itemCount} items)`,
+      hsn: '',
+      openingStock: totals.openingStock,
+      purchased: totals.purchased,
+      totalQty: totals.totalQty,
+      sold: totals.sold,
+      stock: totals.stock,
+      salesBills: totals.salesBills,
+      purchaseBills: totals.purchaseBills,
+    };
+    
     const sortFns = getSortFns('stock');
     const config = sortConfigs['stock'] || { key: '', direction: 'asc' };
     let sortedResult = [...result];
@@ -1174,6 +2488,8 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
         return config.direction === 'asc' ? res : -res;
       });
     }
+    // Add total row at the end
+    sortedResult.push(totalRow);
     return (
       <div className="overflow-x-auto rounded-lg border border-gray-200">
         <table className="min-w-full divide-y divide-gray-200 text-sm">
@@ -1190,22 +2506,29 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
             </tr>
           </thead>
           <tbody>
-            {sortedResult.map(row => (
-              <tr key={row.itemId}>
-                <td className="px-4 py-2 text-center">{row.itemName}</td>
-                <td className="px-4 py-2 text-center">{row.hsn}</td>
-                <td className="px-4 py-2 text-center">{row.openingStock}</td>
-                <td className="px-4 py-2 text-center">{row.purchased}</td>
-                <td className="px-4 py-2 text-center">{row.totalQty}</td>
-                <td className="px-4 py-2 text-center">{row.sold}</td>
-                <td className="px-4 py-2 text-center">{row.stock}</td>
-                <td className="px-4 py-2 text-center">
-                  <a href="#" onClick={() => handleViewBills(row.itemId)} className="text-blue-700 underline cursor-pointer">
-                    {row.salesBills} / {row.purchaseBills}
-                  </a>
-                </td>
-              </tr>
-            ))}
+            {sortedResult.map(row => {
+              const isTotalRow = row.itemName?.includes('TOTAL');
+              return (
+                <tr key={row.itemId} className={isTotalRow ? "bg-gray-100 font-bold" : ""}>
+                  <td className="px-4 py-2 text-center">{row.itemName}</td>
+                  <td className="px-4 py-2 text-center">{row.hsn}</td>
+                  <td className="px-4 py-2 text-center">{row.openingStock}</td>
+                  <td className="px-4 py-2 text-center">{row.purchased}</td>
+                  <td className="px-4 py-2 text-center">{row.totalQty}</td>
+                  <td className="px-4 py-2 text-center">{row.sold}</td>
+                  <td className="px-4 py-2 text-center">{row.stock}</td>
+                  <td className="px-4 py-2 text-center">
+                    {isTotalRow ? (
+                      `${row.salesBills} / ${row.purchaseBills}`
+                    ) : (
+                      <a href="#" onClick={(e) => { e.preventDefault(); handleViewBills(row.itemId); }} className="text-blue-700 underline cursor-pointer">
+                        {row.salesBills} / {row.purchaseBills}
+                      </a>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -1214,121 +2537,8 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
 
   // Add this function below renderItemwiseReport
   const renderGSTSummaryRegular = () => {
-    // 1. Sales/Outward GST Table (Invoice-wise, multi-rate per invoice)
-    const salesRows = [];
-    itemwiseSalesArr.forEach(bill => {
-      const partyName = partyList.find(p => p.id === bill.party)?.firmName || bill.party || 'Unknown';
-      const gstMap = {};
-      (bill.rows || []).forEach(row => {
-        const gstPercent = (parseFloat(row.sgst || 0) + parseFloat(row.cgst || 0) + parseFloat(row.igst || 0)) || 0;
-        const key = gstPercent;
-        if (!gstMap[key]) gstMap[key] = { gstPercent, taxable: 0, cgst: 0, sgst: 0, igst: 0 };
-        gstMap[key].taxable += parseFloat(row.amount) || 0;
-        gstMap[key].cgst += ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0)) / 100;
-        gstMap[key].sgst += ((parseFloat(row.amount) || 0) * (parseFloat(row.sgst) || 0)) / 100;
-        gstMap[key].igst += ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0)) / 100;
-      });
-      const gstArr = Object.values(gstMap);
-      gstArr.forEach((g, idx) => {
-        salesRows.push({
-          invoiceNumber: idx === 0 ? (bill.invoiceNumber || bill.number || bill.id) : '',
-          bill: idx === 0 ? bill : null,
-          partyName: idx === 0 ? partyName : '',
-          gstPercent: g.gstPercent,
-          taxable: g.taxable,
-          cgst: g.cgst,
-          sgst: g.sgst,
-          igst: g.igst,
-          net: g.cgst + g.sgst + g.igst,
-          showButton: idx === 0,
-        });
-      });
-    });
-    // 2. Purchase/Inward GST Table (Invoice-wise, multi-rate per invoice)
-    const purchaseRows = [];
-    itemwisePurchaseArr.forEach(bill => {
-      const partyName = partyList.find(p => p.id === bill.party)?.firmName || bill.party || 'Unknown';
-      const gstMap = {};
-      (bill.rows || []).forEach(row => {
-        const gstPercent = (parseFloat(row.sgst || 0) + parseFloat(row.cgst || 0) + parseFloat(row.igst || 0)) || 0;
-        const key = gstPercent;
-        if (!gstMap[key]) gstMap[key] = { gstPercent, taxable: 0, cgst: 0, sgst: 0, igst: 0 };
-        gstMap[key].taxable += parseFloat(row.amount) || 0;
-        gstMap[key].cgst += ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0)) / 100;
-        gstMap[key].sgst += ((parseFloat(row.amount) || 0) * (parseFloat(row.sgst) || 0)) / 100;
-        gstMap[key].igst += ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0)) / 100;
-      });
-      const gstArr = Object.values(gstMap);
-      gstArr.forEach((g, idx) => {
-        purchaseRows.push({
-          invoiceNumber: idx === 0 ? (bill.invoiceNumber || bill.number || bill.id) : '',
-          bill: idx === 0 ? bill : null,
-          partyName: idx === 0 ? partyName : '',
-          gstPercent: g.gstPercent,
-          taxable: g.taxable,
-          cgst: g.cgst,
-          sgst: g.sgst,
-          igst: g.igst,
-          net: g.cgst + g.sgst + g.igst,
-          showButton: idx === 0,
-        });
-      });
-    });
-    // 3. Item-wise GST summary (replaces HSN-wise summary)
-    const itemSummaryMap = {};
-    itemList.forEach(item => {
-      itemSummaryMap[item.id] = {
-        itemName: item.itemName || '',
-        hsn: item.hsnCode || item.hsn || 'N/A',
-        gstPercent: null,
-        taxableOut: 0, outputCGST: 0, outputSGST: 0, outputIGST: 0,
-        taxableIn: 0, inputCGST: 0, inputSGST: 0, inputIGST: 0
-      };
-    });
-    // Sales (Output Tax)
-    itemwiseSalesArr.forEach(bill => {
-      (bill.rows || []).forEach(row => {
-        const itemId = row.item;
-        if (!itemSummaryMap[itemId]) return;
-        const gstPercent = (parseFloat(row.sgst || 0) + parseFloat(row.cgst || 0) + parseFloat(row.igst || 0)) || 0;
-        itemSummaryMap[itemId].gstPercent = gstPercent;
-        itemSummaryMap[itemId].taxableOut += parseFloat(row.amount) || 0;
-        itemSummaryMap[itemId].outputCGST += ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0)) / 100;
-        itemSummaryMap[itemId].outputSGST += ((parseFloat(row.amount) || 0) * (parseFloat(row.sgst) || 0)) / 100;
-        itemSummaryMap[itemId].outputIGST += ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0)) / 100;
-      });
-    });
-    // Purchases (Input Tax)
-    itemwisePurchaseArr.forEach(bill => {
-      (bill.rows || []).forEach(row => {
-        const itemId = row.item;
-        if (!itemSummaryMap[itemId]) return;
-        const gstPercent = (parseFloat(row.sgst || 0) + parseFloat(row.cgst || 0) + parseFloat(row.igst || 0)) || 0;
-        itemSummaryMap[itemId].gstPercent = gstPercent;
-        itemSummaryMap[itemId].taxableIn += parseFloat(row.amount) || 0;
-        itemSummaryMap[itemId].inputCGST += ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0)) / 100;
-        itemSummaryMap[itemId].inputSGST += ((parseFloat(row.amount) || 0) * (parseFloat(row.sgst) || 0)) / 100;
-        itemSummaryMap[itemId].inputIGST += ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0)) / 100;
-      });
-    });
-    const itemSummaryArr = Object.values(itemSummaryMap).filter(row => row.taxableOut > 0 || row.taxableIn > 0);
-    // Calculate overall net payable
-    const totalNetCGST = itemSummaryArr.reduce((sum, row) => sum + (row.outputCGST - row.inputCGST), 0);
-    const totalNetSGST = itemSummaryArr.reduce((sum, row) => sum + (row.outputSGST - row.inputSGST), 0);
-    const totalNetIGST = itemSummaryArr.reduce((sum, row) => sum + (row.outputIGST - row.inputIGST), 0);
-    // After mapping salesRows and purchaseRows:
-    const totalSalesNet = salesRows.reduce((sum, row) => sum + (row.net || 0), 0);
-    const totalPurchaseNet = purchaseRows.reduce((sum, row) => sum + (row.net || 0), 0);
-    // In renderGSTSummaryRegular, add sorting for Item-wise GST Summary table
-    const sortFns = getSortFns('itemwise-report');
-    const config = sortConfigs['itemwise-report'] || { key: '', direction: 'asc' };
-    let sortedItemSummaryArr = [...itemSummaryArr];
-    if (config.key && sortFns[config.key]) {
-      sortedItemSummaryArr.sort((a, b) => {
-        const res = sortFns[config.key](a, b);
-        return config.direction === 'asc' ? res : -res;
-      });
-    }
+    const { salesRows, purchaseRows, itemSummaryArr } = getGSTSummaryTables(itemwiseSalesArr, itemwisePurchaseArr, itemList, partyList);
+    // Render tables for each section
     return (
       <div className="space-y-8">
         {/* 1. Sales/Outward GST Table */}
@@ -1350,10 +2560,23 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
             <tbody>
               {salesRows.map((row, idx) => (
                 <tr key={idx}>
-                  <td className="px-4 py-2 text-center">
-                    {row.showButton ? <button className="text-blue-700 underline cursor-pointer" onClick={() => setSelectedBillSummary(row.bill) || setShowBillSummaryModal(true)}>{row.invoiceNumber}</button> : ''}
-                  </td>
-                  <td className="px-4 py-2 text-center">{row.showButton ? row.partyName : ''}</td>
+                  <td className="px-4 py-2 text-center text-blue-700 underline cursor-pointer" onClick={(e) => {
+                    e.preventDefault();
+                    let bill = itemwiseSalesArr.find(b => b.invoiceNumber === row.invoiceNumber);
+                    if (!bill) {
+                      // Fallback: search by other fields
+                      bill = itemwiseSalesArr.find(b => b.number === row.invoiceNumber || b.id === row.invoiceNumber);
+                    }
+                    console.log('GST Sales Click:', { invoiceNumber: row.invoiceNumber, foundBill: bill });
+                    if (bill) {
+                      setSelectedBillSummary({ ...bill, _billType: 'Sales' });
+                      setShowBillSummaryModal(true);
+                    } else {
+                      console.warn('Bill not found for invoice number:', row.invoiceNumber);
+                      alert('Bill details not found for this invoice number.');
+                    }
+                  }}>{row.invoiceNumber}</td>
+                  <td className="px-4 py-2 text-center">{row.partyName}</td>
                   <td className="px-4 py-2 text-center">₹{(row.taxable || 0).toLocaleString('en-IN')}</td>
                   <td className="px-4 py-2 text-center">{row.gstPercent}%</td>
                   <td className="px-4 py-2 text-center">₹{(row.cgst || 0).toLocaleString('en-IN')}</td>
@@ -1362,17 +2585,6 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
                   <td className="px-4 py-2 text-center font-bold">₹{(row.net || 0).toLocaleString('en-IN')}</td>
                 </tr>
               ))}
-              {/* Total row for Sales */}
-              <tr className="font-bold bg-gray-100">
-                <td className="px-4 py-2 text-center">Total</td>
-                <td className="px-4 py-2 text-center"></td>
-                <td className="px-4 py-2 text-center"></td>
-                <td className="px-4 py-2 text-center"></td>
-                <td className="px-4 py-2 text-center"></td>
-                <td className="px-4 py-2 text-center"></td>
-                <td className="px-4 py-2 text-center"></td>
-                <td className="px-4 py-2 text-center font-bold">₹{totalSalesNet.toLocaleString('en-IN')}</td>
-              </tr>
             </tbody>
           </table>
         </div>
@@ -1395,10 +2607,23 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
             <tbody>
               {purchaseRows.map((row, idx) => (
                 <tr key={idx}>
-                  <td className="px-4 py-2 text-center">
-                    {row.showButton ? <button className="text-blue-700 underline cursor-pointer" onClick={() => setSelectedBillSummary(row.bill) || setShowBillSummaryModal(true)}>{row.invoiceNumber}</button> : ''}
-                  </td>
-                  <td className="px-4 py-2 text-center">{row.showButton ? row.partyName : ''}</td>
+                  <td className="px-4 py-2 text-center text-blue-700 underline cursor-pointer" onClick={(e) => {
+                    e.preventDefault();
+                    let bill = itemwisePurchaseArr.find(b => b.billNumber === row.invoiceNumber);
+                    if (!bill) {
+                      // Fallback: search by other fields
+                      bill = itemwisePurchaseArr.find(b => b.number === row.invoiceNumber || b.id === row.invoiceNumber);
+                    }
+                    console.log('GST Purchase Click:', { invoiceNumber: row.invoiceNumber, foundBill: bill });
+                    if (bill) {
+                      setSelectedBillSummary({ ...bill, _billType: 'Purchase' });
+                      setShowBillSummaryModal(true);
+                    } else {
+                      console.warn('Bill not found for invoice number:', row.invoiceNumber);
+                      alert('Bill details not found for this invoice number.');
+                    }
+                  }}>{row.invoiceNumber}</td>
+                  <td className="px-4 py-2 text-center">{row.partyName}</td>
                   <td className="px-4 py-2 text-center">₹{(row.taxable || 0).toLocaleString('en-IN')}</td>
                   <td className="px-4 py-2 text-center">{row.gstPercent}%</td>
                   <td className="px-4 py-2 text-center">₹{(row.cgst || 0).toLocaleString('en-IN')}</td>
@@ -1407,17 +2632,6 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
                   <td className="px-4 py-2 text-center font-bold">₹{(row.net || 0).toLocaleString('en-IN')}</td>
                 </tr>
               ))}
-              {/* Total row for Purchase */}
-              <tr className="font-bold bg-gray-100">
-                <td className="px-4 py-2 text-center">Total</td>
-                <td className="px-4 py-2 text-center"></td>
-                <td className="px-4 py-2 text-center"></td>
-                <td className="px-4 py-2 text-center"></td>
-                <td className="px-4 py-2 text-center"></td>
-                <td className="px-4 py-2 text-center"></td>
-                <td className="px-4 py-2 text-center"></td>
-                <td className="px-4 py-2 text-center font-bold">₹{totalPurchaseNet.toLocaleString('en-IN')}</td>
-              </tr>
             </tbody>
           </table>
         </div>
@@ -1427,8 +2641,8 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
           <table className="min-w-full divide-y divide-gray-200 text-sm">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-4 py-2 text-center cursor-pointer select-none" onClick={() => handleTableSort('itemwise-report', 'itemName')}>Item Name{config.key === 'itemName' ? (config.direction === 'asc' ? ' ▲' : ' ▼') : ''}</th>
-                <th className="px-4 py-2 text-center cursor-pointer select-none" onClick={() => handleTableSort('itemwise-report', 'hsn')}>HSN{config.key === 'hsn' ? (config.direction === 'asc' ? ' ▲' : ' ▼') : ''}</th>
+                <th className="px-4 py-2 text-center">Item Name</th>
+                <th className="px-4 py-2 text-center">HSN</th>
                 <th className="px-4 py-2 text-center">GST %</th>
                 <th className="px-4 py-2 text-center">Taxable Outward</th>
                 <th className="px-4 py-2 text-center">Output CGST</th>
@@ -1438,13 +2652,10 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
                 <th className="px-4 py-2 text-center">Input CGST</th>
                 <th className="px-4 py-2 text-center">Input SGST</th>
                 <th className="px-4 py-2 text-center">Input IGST</th>
-                <th className="px-4 py-2 text-center">Net CGST</th>
-                <th className="px-4 py-2 text-center">Net SGST</th>
-                <th className="px-4 py-2 text-center">Net IGST</th>
               </tr>
             </thead>
             <tbody>
-              {sortedItemSummaryArr.map((row, idx) => (
+              {itemSummaryArr.map((row, idx) => (
                 <tr key={idx}>
                   <td className="px-4 py-2 text-center">{row.itemName}</td>
                   <td className="px-4 py-2 text-center">{row.hsn}</td>
@@ -1457,18 +2668,15 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
                   <td className="px-4 py-2 text-center">₹{(row.inputCGST || 0).toLocaleString('en-IN')}</td>
                   <td className="px-4 py-2 text-center">₹{(row.inputSGST || 0).toLocaleString('en-IN')}</td>
                   <td className="px-4 py-2 text-center">₹{(row.inputIGST || 0).toLocaleString('en-IN')}</td>
-                  <td className="px-4 py-2 text-center font-bold">₹{((row.outputCGST - row.inputCGST) || 0).toLocaleString('en-IN')}</td>
-                  <td className="px-4 py-2 text-center font-bold">₹{((row.outputSGST - row.inputSGST) || 0).toLocaleString('en-IN')}</td>
-                  <td className="px-4 py-2 text-center font-bold">₹{((row.outputIGST - row.inputIGST) || 0).toLocaleString('en-IN')}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <div className="font-bold text-right p-2">Overall Net Payable: CGST ₹{totalNetCGST.toLocaleString('en-IN')}, SGST ₹{totalNetSGST.toLocaleString('en-IN')}, IGST ₹{totalNetIGST.toLocaleString('en-IN')}</div>
         </div>
       </div>
     );
   };
+
   // GST Summary for Composition (existing logic)
   const renderGSTSummaryComposition = () => {
     if (companyDetails.gstinType !== 'Composition') return null;
@@ -1561,7 +2769,13 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
             <tbody>
               {salesRows.map((row, idx) => (
                 <tr key={idx}>
-                  <td className="px-4 py-2 text-center">{row.billNo}</td>
+                  <td className="px-4 py-2 text-center text-blue-700 underline cursor-pointer" onClick={() => {
+                    const bill = itemwiseSalesArr.find(b => (b.invoiceNumber === row.billNo || b.number === row.billNo || b.id === row.billNo));
+                    if (bill) {
+                      setSelectedBillSummary({ ...bill, _billType: 'Sales' });
+                      setShowBillSummaryModal(true);
+                    }
+                  }}>{row.billNo}</td>
                   <td className="px-4 py-2 text-center">{row.partyName}</td>
                   <td className="px-4 py-2 text-center">{row.gstPercent}%</td>
                   <td className="px-4 py-2 text-center">₹{(row.taxable || 0).toLocaleString('en-IN')}</td>
@@ -1618,79 +2832,127 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
   };
 
   // Render Bill Register table
-  const renderBillRegister = () => (
-    <div className="overflow-x-auto rounded-lg border border-gray-200">
-      <table className="min-w-full divide-y divide-gray-200 text-sm">
-        <thead className="bg-gray-50">
-          <tr>
-            <th className="px-4 py-2 text-center">Invoice No.</th>
-            <th className="px-4 py-2 text-center">Date</th>
-            <th className="px-4 py-2 text-center">Party</th>
-            <th className="px-4 py-2 text-center">Amount</th>
-            <th className="px-4 py-2 text-center">Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.map((row, idx) => (
-            <tr key={idx} className="hover:bg-blue-50">
-              <td className="px-4 py-2 text-center">{row.invoiceNumber || row.number || row.id}</td>
-              <td className="px-4 py-2 text-center">{row.invoiceDate || row.date || ''}</td>
-              <td className="px-4 py-2 text-center">{partyList.find(p => p.id === (row.party || row.customerId))?.firmName || row.party || row.customerId || ''}</td>
-              <td className="px-4 py-2 text-center">₹{(row.totalAmount || row.amount || 0).toLocaleString('en-IN')}</td>
-              <td className="px-4 py-2 text-center font-bold">{row.paymentStatus || 'Unpaid'}</td>
+  const renderBillRegister = () => {
+    // Calculate totals
+    const totals = calculateBillRegisterTotals(data);
+    const totalRow = {
+      invoiceNumber: `TOTAL (${totals.billCount} bills)`,
+      invoiceDate: '',
+      party: '',
+      totalAmount: totals.totalAmount,
+      paymentStatus: ''
+    };
+    
+    const allData = [...data, totalRow];
+    
+    return (
+      <div className="overflow-x-auto rounded-lg border border-gray-200">
+        <table className="min-w-full divide-y divide-gray-200 text-sm">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-4 py-2 text-center">Invoice No.</th>
+              <th className="px-4 py-2 text-center">Date</th>
+              <th className="px-4 py-2 text-center">Party</th>
+              <th className="px-4 py-2 text-center">Amount</th>
+              <th className="px-4 py-2 text-center">Status</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+          </thead>
+          <tbody>
+            {allData.map((row, idx) => {
+              const isTotalRow = row.invoiceNumber?.includes('TOTAL');
+              return (
+                <tr key={idx} className={isTotalRow ? "bg-gray-100 font-bold" : "hover:bg-blue-50"}>
+                  <td className="px-4 py-2 text-center">{row.invoiceNumber || row.number || row.id}</td>
+                  <td className="px-4 py-2 text-center">{row.invoiceDate || row.date || ''}</td>
+                  <td className="px-4 py-2 text-center">{partyList.find(p => p.id === (row.party || row.customerId))?.firmName || row.party || row.customerId || ''}</td>
+                  <td className="px-4 py-2 text-center">₹{(row.totalAmount || row.amount || 0).toLocaleString('en-IN')}</td>
+                  <td className="px-4 py-2 text-center font-bold">{row.paymentStatus || 'Unpaid'}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
 
   // Add a new modal for bill summary preview:
-  const renderBillSummaryModal = () => (
-    showBillSummaryModal && selectedBillSummary && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
-        <div className="bg-white rounded-lg shadow-lg p-6 max-w-md w-full relative">
-          <button onClick={() => setShowBillSummaryModal(false)} className="absolute top-2 right-2 text-gray-500 hover:text-gray-800 text-xl">&times;</button>
-          <h3 className="text-xl font-bold mb-4 text-center">{selectedBillSummary._billType === 'Purchase' ? 'Purchase Bill Summary' : 'Sales Bill Summary'}</h3>
-          <div className="mb-2 flex flex-col gap-1">
-            <div><span className="font-semibold">{selectedBillSummary._billType === 'Purchase' ? 'Bill Number' : 'Invoice Number'}:</span> {selectedBillSummary.number || selectedBillSummary.invoiceNumber}</div>
-            <div><span className="font-semibold">Date:</span> {(() => { const d = selectedBillSummary.invoiceDate || selectedBillSummary.billDate || selectedBillSummary.date || ''; if (d && d.includes('-')) { const [yyyy, mm, dd] = d.split('-'); return `${dd}/${mm}/${yyyy}`; } return d; })()}</div>
-            <div><span className="font-semibold">Party:</span> {(() => { const p = partyList.find(pt => pt.id === selectedBillSummary.party); return p ? p.firmName : (selectedBillSummary.party || 'Unknown'); })()}</div>
-            <div><span className="font-semibold">Amount:</span> ₹{(selectedBillSummary.totalAmount || selectedBillSummary.amount || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</div>
-            {selectedBillSummary.notes && <div><span className="font-semibold">Notes:</span> {selectedBillSummary.notes}</div>}
-          </div>
-          <div className="mt-4">
-            <div className="font-semibold mb-1">Items {selectedBillSummary._billType === 'Purchase' ? 'Purchased' : 'Sold'}:</div>
-            <ul className="list-disc list-inside text-sm">
-              {(selectedBillSummary.rows || []).map((row, i) => {
-                const itemObj = (itemList || []).find(it => it.id === row.item) || {};
-                const itemName = itemObj.itemName || row.item || '?';
-                return (
-                  <li key={i}>{itemName} (Qty: {row.qty}, Rate: ₹{row.rate})</li>
-                );
-              })}
-            </ul>
+  const renderBillSummaryModal = () => {
+    console.log('Bill Summary Modal State:', { showBillSummaryModal, selectedBillSummary });
+    return (
+      showBillSummaryModal && selectedBillSummary && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+          <div className="bg-white rounded-lg shadow-lg p-6 max-w-md w-full relative">
+            <button onClick={() => setShowBillSummaryModal(false)} className="absolute top-2 right-2 text-gray-500 hover:text-gray-800 text-xl">&times;</button>
+            <h3 className="text-xl font-bold mb-4 text-center">{selectedBillSummary._billType === 'Purchase' ? 'Purchase Bill Summary' : 'Sales Bill Summary'}</h3>
+            <div className="mb-4 flex flex-col gap-2">
+              <div><span className="font-semibold">{selectedBillSummary._billType === 'Purchase' ? 'Bill Number' : 'Invoice Number'}:</span> {selectedBillSummary.displayNumber || selectedBillSummary.invoiceNumber || selectedBillSummary.billNumber || selectedBillSummary.number}</div>
+              <div><span className="font-semibold">Date:</span> {(() => { 
+                const d = selectedBillSummary.invoiceDate || selectedBillSummary.billDate || selectedBillSummary.date || ''; 
+                if (d && d.includes('-')) { 
+                  const [yyyy, mm, dd] = d.split('-'); 
+                  return `${dd}/${mm}/${yyyy}`; 
+                } 
+                return d; 
+              })()}</div>
+              <div><span className="font-semibold">Party:</span> {(() => { 
+                const p = partyList.find(pt => pt.id === selectedBillSummary.party); 
+                return p ? p.firmName : (selectedBillSummary.party || 'Unknown'); 
+              })()}</div>
+              <div><span className="font-semibold">Amount:</span> ₹{(selectedBillSummary.totalAmount || selectedBillSummary.amount || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</div>
+              {selectedBillSummary.notes && <div><span className="font-semibold">Notes:</span> {selectedBillSummary.notes}</div>}
+            </div>
+            <div className="mt-4">
+              <div className="font-semibold mb-2">Items {selectedBillSummary._billType === 'Purchase' ? 'Purchased' : 'Sold'}:</div>
+              <ul className="list-disc list-inside text-sm space-y-1">
+                {(selectedBillSummary.rows || []).map((row, i) => {
+                  const itemObj = (itemList || []).find(it => it.id === row.item) || {};
+                  const itemName = itemObj.itemName || row.item || '?';
+                  return (
+                    <li key={i}>{itemName} (Qty: {row.qty}, Rate: ₹{row.rate})</li>
+                  );
+                })}
+              </ul>
+            </div>
           </div>
         </div>
-      </div>
-    )
-  );
+      )
+    );
+  };
 
   // Helper: get available financial years from itemwiseSalesArr, itemwisePurchaseArr, data
   function getAvailableFinancialYears() {
     const years = new Set();
+    
+    // Collect dates from all collections
     const allDates = [
+      // Sales bills
+      ...salesBills.map(b => b.invoiceDate || b.date),
+      // Challans
+      ...challans.map(b => b.challanDate || b.date),
+      // Quotations
+      ...quotations.map(b => b.quotationDate || b.date),
+      // Purchase bills
+      ...purchaseBills.map(b => b.billDate || b.date),
+      // Purchase orders
+      ...purchaseOrders.map(b => b.orderDate || b.date),
+      // Itemwise arrays (for backward compatibility)
       ...itemwiseSalesArr.map(b => b.invoiceDate),
       ...itemwisePurchaseArr.map(b => b.billDate),
+      // Current data array
       ...data.map(b => b.invoiceDate || b.billDate || b.date)
     ].filter(Boolean);
+    
     allDates.forEach(dateStr => {
       const year = parseInt(dateStr?.slice(0, 4));
       if (!isNaN(year)) {
-        const fy = dateStr.slice(5, 7) >= '04' ? `${year}-${(year + 1).toString().slice(-2)}` : `${year - 1}-${year.toString().slice(-2)}`;
+        const month = parseInt(dateStr.slice(5, 7));
+        // Financial year logic: April-March
+        const fy = month >= 4 ? `${year}-${(year + 1).toString().slice(-2)}` : `${year - 1}-${year.toString().slice(-2)}`;
         years.add(fy);
       }
     });
+    
     return Array.from(years).sort();
   }
   const availableFYs = getAvailableFinancialYears();
@@ -1734,6 +2996,8 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
     setDateFrom(pendingDateFrom);
     setDateTo(pendingDateTo);
   };
+
+
   // Sorting logic
   function sortRows(rows, columns) {
     if (!sortConfig.key) return rows;
@@ -1777,6 +3041,367 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
     });
   };
 
+  // Utility: Export multiple tables to PDF with letterhead, each on a new page
+  const multiTablePDF = async (tables, filename, title = 'Report') => {
+    const doc = new jsPDF();
+    for (let i = 0; i < tables.length; i++) {
+      const { arr, columns, tableTitle } = tables[i];
+      // Letterhead (reuse your existing logic)
+      let y = 16;
+      if (companyDetails.logoUrl) {
+        try {
+          const imgData = await fetch(companyDetails.logoUrl)
+            .then(res => res.blob())
+            .then(blob => new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(reader.result);
+              reader.onerror = reject;
+              reader.readAsDataURL(blob);
+            }));
+          doc.addImage(imgData, 'PNG', 14, 10, 24, 24);
+        } catch (e) {
+          console.warn('Could not load logo for PDF:', e);
+        }
+      }
+      const leftX = companyDetails.logoUrl ? 40 : 14;
+      doc.setFontSize(14);
+      doc.text(companyDetails.firmName || '', leftX, 16);
+      doc.setFontSize(10);
+      let detailsY = 22;
+      if (companyDetails.address) { doc.text(companyDetails.address, leftX, detailsY); detailsY += 6; }
+      if (companyDetails.city || companyDetails.state || companyDetails.pincode) {
+        doc.text([
+          companyDetails.city, companyDetails.state, companyDetails.pincode
+        ].filter(Boolean).join(', '), leftX, detailsY); detailsY += 6;
+      }
+      if (companyDetails.gstin) { doc.text('GSTIN: ' + companyDetails.gstin, leftX, detailsY); detailsY += 6; }
+      if (companyDetails.contactNumber) { doc.text('Contact: ' + companyDetails.contactNumber, leftX, detailsY); detailsY += 6; }
+      if (companyDetails.email) { doc.text('Email: ' + companyDetails.email, leftX, detailsY); detailsY += 6; }
+      doc.setFontSize(12);
+      doc.text(tableTitle || title, 14, detailsY + 6);
+      doc.autoTable({
+        head: [columns.map(col => col.label)],
+        body: arr.map(row => columns.map(col => row[col.key] ?? '')),
+        startY: detailsY + 12,
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: [41, 128, 185] },
+        bodyStyles: { fontSize: 8 },
+        alternateRowStyles: { fillColor: [248, 249, 250] },
+        didParseCell: function(data) {
+          // Apply custom styling to total rows
+          if (data.row.index < arr.length) {
+            const row = arr[data.row.index];
+            const isTotalRow = row.partyName?.includes('TOTAL') || 
+                              row.itemName?.includes('TOTAL') || 
+                              row.invoiceNumber?.includes('TOTAL') ||
+                              row.number?.includes('TOTAL') ||
+                              row.date?.includes('TOTAL');
+            
+            if (isTotalRow) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [240, 240, 240];
+              data.cell.styles.textColor = [0, 0, 0];
+            }
+          }
+        }
+      });
+      if (i < tables.length - 1) doc.addPage();
+    }
+    doc.save(filename);
+  };
+
+  // Utility: Export multiple tables to Excel (XLSX) with a sheet for each
+  const multiTableExcel = (tables, filename) => {
+    const wb = XLSX.utils.book_new();
+    tables.forEach(({ arr, columns, tableTitle }) => {
+      const wsData = [columns.map(col => col.label), ...arr.map(row => columns.map(col => row[col.key] ?? ''))];
+      const ws = XLSX.utils.aoa_to_sheet(wsData);
+      XLSX.utils.book_append_sheet(wb, ws, tableTitle.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 31));
+    });
+    XLSX.writeFile(wb, filename);
+  };
+
+  // Utility: Export multiple tables to CSV (zipped)
+  const multiTableCSV = async (tables, filenameBase) => {
+    const zip = new JSZip();
+    for (const { arr, columns, tableTitle } of tables) {
+      const csvRows = [columns.map(col => '"' + col.label + '"').join(',')];
+      arr.forEach(row => {
+        csvRows.push(columns.map(col => '"' + (row[col.key] ?? '') + '"').join(','));
+      });
+      zip.file(tableTitle.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 31) + '.csv', csvRows.join('\n'));
+    }
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filenameBase + '.zip';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+  };
+
+  // Partywise Challan
+  const renderPartywiseChallan = () => {
+    // Group challans by party
+    const partyMap = {};
+    challans.forEach(row => {
+      const partyId = row.partyId || row.party || 'Unknown';
+      if (!partyMap[partyId]) partyMap[partyId] = { partyId, challans: [], total: 0, totalPaid: 0, partyType: '', gstin: '' };
+      partyMap[partyId].challans.push(row);
+      partyMap[partyId].total += parseFloat(row.amount || 0);
+    });
+    // Join party details
+    Object.values(partyMap).forEach(party => {
+      const partyObj = partyList.find(pt => pt.id === party.partyId) || {};
+      party.partyName = partyObj.firmName || party.partyId;
+      party.partyType = partyObj.type || '';
+      party.gstin = partyObj.gstin || '';
+      // For each challan, sum payments
+      party.challans.forEach(challan => {
+        const challanPayments = payments.filter(p =>
+          p.allocations && p.allocations.some(a => a.billId === challan.id && a.billType === 'challan')
+        );
+        challan.totalPaid = challanPayments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+      });
+      party.totalPaid = party.challans.reduce((sum, c) => sum + (c.totalPaid || 0), 0);
+      party.outstanding = party.total - party.totalPaid;
+    });
+    const partywise = Object.values(partyMap);
+    // Calculate totals
+    const totalRow = {
+      partyName: `TOTAL (${partywise.length} parties)`,
+      partyType: '',
+      gstin: '',
+      total: partywise.reduce((sum, p) => sum + p.total, 0),
+      totalPaid: partywise.reduce((sum, p) => sum + p.totalPaid, 0),
+      outstanding: partywise.reduce((sum, p) => sum + p.outstanding, 0),
+      challanCount: partywise.reduce((sum, p) => sum + p.challans.length, 0),
+    };
+    return (
+      <div className="overflow-x-auto rounded-lg border border-gray-200">
+        <table className="min-w-full divide-y divide-gray-200 text-sm">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-4 py-2 text-center">Party Name</th>
+              <th className="px-4 py-2 text-center">Party Type</th>
+              <th className="px-4 py-2 text-center">GSTIN</th>
+              <th className="px-4 py-2 text-center">Total Challans</th>
+              <th className="px-4 py-2 text-center">Total Amount</th>
+              <th className="px-4 py-2 text-center">Total Paid</th>
+              <th className="px-4 py-2 text-center">Outstanding</th>
+            </tr>
+          </thead>
+          <tbody>
+            {partywise.map((row, idx) => (
+              <tr key={idx} className="hover:bg-blue-50">
+                <td className="px-4 py-2 text-center font-semibold">{row.partyName}</td>
+                <td className="px-4 py-2 text-center">{row.partyType}</td>
+                <td className="px-4 py-2 text-center">{row.gstin}</td>
+                <td className="px-4 py-2 text-center">{row.challans.length}</td>
+                <td className="px-4 py-2 text-center">₹{row.total.toLocaleString('en-IN')}</td>
+                <td className="px-4 py-2 text-center">₹{row.totalPaid.toLocaleString('en-IN')}</td>
+                <td className="px-4 py-2 text-center font-bold">₹{row.outstanding.toLocaleString('en-IN')}</td>
+              </tr>
+            ))}
+            <tr className="bg-gray-100 font-bold">
+              <td className="px-4 py-2 text-center">{totalRow.partyName}</td>
+              <td className="px-4 py-2 text-center"></td>
+              <td className="px-4 py-2 text-center"></td>
+              <td className="px-4 py-2 text-center">{totalRow.challanCount}</td>
+              <td className="px-4 py-2 text-center">₹{totalRow.total.toLocaleString('en-IN')}</td>
+              <td className="px-4 py-2 text-center">₹{totalRow.totalPaid.toLocaleString('en-IN')}</td>
+              <td className="px-4 py-2 text-center">₹{totalRow.outstanding.toLocaleString('en-IN')}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  // Partywise Quotation
+  const renderPartywiseQuotation = () => {
+    const partyMap = {};
+    quotations.forEach(row => {
+      const partyId = row.partyId || row.party || 'Unknown';
+      if (!partyMap[partyId]) partyMap[partyId] = { partyId, quotations: [], total: 0, partyType: '', gstin: '' };
+      partyMap[partyId].quotations.push(row);
+      partyMap[partyId].total += parseFloat(row.amount || 0);
+    });
+    Object.values(partyMap).forEach(party => {
+      const partyObj = partyList.find(pt => pt.id === party.partyId) || {};
+      party.partyName = partyObj.firmName || party.partyId;
+      party.partyType = partyObj.type || '';
+      party.gstin = partyObj.gstin || '';
+    });
+    const partywise = Object.values(partyMap);
+    const totalRow = {
+      partyName: `TOTAL (${partywise.length} parties)`,
+      partyType: '',
+      gstin: '',
+      total: partywise.reduce((sum, p) => sum + p.total, 0),
+      quotationCount: partywise.reduce((sum, p) => sum + p.quotations.length, 0),
+    };
+    return (
+      <div className="overflow-x-auto rounded-lg border border-gray-200">
+        <table className="min-w-full divide-y divide-gray-200 text-sm">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-4 py-2 text-center">Party Name</th>
+              <th className="px-4 py-2 text-center">Party Type</th>
+              <th className="px-4 py-2 text-center">GSTIN</th>
+              <th className="px-4 py-2 text-center">Total Quotations</th>
+              <th className="px-4 py-2 text-center">Total Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {partywise.map((row, idx) => (
+              <tr key={idx} className="hover:bg-blue-50">
+                <td className="px-4 py-2 text-center font-semibold">{row.partyName}</td>
+                <td className="px-4 py-2 text-center">{row.partyType}</td>
+                <td className="px-4 py-2 text-center">{row.gstin}</td>
+                <td className="px-4 py-2 text-center">{row.quotations.length}</td>
+                <td className="px-4 py-2 text-center">₹{row.total.toLocaleString('en-IN')}</td>
+              </tr>
+            ))}
+            <tr className="bg-gray-100 font-bold">
+              <td className="px-4 py-2 text-center">{totalRow.partyName}</td>
+              <td className="px-4 py-2 text-center"></td>
+              <td className="px-4 py-2 text-center"></td>
+              <td className="px-4 py-2 text-center">{totalRow.quotationCount}</td>
+              <td className="px-4 py-2 text-center">₹{totalRow.total.toLocaleString('en-IN')}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  // Partywise Purchase Orders
+  const renderPartywisePurchaseOrders = () => {
+    const partyMap = {};
+    purchaseOrders.forEach(row => {
+      const partyId = row.partyId || row.party || 'Unknown';
+      if (!partyMap[partyId]) partyMap[partyId] = { partyId, orders: [], total: 0, partyType: '', gstin: '' };
+      partyMap[partyId].orders.push(row);
+      partyMap[partyId].total += parseFloat(row.amount || 0);
+    });
+    Object.values(partyMap).forEach(party => {
+      const partyObj = partyList.find(pt => pt.id === party.partyId) || {};
+      party.partyName = partyObj.firmName || party.partyId;
+      party.partyType = partyObj.type || '';
+      party.gstin = partyObj.gstin || '';
+    });
+    const partywise = Object.values(partyMap);
+    const totalRow = {
+      partyName: `TOTAL (${partywise.length} parties)`,
+      partyType: '',
+      gstin: '',
+      total: partywise.reduce((sum, p) => sum + p.total, 0),
+      orderCount: partywise.reduce((sum, p) => sum + p.orders.length, 0),
+    };
+    return (
+      <div className="overflow-x-auto rounded-lg border border-gray-200">
+        <table className="min-w-full divide-y divide-gray-200 text-sm">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-4 py-2 text-center">Party Name</th>
+              <th className="px-4 py-2 text-center">Party Type</th>
+              <th className="px-4 py-2 text-center">GSTIN</th>
+              <th className="px-4 py-2 text-center">Total Orders</th>
+              <th className="px-4 py-2 text-center">Total Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {partywise.map((row, idx) => (
+              <tr key={idx} className="hover:bg-blue-50">
+                <td className="px-4 py-2 text-center font-semibold">{row.partyName}</td>
+                <td className="px-4 py-2 text-center">{row.partyType}</td>
+                <td className="px-4 py-2 text-center">{row.gstin}</td>
+                <td className="px-4 py-2 text-center">{row.orders.length}</td>
+                <td className="px-4 py-2 text-center">₹{row.total.toLocaleString('en-IN')}</td>
+              </tr>
+            ))}
+            <tr className="bg-gray-100 font-bold">
+              <td className="px-4 py-2 text-center">{totalRow.partyName}</td>
+              <td className="px-4 py-2 text-center"></td>
+              <td className="px-4 py-2 text-center"></td>
+              <td className="px-4 py-2 text-center">{totalRow.orderCount}</td>
+              <td className="px-4 py-2 text-center">₹{totalRow.total.toLocaleString('en-IN')}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  // Expense heads (should match entry form)
+  const EXPENSE_HEADS = [
+    'Rent', 'Utilities', 'Salaries & Wages', 'Employee Benefits', 'Office Supplies',
+    'Telephone & Internet', 'Travel & Conveyance', 'Repairs & Maintenance', 'Professional Fees',
+    'Advertising & Marketing', 'Insurance', 'Depreciation', 'Bank Charges', 'Interest Paid',
+    'Printing & Stationery', 'Postage & Courier', 'Vehicle Expenses', 'Licenses & Subscriptions',
+    'Training & Development', 'Miscellaneous Expenses',
+  ];
+
+  // Render Expenses report table
+  const renderExpensesReport = () => {
+    // Filter by date and head
+    let filtered = expenses;
+    if (dateFrom) filtered = filtered.filter(e => e.date >= dateFrom);
+    if (dateTo) filtered = filtered.filter(e => e.date <= dateTo);
+    if (expenseHead) filtered = filtered.filter(e => e.head === expenseHead);
+    // Sort by date desc
+    filtered = filtered.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    // Calculate total
+    const total = filtered.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
+    return (
+      <div className="overflow-x-auto rounded-lg border border-gray-200 mt-4">
+        <table className="min-w-full divide-y divide-gray-200 text-sm">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-4 py-2 text-center">Date</th>
+              <th className="px-4 py-2 text-center">Expense Head</th>
+              <th className="px-4 py-2 text-center">Amount</th>
+              <th className="px-4 py-2 text-center">Description</th>
+              <th className="px-4 py-2 text-center">Receipt</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((e, idx) => (
+              <tr key={e.id || idx} className="hover:bg-blue-50">
+                <td className="px-4 py-2 text-center">{e.date}</td>
+                <td className="px-4 py-2 text-center">{e.head}</td>
+                <td className="px-4 py-2 text-center">₹{(e.amount || 0).toLocaleString('en-IN')}</td>
+                <td className="px-4 py-2 text-center">{e.description}</td>
+                <td className="px-4 py-2 text-center">
+                  {e.receiptUrl ? <a href={e.receiptUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">View</a> : ''}
+                </td>
+              </tr>
+            ))}
+            <tr className="bg-gray-100 font-bold">
+              <td className="px-4 py-2 text-center" colSpan={2}>TOTAL</td>
+              <td className="px-4 py-2 text-center">₹{total.toLocaleString('en-IN')}</td>
+              <td colSpan={2}></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  // Fetch payments for use in renderPartywiseChallan
+  useEffect(() => {
+    if (!db || !userId || !isAuthReady) return;
+    const paymentsRef = collection(db, `artifacts/${appId}/users/${userId}/payments`);
+    const unsub = onSnapshot(paymentsRef, (snap) => {
+      let arr = [];
+      snap.forEach(doc => arr.push({ id: doc.id, ...doc.data() }));
+      setPayments(arr);
+    });
+    return () => unsub();
+  }, [db, userId, isAuthReady, appId]);
+
   // Main render
   return (
     <div className="p-6 bg-white rounded-lg shadow-md">
@@ -1800,6 +3425,10 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
       {reportType === 'stock' && renderStockReport()}
       {reportType === 'gst-summary-regular' && companyDetails.gstinType === 'Regular' && renderGSTSummaryRegular()}
       {reportType === 'gst-summary-composition' && companyDetails.gstinType === 'Composition' && renderGSTSummaryComposition()}
+      {reportType === 'partywise-challan' && renderPartywiseChallan()}
+      {reportType === 'partywise-quotation' && renderPartywiseQuotation()}
+      {reportType === 'partywise-purchase-orders' && renderPartywisePurchaseOrders()}
+      {reportType === 'expenses' && renderExpensesReport()}
       {/* TODO: Add more report renderers here */}
     </div>
   );

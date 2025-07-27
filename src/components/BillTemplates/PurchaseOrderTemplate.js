@@ -22,7 +22,7 @@ function numToWords(num) {
   return numberToWordsIndian(num) + ' Rupees Only';
 }
 
-function PurchaseOrderTemplate({ billData = {}, companyDetails = {}, partyDetails = {}, bankDetails = {}, payments = [] }) {
+function PurchaseOrderTemplate({ billData = {}, companyDetails = {}, partyDetails = {}, bankDetails = {} }) {
   const items = billData.items || billData.rows || [];
   const subtotal = items.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0);
   const discount = billData.discountType === 'percent'
@@ -191,33 +191,7 @@ function PurchaseOrderTemplate({ billData = {}, companyDetails = {}, partyDetail
         <div className="font-semibold mb-1">Terms and Conditions:</div>
         <div className="whitespace-pre-line text-gray-700">{terms || 'N/A'}</div>
       </div>
-      {/* Payment Details */}
-      {payments && payments.length > 0 && (
-        <div className="mt-4 mb-2">
-          <div className="font-semibold mb-1">Payment Details:</div>
-          <div>Status: {grandTotal - (payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0)) <= 0 ? 'Paid' : 'Unpaid'}  Total Paid: ₹{formatINR(payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0))}  Remaining Due: <span className="text-red-600">₹{formatINR(grandTotal - (payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0)))}</span></div>
-          <table className="w-full text-sm mb-2 border mt-2">
-            <thead>
-              <tr className="bg-gray-100">
-                <th className="border px-2 py-1">Amount</th>
-                <th className="border px-2 py-1">Date</th>
-                <th className="border px-2 py-1">Mode</th>
-                <th className="border px-2 py-1">Reference/Notes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {payments.map((p, idx) => (
-                <tr key={idx}>
-                  <td className="border px-2 py-1 text-right">₹{formatINR(p.amount)}</td>
-                  <td className="border px-2 py-1">{p.date}</td>
-                  <td className="border px-2 py-1">{p.mode}</td>
-                  <td className="border px-2 py-1">{p.reference}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+
       {/* Seal and Sign - show together */}
       <div className="flex flex-row items-end justify-end gap-8 mt-8 mb-2">
         {companyDetails.sealUrl && (

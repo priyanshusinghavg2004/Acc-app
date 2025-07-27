@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { collection, onSnapshot, doc, addDoc, serverTimestamp, getDoc, setDoc, deleteDoc, getDocs } from 'firebase/firestore';
+import { collection, onSnapshot, doc, addDoc, serverTimestamp, getDoc, setDoc, deleteDoc, getDocs, query } from 'firebase/firestore';
 import BillTemplates from './BillTemplates';
 import InvoiceTemplate from './BillTemplates/InvoiceTemplate';
 import ChallanTemplate from './BillTemplates/ChallanTemplate';
 import QuotationTemplate from './BillTemplates/QuotationTemplate';
+
 import { useLocation } from 'react-router-dom';
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
 
 const initialItemRow = {
   item: '',
@@ -67,6 +70,10 @@ function round2(val) {
   return Math.round((parseFloat(val) + Number.EPSILON) * 100) / 100;
 }
 
+
+
+
+
 function Sales({ db, userId, isAuthReady, appId }) {
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);
@@ -74,14 +81,8 @@ function Sales({ db, userId, isAuthReady, appId }) {
   const [paymentStatus, setPaymentStatus] = useState('Pending');
   const [notes, setNotes] = useState('');
   const [rows, setRows] = useState([{ ...initialItemRow }]);
-  // Payment state variables
-  const [payments, setPayments] = useState([]);
-  const [newPayment, setNewPayment] = useState({ amount: '', date: new Date().toISOString().split('T')[0], mode: 'Cash', reference: '' });
-  const addPayment = () => {
-    if (!newPayment.amount || parseFloat(newPayment.amount) <= 0) return;
-    setPayments([...payments, { ...newPayment }]);
-    setNewPayment({ amount: '', date: new Date().toISOString().split('T')[0], mode: 'Cash', reference: '' });
-  };
+
+
   // Remove template selection, always use SunriseTemplate
   // Remove print-related state and function
   // Remove: const [showPrint, setShowPrint] = useState(false);
@@ -97,6 +98,17 @@ function Sales({ db, userId, isAuthReady, appId }) {
   
   // ADD ITEM Modal states
   const [showAddItemModal, setShowAddItemModal] = useState(false);
+  
+  // Payment Modal states
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
+  const [paymentMode, setPaymentMode] = useState('Cash');
+  const [paymentReference, setPaymentReference] = useState('');
+  const [paymentNotes, setPaymentNotes] = useState('');
+  const [receiptNumber, setReceiptNumber] = useState('');
+  const [payments, setPayments] = useState([]);
+  const [selectedBillForPayment, setSelectedBillForPayment] = useState(null);
   const [newItemName, setNewItemName] = useState('');
   const [newItemMeasurement, setNewItemMeasurement] = useState('');
   const [newItemRate, setNewItemRate] = useState('');
@@ -116,7 +128,6 @@ function Sales({ db, userId, isAuthReady, appId }) {
   const [filterDate, setFilterDate] = useState('');
   const [filterParty, setFilterParty] = useState('');
   const [filterAmount, setFilterAmount] = useState('');
-  const [filterPaymentStatus, setFilterPaymentStatus] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   
   // Add state for document type (Invoice, Challan, Quotation)
@@ -213,6 +224,77 @@ function Sales({ db, userId, isAuthReady, appId }) {
       return () => unsubscribe();
     }
   }, [db, userId, isAuthReady, appId]);
+
+  // Fetch payments
+  useEffect(() => {
+    if (db && userId && isAuthReady) {
+      const paymentsQuery = query(collection(db, `artifacts/${appId}/users/${userId}/payments`));
+      const unsubscribe = onSnapshot(paymentsQuery, (snapshot) => {
+        const paymentsData = [];
+        snapshot.forEach((doc) => {
+          paymentsData.push({ id: doc.id, ...doc.data() });
+        });
+        setPayments(paymentsData);
+      });
+      return () => unsubscribe();
+    }
+  }, [db, userId, isAuthReady, appId]);
+
+  // Generate receipt number for sales payments
+  const generateReceiptNumber = async () => {
+    const currentYear = new Date().getFullYear();
+    const financialYear = `${currentYear.toString().slice(-2)}-${(currentYear + 1).toString().slice(-2)}`;
+    const paymentType = docType === 'invoice' ? 'I' : docType === 'challan' ? 'C' : 'Q';
+    
+    try {
+      const paymentsQuery = query(collection(db, `artifacts/${appId}/users/${userId}/payments`));
+      const paymentsSnapshot = await getDocs(paymentsQuery);
+      
+      let highestSequence = 0;
+      
+      paymentsSnapshot.forEach((doc) => {
+        const payment = doc.data();
+        if (payment.receiptNumber) {
+          const regexPattern = new RegExp(`PR${paymentType}${financialYear.replace('-', '\\-')}\\/(\\d+)`);
+          const match = payment.receiptNumber.match(regexPattern);
+          
+          if (match) {
+            const sequence = parseInt(match[1]);
+            if (sequence > highestSequence) {
+              highestSequence = sequence;
+            }
+          }
+        }
+      });
+      
+      const nextSequence = highestSequence + 1;
+      return `PR${paymentType}${financialYear}/${nextSequence}`;
+    } catch (error) {
+      console.error('Error generating receipt number:', error);
+      return `PR${paymentType}${financialYear}/1`;
+    }
+  };
+
+  // Get party name by ID
+  const getPartyName = (partyId) => {
+    const party = parties.find(p => p.id === partyId);
+    return party ? (party.firmName || party.name) : 'Unknown Party';
+  };
+
+  // Calculate outstanding amount for a bill
+  const getBillOutstanding = (bill) => {
+    const billPayments = payments.filter(p => 
+      p.allocations && p.allocations.some(a => a.billId === bill.id && a.billType === docType)
+    );
+    
+    const totalPaid = billPayments.reduce((sum, payment) => {
+      const allocation = payment.allocations.find(a => a.billId === bill.id && a.billType === docType);
+      return sum + (allocation ? allocation.allocatedAmount : 0);
+    }, 0);
+    
+    const totalAmount = parseFloat(bill.totalAmount || bill.amount) || 0;
+    return totalAmount - totalPaid;
+  };
 
   // Fetch bills for the selected type
   useEffect(() => {
@@ -439,7 +521,6 @@ function Sales({ db, userId, isAuthReady, appId }) {
     setFilterDate('');
     setFilterParty('');
     setFilterAmount('');
-    setFilterPaymentStatus('');
   };
 
   // Get the number label for the current document type
@@ -460,8 +541,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
         (filterInvoiceNumber === '' || (bill.number || '').toLowerCase().includes(filterInvoiceNumber.toLowerCase())) &&
         (filterDate === '' || billDate.includes(filterDate)) &&
         (filterParty === '' || partyName.toLowerCase().includes(filterParty.toLowerCase())) &&
-        (filterAmount === '' || billAmount.includes(filterAmount)) &&
-        (filterPaymentStatus === '' || (bill.paymentStatus || '').toLowerCase().includes(filterPaymentStatus.toLowerCase()))
+        (filterAmount === '' || billAmount.includes(filterAmount))
       );
     });
   };
@@ -481,7 +561,6 @@ function Sales({ db, userId, isAuthReady, appId }) {
   const totalCGST = company.gstinType === 'Regular' ? round2(getRowsForCalculation().reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0) / 100), 0)) : 0;
   const totalIGST = company.gstinType === 'Regular' ? round2(getRowsForCalculation().reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0) / 100), 0)) : 0;
   const grandTotal = discountedSubtotal + totalSGST + totalCGST + totalIGST;
-  const totalPaid = round2(payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0));
 
   // Seller details from company
   const seller = {
@@ -597,17 +676,13 @@ function Sales({ db, userId, isAuthReady, appId }) {
     if (!selected) return;
     const collectionRef = collection(db, `artifacts/${appId}/users/${userId}/${selected.collection}`);
     const stockCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/stock`);
-    const totalPaid = payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
-    const paymentStatus = totalPaid >= grandTotal ? 'Paid' : totalPaid > 0 ? 'Partial' : 'Pending';
     const billData = {
       number: invoiceNumber,
       invoiceDate,
       party,
-      paymentStatus,
       notes,
       rows,
       amount: grandTotal,
-      payments, // <-- store payments array
       createdAt: serverTimestamp(),
       customFields,
       discountType,
@@ -624,6 +699,9 @@ function Sales({ db, userId, isAuthReady, appId }) {
         const docRef = await addDoc(collectionRef, billData);
         savedBill = { id: docRef.id, ...billData };
       }
+
+
+
       // Update stock for each sold item
       if (docType === 'invoice') {
         for (const row of rows) {
@@ -647,11 +725,9 @@ function Sales({ db, userId, isAuthReady, appId }) {
       setInvoiceNumber('');
       setInvoiceDate(new Date().toISOString().split('T')[0]);
       setParty('');
-      setPaymentStatus('Pending');
       setNotes('');
       setRows([{ ...initialItemRow }]);
       setEditingBillId(null);
-      setPayments([]);
     } catch (err) {
       alert("Error saving invoice: " + err.message);
     }
@@ -680,7 +756,6 @@ function Sales({ db, userId, isAuthReady, appId }) {
     setNotes(bill.notes || '');
     // Always use GST values from bill.rows when editing
     setRows((bill.rows && bill.rows.length > 0) ? bill.rows.map(row => ({ ...row })) : [{ ...initialItemRow }]);
-    setPayments(bill.payments || []);
     window.scrollTo({ top: 0, behavior: 'smooth' });
     if (bill.quotationTermsOverride !== undefined) setQuotationTermsOverride(bill.quotationTermsOverride);
     else setQuotationTermsOverride('');
@@ -708,6 +783,85 @@ function Sales({ db, userId, isAuthReady, appId }) {
   const cancelDeleteBill = () => {
     setShowDeleteConfirm(false);
     setDeletingBillId(null);
+  };
+
+  // Payment handling functions
+  const handleAddPayment = async (bill) => {
+    setPaymentAmount('');
+    setPaymentDate(new Date().toISOString().split('T')[0]);
+    setPaymentMode('Cash');
+    setPaymentReference('');
+    setPaymentNotes('');
+    setReceiptNumber('');
+    
+    // Generate receipt number
+    const receiptNum = await generateReceiptNumber();
+    setReceiptNumber(receiptNum);
+    
+    // Pre-fill with bill details
+    setPaymentAmount(getBillOutstanding(bill).toString());
+    
+    // Store the bill information for payment
+    setSelectedBillForPayment(bill);
+    setShowPaymentModal(true);
+  };
+
+  const handleSavePayment = async () => {
+    if (!selectedBillForPayment || !paymentAmount) {
+      alert('Please fill in amount field.');
+      return;
+    }
+
+    try {
+      const paymentAmountNum = parseFloat(paymentAmount);
+      const billOutstanding = getBillOutstanding(selectedBillForPayment);
+      const allocatedAmount = Math.min(paymentAmountNum, billOutstanding);
+      
+      const paymentData = {
+        receiptNumber: receiptNumber,
+        paymentDate: paymentDate,
+        partyId: selectedBillForPayment.party,
+        partyName: getPartyName(selectedBillForPayment.party),
+        totalAmount: paymentAmountNum,
+        paymentMode: paymentMode,
+        reference: paymentReference,
+        notes: paymentNotes,
+        type: docType,
+        paymentType: 'bill',
+        billId: selectedBillForPayment.id,
+        billNumber: selectedBillForPayment.number,
+        allocations: [{
+          billType: docType,
+          billId: selectedBillForPayment.id,
+          billNumber: selectedBillForPayment.number,
+          allocatedAmount: allocatedAmount,
+          billOutstanding: billOutstanding,
+          isFullPayment: allocatedAmount >= billOutstanding
+        }],
+        remainingAmount: paymentAmountNum - allocatedAmount,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      };
+
+      // Add to payments collection
+      const paymentsRef = collection(db, `artifacts/${appId}/users/${userId}/payments`);
+      await addDoc(paymentsRef, paymentData);
+      
+      // Reset payment form
+      setPaymentAmount('');
+      setPaymentDate(new Date().toISOString().split('T')[0]);
+      setPaymentMode('Cash');
+      setPaymentReference('');
+      setPaymentNotes('');
+      setReceiptNumber('');
+      setSelectedBillForPayment(null);
+      setShowPaymentModal(false);
+      
+      alert('Payment added successfully!');
+    } catch (error) {
+      console.error('Error saving payment:', error);
+      alert('Error saving payment. Please try again.');
+    }
   };
 
   // For SunriseTemplate, ensure A4 size and fixed layout
@@ -820,6 +974,10 @@ function Sales({ db, userId, isAuthReady, appId }) {
       }
     }
   }, [location.search, bills]);
+
+
+
+
 
     return (
     <div className="min-h-screen bg-gray-100 flex flex-col items-center py-8">
@@ -1034,83 +1192,23 @@ function Sales({ db, userId, isAuthReady, appId }) {
               <div className="flex justify-between mt-2 font-bold text-lg"><span>Grand Total (Incl. GST):</span><span className="text-blue-700">₹{grandTotal}</span></div>
             </div>
           </div>
-          {/* Payment Section */}
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6 w-full md:w-2/3 mx-auto">
-            <h4 className="text-lg font-semibold mb-2">Payment Details</h4>
-            <div className="mb-2">
-              <span className="font-medium">Status: </span>
-              {totalPaid >= grandTotal ? 'Paid' : totalPaid > 0 ? 'Partial' : 'Unpaid'}
-              <span className="ml-4 font-medium">Total Paid: </span>₹{totalPaid.toFixed(2)}
-              <span className="ml-4 font-medium text-red-600">Remaining Due: </span>₹{(grandTotal - totalPaid).toFixed(2)}
-            </div>
-            <table className="w-full text-sm mb-2 border">
-              <thead>
-                <tr className="bg-gray-100">
-                  <th className="border px-2 py-1">Amount</th>
-                  <th className="border px-2 py-1">Date</th>
-                  <th className="border px-2 py-1">Mode</th>
-                  <th className="border px-2 py-1">Reference/Notes</th>
-                  <th className="border px-2 py-1">Remove</th>
-                </tr>
-              </thead>
-              <tbody>
-                {payments.map((p, idx) => (
-                  <tr key={idx}>
-                    <td className="border px-2 py-1 text-right">₹{parseFloat(p.amount).toFixed(2)}</td>
-                    <td className="border px-2 py-1">{p.date}</td>
-                    <td className="border px-2 py-1">{p.mode}</td>
-                    <td className="border px-2 py-1">{p.reference}</td>
-                    <td className="border px-2 py-1 text-center">
-                      <button type="button" className="text-red-600 font-bold" onClick={() => setPayments(payments.filter((_, i) => i !== idx))}>X</button>
-                    </td>
-                  </tr>
-                ))}
-                {payments.length === 0 && (
-                  <tr><td colSpan={5} className="text-center text-gray-400 py-2">No payments yet</td></tr>
-                )}
-              </tbody>
-            </table>
-            {/* Add Payment Form */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Amount</label>
-                <input type="number" min="0" step="0.01" value={newPayment.amount || ''} onChange={e => setNewPayment({ ...newPayment, amount: e.target.value })}
-                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Date</label>
-                <input type="date" value={newPayment.date || new Date().toISOString().split('T')[0]} onChange={e => setNewPayment({ ...newPayment, date: e.target.value })}
-                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Mode</label>
-                <select value={newPayment.mode || 'Cash'} onChange={e => setNewPayment({ ...newPayment, mode: e.target.value })}
-                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2">
-                  <option>Cash</option>
-                  <option>Bank</option>
-                  <option>UPI</option>
-                  <option>Cheque</option>
-                  <option>Other</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Reference/Notes</label>
-                <input type="text" value={newPayment.reference || ''} onChange={e => setNewPayment({ ...newPayment, reference: e.target.value })}
-                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2" />
-              </div>
-              <div className="md:col-span-4 mt-2">
-                <button type="button" className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md" onClick={addPayment}>Add Payment</button>
-              </div>
-                        </div>
-                    </div>
+
           <div className="flex flex-col md:flex-row gap-4">
-                    <button
+            <button
               onClick={handleSaveInvoice}
               className="flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-md shadow-md transition duration-300 ease-in-out transform hover:scale-105 print:hidden"
             >
               Save {docTypeOptions.find(opt => opt.value === docType)?.label || 'Invoice'}
-                        </button>
-                </div>
+            </button>
+            {editingBillId && (
+              <button
+                onClick={() => handleAddPayment(bills.find(b => b.id === editingBillId))}
+                className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-md shadow-md transition duration-300 ease-in-out transform hover:scale-105 print:hidden"
+              >
+                Add Payment
+              </button>
+            )}
+          </div>
           {/* Sales Bill List Section */}
           <div className="mt-10">
             <div className="flex justify-between items-center mb-4">
@@ -1182,19 +1280,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
                     />
                   </div>
                   
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Payment Status</label>
-                    <select
-                      value={filterPaymentStatus}
-                      onChange={(e) => setFilterPaymentStatus(e.target.value)}
-                      className="w-full border border-gray-300 rounded-md shadow-sm p-2"
-                    >
-                      <option value="">All Status</option>
-                      <option value="Pending">Pending</option>
-                      <option value="Paid">Paid</option>
-                      <option value="Partial">Partial</option>
-                    </select>
-                  </div>
+
 
                   {/* Removed document type filter as it's now part of the collection */}
                 </div>
@@ -1209,8 +1295,8 @@ function Sales({ db, userId, isAuthReady, appId }) {
                     <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
                     <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Party</th>
                     <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
+                    <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Paid</th>
                     <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Outstanding</th>
-                    <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Payment Status</th>
                     <th className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                                 </tr>
                             </thead>
@@ -1228,34 +1314,29 @@ function Sales({ db, userId, isAuthReady, appId }) {
                     const amount = typeof bill.amount === "number"
                       ? bill.amount.toLocaleString("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 })
                       : bill.amount;
+                    
+                    // Calculate payment information
+                    const outstanding = getBillOutstanding(bill);
+                    const totalAmount = parseFloat(bill.totalAmount || bill.amount) || 0;
+                    const totalPaid = totalAmount - outstanding;
+                    
                     return (
                       <tr key={idx}>
                         <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-center">{bill.number || bill.invoiceNumber}</td>
                         <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-center">{date}</td>
                         <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-center">{partyName}</td>
                         <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-center">{amount}</td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-center">{
-                          (() => {
-                            const paid = (bill.payments || []).reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
-                            const out = (typeof bill.amount === 'number' ? bill.amount : parseFloat(bill.amount) || 0) - paid;
-                            return `₹${out.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
-                          })()
-                        }</td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-center">
-                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                            (bill.paymentStatus || 'Pending') === 'Paid' 
-                              ? 'bg-green-100 text-green-800' 
-                              : (bill.paymentStatus || 'Pending') === 'Partial' 
-                                ? 'bg-yellow-100 text-yellow-800' 
-                                : 'bg-red-100 text-red-800'
-                          }`}>
-                            {bill.paymentStatus || 'Pending'}
-                          </span>
+                        <td className="px-4 py-2 whitespace-nowrap text-sm text-green-600 text-center font-medium">
+                          ₹{totalPaid.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="px-4 py-2 whitespace-nowrap text-sm text-red-600 text-center font-medium">
+                          ₹{outstanding.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                         </td>
                         <td className="px-4 py-2 whitespace-nowrap text-sm text-center">
                           <button onClick={() => handleViewBill(bill)} className="text-blue-600 hover:text-blue-900 font-medium mr-2">View</button>
                           <button onClick={() => handleEditBill(bill)} className="text-indigo-600 hover:text-indigo-900 font-medium mr-2">Edit</button>
-                          <button onClick={() => handleDeleteBill(bill.id)} className="text-red-600 hover:text-red-900 font-medium mr-4">Delete</button>
+                          <button onClick={() => handleDeleteBill(bill.id)} className="text-red-600 hover:text-red-900 font-medium mr-2">Delete</button>
+                          <button onClick={() => handleAddPayment(bill)} className="text-green-600 hover:text-green-900 font-medium mr-2">Payment</button>
                           <button onClick={() => { setInvoiceBill({
                             ...bill,
                             companyDetails: company,
@@ -1716,6 +1797,112 @@ function Sales({ db, userId, isAuthReady, appId }) {
           <div className="text-xs text-gray-500 mt-1">If left blank, the company's default Quotation Terms and Conditions will be used.</div>
         </div>
       )}
+
+      {/* Payment Modal */}
+      {showPaymentModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+          <div className="bg-white rounded-lg shadow-lg p-6 max-w-md w-full relative">
+            <button 
+              onClick={() => setShowPaymentModal(false)} 
+              className="absolute top-2 right-2 text-gray-500 hover:text-gray-800 text-xl"
+            >
+              &times;
+            </button>
+            
+            <h3 className="text-xl font-bold text-gray-900 mb-4">Add Payment</h3>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Receipt Number</label>
+                <input
+                  type="text"
+                  value={receiptNumber}
+                  onChange={(e) => setReceiptNumber(e.target.value)}
+                  className="w-full border border-gray-300 rounded-md shadow-sm p-2"
+                  readOnly
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Payment Date</label>
+                <input
+                  type="date"
+                  value={paymentDate}
+                  onChange={(e) => setPaymentDate(e.target.value)}
+                  className="w-full border border-gray-300 rounded-md shadow-sm p-2"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Amount</label>
+                <input
+                  type="number"
+                  value={paymentAmount}
+                  onChange={(e) => setPaymentAmount(e.target.value)}
+                  className="w-full border border-gray-300 rounded-md shadow-sm p-2"
+                  placeholder="Enter payment amount"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Payment Mode</label>
+                <select
+                  value={paymentMode}
+                  onChange={(e) => setPaymentMode(e.target.value)}
+                  className="w-full border border-gray-300 rounded-md shadow-sm p-2"
+                >
+                  <option value="Cash">Cash</option>
+                  <option value="Cheque">Cheque</option>
+                  <option value="Bank Transfer">Bank Transfer</option>
+                  <option value="UPI">UPI</option>
+                  <option value="Card">Card</option>
+                </select>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Reference</label>
+                <input
+                  type="text"
+                  value={paymentReference}
+                  onChange={(e) => setPaymentReference(e.target.value)}
+                  className="w-full border border-gray-300 rounded-md shadow-sm p-2"
+                  placeholder="Cheque number, UPI reference, etc."
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+                <textarea
+                  value={paymentNotes}
+                  onChange={(e) => setPaymentNotes(e.target.value)}
+                  className="w-full border border-gray-300 rounded-md shadow-sm p-2"
+                  rows="3"
+                  placeholder="Additional notes"
+                />
+              </div>
+            </div>
+            
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                onClick={() => {
+                  setShowPaymentModal(false);
+                  setSelectedBillForPayment(null);
+                }}
+                className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSavePayment}
+                className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded"
+              >
+                Save Payment
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
     );
 }

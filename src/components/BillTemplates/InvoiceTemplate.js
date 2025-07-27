@@ -61,7 +61,6 @@ function InvoiceTemplate({
   companyDetails = {},
   partyDetails = {},
   bankDetails = {},
-  payments = [],
   pageSize = 'a4',
   orientation = 'portrait',
   previewMode = false,
@@ -268,35 +267,7 @@ function InvoiceTemplate({
         <div className="whitespace-pre-line">{companyDetails.salesTerms || companyDetails.terms}</div>
       </div>
 
-      {/* Payment Details */}
-      <div className="mb-4">
-        <div className="font-bold">Payment Details:</div>
-        <div>Status: {previewMode ? 'XXX' : billData.paymentStatus} &nbsp; Total Paid: ₹{previewMode ? 'XXX' : (billData.totalPaid?.toFixed(2) || 0)} &nbsp; <span className="text-red-600">Remaining Due: ₹{previewMode ? 'XXX' : (billData.remainingDue?.toFixed(2) || 0)}</span></div>
-        <table className="w-full border mt-2 text-xs">
-          <thead>
-            <tr className="bg-gray-100">
-              <th className="border px-1">Amount</th>
-              <th className="border px-1">Date</th>
-              <th className="border px-1">Mode</th>
-              <th className="border px-1">Reference/Notes</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(payments || []).length === 0 ? (
-              <tr><td colSpan={4} className="border px-1 text-center">No payments</td></tr>
-            ) : (
-              payments.map((p, idx) => (
-                <tr key={idx}>
-                  <td className="border px-1 text-right">{p.amount}</td>
-                  <td className="border px-1 text-center">{p.date}</td>
-                  <td className="border px-1 text-center">{p.mode}</td>
-                  <td className="border px-1">{p.notes}</td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+
 
       {/* Disclaimer for Composition Scheme */}
       {companyDetails.gstinType === 'Composition' && (

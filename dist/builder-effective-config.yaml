@@ -1,0 +1,16 @@
+directories:
+  output: dist
+  buildResources: assets
+files:
+  - filter:
+      - build/**/*
+      - build/**/*
+      - electron-main.js
+extraMetadata:
+  main: build/electron.js
+appId: com.yourcompany.AccApp
+productName: AccApp
+win:
+  target: nsis
+extends: react-cra
+electronVersion: 37.2.4

@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { collection, onSnapshot, doc, addDoc, serverTimestamp, getDoc, setDoc, deleteDoc, getDocs } from 'firebase/firestore';
+import { collection, onSnapshot, doc, addDoc, serverTimestamp, getDoc, setDoc, deleteDoc, getDocs, query } from 'firebase/firestore';
 import BillTemplates from './BillTemplates';
 import PurchaseBillTemplate from './BillTemplates/PurchaseBillTemplate';
 import PurchaseOrderTemplate from './BillTemplates/PurchaseOrderTemplate';
+
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
 
 const initialItemRow = {
   item: '',
@@ -36,8 +39,6 @@ function Purchases({ db, userId, isAuthReady, appId }) {
   const [party, setParty] = useState('');
   const [notes, setNotes] = useState('');
   const [rows, setRows] = useState([{ ...initialItemRow }]);
-  const [payments, setPayments] = useState([]);
-  const [newPayment, setNewPayment] = useState({ amount: '', date: new Date().toISOString().split('T')[0], mode: 'Cash', reference: '' });
   const [customFields, setCustomFields] = useState({ ewayBillNo: '', ewayQr: '', ewayDate: '' });
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -58,6 +59,18 @@ function Purchases({ db, userId, isAuthReady, appId }) {
   const [showViewModal, setShowViewModal] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const escListenerRef = useRef();
+
+  // Payment Modal states
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
+  const [paymentMode, setPaymentMode] = useState('Cash');
+  const [paymentReference, setPaymentReference] = useState('');
+  const [paymentNotes, setPaymentNotes] = useState('');
+  const [receiptNumber, setReceiptNumber] = useState('');
+  const [payments, setPayments] = useState([]);
+  const [selectedBillForPayment, setSelectedBillForPayment] = useState(null);
+
 
   // Define handleViewBill
   const handleViewBill = (bill) => {
@@ -122,6 +135,77 @@ function Purchases({ db, userId, isAuthReady, appId }) {
       return () => unsubscribe();
     }
   }, [db, userId, isAuthReady, appId]);
+
+  // Fetch payments
+  useEffect(() => {
+    if (db && userId && isAuthReady) {
+      const paymentsQuery = query(collection(db, `artifacts/${appId}/users/${userId}/payments`));
+      const unsubscribe = onSnapshot(paymentsQuery, (snapshot) => {
+        const paymentsData = [];
+        snapshot.forEach((doc) => {
+          paymentsData.push({ id: doc.id, ...doc.data() });
+        });
+        setPayments(paymentsData);
+      });
+      return () => unsubscribe();
+    }
+  }, [db, userId, isAuthReady, appId]);
+
+  // Generate receipt number for purchase payments
+  const generateReceiptNumber = async () => {
+    const currentYear = new Date().getFullYear();
+    const financialYear = `${currentYear.toString().slice(-2)}-${(currentYear + 1).toString().slice(-2)}`;
+    const paymentType = 'P'; // Purchase payments
+    
+    try {
+      const paymentsQuery = query(collection(db, `artifacts/${appId}/users/${userId}/payments`));
+      const paymentsSnapshot = await getDocs(paymentsQuery);
+      
+      let highestSequence = 0;
+      
+      paymentsSnapshot.forEach((doc) => {
+        const payment = doc.data();
+        if (payment.receiptNumber) {
+          const regexPattern = new RegExp(`PR${paymentType}${financialYear.replace('-', '\\-')}\\/(\\d+)`);
+          const match = payment.receiptNumber.match(regexPattern);
+          
+          if (match) {
+            const sequence = parseInt(match[1]);
+            if (sequence > highestSequence) {
+              highestSequence = sequence;
+            }
+          }
+        }
+      });
+      
+      const nextSequence = highestSequence + 1;
+      return `PR${paymentType}${financialYear}/${nextSequence}`;
+    } catch (error) {
+      console.error('Error generating receipt number:', error);
+      return `PR${paymentType}${financialYear}/1`;
+    }
+  };
+
+  // Get party name by ID
+  const getPartyName = (partyId) => {
+    const party = parties.find(p => p.id === partyId);
+    return party ? (party.firmName || party.name) : 'Unknown Party';
+  };
+
+  // Calculate outstanding amount for a bill
+  const getBillOutstanding = (bill) => {
+    const billPayments = payments.filter(p => 
+      p.allocations && p.allocations.some(a => a.billId === bill.id && a.billType === 'purchase')
+    );
+    
+    const totalPaid = billPayments.reduce((sum, payment) => {
+      const allocation = payment.allocations.find(a => a.billId === bill.id && a.billType === 'purchase');
+      return sum + (allocation ? allocation.allocatedAmount : 0);
+    }, 0);
+    
+    const totalAmount = parseFloat(bill.totalAmount || bill.amount) || 0;
+    return totalAmount - totalPaid;
+  };
 
   // Fetch bills for the selected type
   useEffect(() => {
@@ -249,12 +333,7 @@ function Purchases({ db, userId, isAuthReady, appId }) {
   const addRow = () => setRows([...rows, { ...initialItemRow }]);
   const removeRow = idx => setRows(rows.filter((_, i) => i !== idx));
 
-  // Payment logic
-  const addPayment = () => {
-    if (!newPayment.amount || parseFloat(newPayment.amount) <= 0) return;
-    setPayments([...payments, { ...newPayment }]);
-    setNewPayment({ amount: '', date: new Date().toISOString().split('T')[0], mode: 'Cash', reference: '' });
-  };
+
 
   // Save/Update bill
   const handleSaveBill = async () => {
@@ -266,23 +345,19 @@ function Purchases({ db, userId, isAuthReady, appId }) {
     const selected = docTypeOptions.find(opt => opt.value === docType);
     if (!selected) return;
     const collectionRef = collection(db, `artifacts/${appId}/users/${userId}/${selected.collection}`);
-    const totalPaid = payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
     const subtotal = rows.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0);
     const totalSGST = rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.sgst) || 0) / 100), 0);
     const totalCGST = rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0) / 100), 0);
     const totalIGST = rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0) / 100), 0);
     const grandTotal = subtotal + totalSGST + totalCGST + totalIGST;
-    const paymentStatus = totalPaid >= grandTotal ? 'Paid' : totalPaid > 0 ? 'Partial' : 'Pending';
     const billData = {
       number: billNumber,
       billDate,
       party,
       notes,
       rows,
-      payments,
       customFields,
       amount: grandTotal,
-      paymentStatus,
       createdAt: serverTimestamp(),
     };
 
@@ -336,18 +411,23 @@ function Purchases({ db, userId, isAuthReady, appId }) {
     }
 
     try {
+      let savedBill;
       if (editingBillId) {
         const billRef = doc(db, `artifacts/${appId}/users/${userId}/${selected.collection}`, editingBillId);
         await setDoc(billRef, billData, { merge: true });
-                        } else {
-        await addDoc(collectionRef, billData);
+        savedBill = { id: editingBillId, ...billData };
+      } else {
+        const docRef = await addDoc(collectionRef, billData);
+        savedBill = { id: docRef.id, ...billData };
       }
+
+
+
       setBillNumber('');
       setBillDate(new Date().toISOString().split('T')[0]);
       setParty('');
       setNotes('');
       setRows([{ ...initialItemRow }]);
-      setPayments([]);
       setCustomFields({ ewayBillNo: '', ewayQr: '', ewayDate: '' });
       setEditingBillId(null);
       setMessage('Bill saved successfully!');
@@ -365,7 +445,6 @@ function Purchases({ db, userId, isAuthReady, appId }) {
     setParty(bill.party || '');
     setNotes(bill.notes || '');
     setRows(bill.rows || [{ ...initialItemRow }]);
-    setPayments(bill.payments || []);
     setCustomFields(bill.customFields || { ewayBillNo: '', ewayQr: '', ewayDate: '' });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -380,13 +459,91 @@ function Purchases({ db, userId, isAuthReady, appId }) {
     setMessage('Bill deleted successfully!');
   };
 
+  // Payment handling functions
+  const handleAddPayment = async (bill) => {
+    setPaymentAmount('');
+    setPaymentDate(new Date().toISOString().split('T')[0]);
+    setPaymentMode('Cash');
+    setPaymentReference('');
+    setPaymentNotes('');
+    setReceiptNumber('');
+    
+    // Generate receipt number
+    const receiptNum = await generateReceiptNumber();
+    setReceiptNumber(receiptNum);
+    
+    // Pre-fill with bill details
+    setPaymentAmount(getBillOutstanding(bill).toString());
+    
+    // Store the bill information for payment
+    setSelectedBillForPayment(bill);
+    setShowPaymentModal(true);
+  };
+
+  const handleSavePayment = async () => {
+    if (!selectedBillForPayment || !paymentAmount) {
+      alert('Please fill in amount field.');
+      return;
+    }
+
+    try {
+      const paymentAmountNum = parseFloat(paymentAmount);
+      const billOutstanding = getBillOutstanding(selectedBillForPayment);
+      const allocatedAmount = Math.min(paymentAmountNum, billOutstanding);
+      
+      const paymentData = {
+        receiptNumber: receiptNumber,
+        paymentDate: paymentDate,
+        partyId: selectedBillForPayment.party,
+        partyName: getPartyName(selectedBillForPayment.party),
+        totalAmount: paymentAmountNum,
+        paymentMode: paymentMode,
+        reference: paymentReference,
+        notes: paymentNotes,
+        type: 'purchase',
+        paymentType: 'bill',
+        billId: selectedBillForPayment.id,
+        billNumber: selectedBillForPayment.number,
+        allocations: [{
+          billType: 'purchase',
+          billId: selectedBillForPayment.id,
+          billNumber: selectedBillForPayment.number,
+          allocatedAmount: allocatedAmount,
+          billOutstanding: billOutstanding,
+          isFullPayment: allocatedAmount >= billOutstanding
+        }],
+        remainingAmount: paymentAmountNum - allocatedAmount,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      };
+
+      // Add to payments collection
+      const paymentsRef = collection(db, `artifacts/${appId}/users/${userId}/payments`);
+      await addDoc(paymentsRef, paymentData);
+      
+      // Reset payment form
+      setPaymentAmount('');
+      setPaymentDate(new Date().toISOString().split('T')[0]);
+      setPaymentMode('Cash');
+      setPaymentReference('');
+      setPaymentNotes('');
+      setReceiptNumber('');
+      setSelectedBillForPayment(null);
+      setShowPaymentModal(false);
+      
+      alert('Payment added successfully!');
+    } catch (error) {
+      console.error('Error saving payment:', error);
+      alert('Error saving payment. Please try again.');
+    }
+  };
+
   // Totals
   const subtotal = rows.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0);
   const totalSGST = rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.sgst) || 0) / 100), 0);
   const totalCGST = rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0) / 100), 0);
-  const totalIGST = rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0) / 100), 0);
-  const grandTotal = subtotal + totalSGST + totalCGST + totalIGST;
-  const totalPaid = payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+      const totalIGST = rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0) / 100), 0);
+    const grandTotal = subtotal + totalSGST + totalCGST + totalIGST;
 
   // Add print and PDF download handlers (copied from Sales.js, adapted):
   const handleInvoicePrint = () => {
@@ -468,6 +625,10 @@ function Purchases({ db, userId, isAuthReady, appId }) {
       window.removeEventListener('keydown', escListenerRef.current);
     };
   }, [showInvoiceModal]);
+
+
+
+
 
   // UI rendering (similar to Sales)
     return (
@@ -633,75 +794,7 @@ function Purchases({ db, userId, isAuthReady, appId }) {
             <div className="flex justify-between mt-2 font-bold text-lg"><span>Grand Total (Incl. GST):</span><span className="text-blue-700">₹{grandTotal}</span></div>
           </div>
         </div>
-        {/* Payment Section */}
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6 w-full md:w-2/3 mx-auto">
-          <h4 className="text-lg font-semibold mb-2">Payment Details</h4>
-          <div className="mb-2">
-            <span className="font-medium">Status: </span>
-            {totalPaid >= grandTotal ? 'Paid' : totalPaid > 0 ? 'Partial' : 'Unpaid'}
-            <span className="ml-4 font-medium">Total Paid: </span>₹{totalPaid.toFixed(2)}
-            <span className="ml-4 font-medium text-red-600">Remaining Due: </span>₹{(grandTotal - totalPaid).toFixed(2)}
-          </div>
-          <table className="w-full text-sm mb-2 border">
-            <thead>
-              <tr className="bg-gray-100">
-                <th className="border px-2 py-1">Amount</th>
-                <th className="border px-2 py-1">Date</th>
-                <th className="border px-2 py-1">Mode</th>
-                <th className="border px-2 py-1">Reference/Notes</th>
-                <th className="border px-2 py-1">Remove</th>
-              </tr>
-            </thead>
-            <tbody>
-              {payments.map((p, idx) => (
-                <tr key={idx}>
-                  <td className="border px-2 py-1 text-right">₹{parseFloat(p.amount).toFixed(2)}</td>
-                  <td className="border px-2 py-1">{p.date}</td>
-                  <td className="border px-2 py-1">{p.mode}</td>
-                  <td className="border px-2 py-1">{p.reference}</td>
-                  <td className="border px-2 py-1 text-center">
-                    <button type="button" className="text-red-600 font-bold" onClick={() => setPayments(payments.filter((_, i) => i !== idx))}>X</button>
-                                        </td>
-                                    </tr>
-              ))}
-              {payments.length === 0 && (
-                <tr><td colSpan={5} className="text-center text-gray-400 py-2">No payments yet</td></tr>
-              )}
-            </tbody>
-                            </table>
-          {/* Add Payment Form */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Amount</label>
-              <input type="number" min="0" step="0.01" value={newPayment.amount || ''} onChange={e => setNewPayment({ ...newPayment, amount: e.target.value })}
-                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Date</label>
-              <input type="date" value={newPayment.date || new Date().toISOString().split('T')[0]} onChange={e => setNewPayment({ ...newPayment, date: e.target.value })}
-                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Mode</label>
-              <select value={newPayment.mode || 'Cash'} onChange={e => setNewPayment({ ...newPayment, mode: e.target.value })}
-                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2">
-                <option>Cash</option>
-                <option>Bank</option>
-                <option>UPI</option>
-                <option>Cheque</option>
-                <option>Other</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Reference/Notes</label>
-              <input type="text" value={newPayment.reference || ''} onChange={e => setNewPayment({ ...newPayment, reference: e.target.value })}
-                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2" />
-            </div>
-            <div className="md:col-span-4 mt-2">
-              <button type="button" className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md" onClick={addPayment}>Add Payment</button>
-            </div>
-                        </div>
-                    </div>
+
                 <div className="flex gap-4 mt-4">
                     <button
             onClick={handleSaveBill}
@@ -718,12 +811,19 @@ function Purchases({ db, userId, isAuthReady, appId }) {
                 setParty('');
                 setNotes('');
                 setRows([{ ...initialItemRow }]);
-                setPayments([]);
                 setCustomFields({ ewayBillNo: '', ewayQr: '', ewayDate: '' });
               }}
                             className="flex-1 bg-gray-400 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-300 ease-in-out transform hover:scale-105"
                         >
                             Cancel Edit
+                        </button>
+                    )}
+          {editingBillId && (
+                        <button
+              onClick={() => handleAddPayment(bills.find(b => b.id === editingBillId))}
+                            className="flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-300 ease-in-out transform hover:scale-105"
+                        >
+                            Add Payment
                         </button>
                     )}
                 </div>
@@ -739,14 +839,19 @@ function Purchases({ db, userId, isAuthReady, appId }) {
                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Party</th>
                                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Amount</th>
-                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Paid</th>
-                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Outstanding</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Payment Status</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Paid</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Outstanding</th>
                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                                 </tr>
                             </thead>
                             <tbody className="bg-white divide-y divide-gray-200">
-                {bills.map((bill) => (
+                {bills.map((bill) => {
+                    // Calculate payment information
+                    const outstanding = getBillOutstanding(bill);
+                    const totalAmount = parseFloat(bill.totalAmount || bill.amount) || 0;
+                    const totalPaid = totalAmount - outstanding;
+                    
+                    return (
                                     <tr key={bill.id}>
                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{bill.number}</td>
                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{bill.billDate}</td>
@@ -755,9 +860,8 @@ function Purchases({ db, userId, isAuthReady, appId }) {
                       return p ? p.firmName : bill.party || 'Unknown';
                     })()}</td>
                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">₹{bill.amount}</td>
-                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">₹{bill.payments ? bill.payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0) : 0}</td>
-                    <td className="px-4 py-2 whitespace-nowrap text-sm text-red-600">₹{bill.amount - (bill.payments ? bill.payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0) : 0)}</td>
-                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{bill.paymentStatus}</td>
+                    <td className="px-4 py-2 whitespace-nowrap text-sm text-green-600 font-medium">₹{totalPaid.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+                    <td className="px-4 py-2 whitespace-nowrap text-sm text-red-600 font-medium">₹{outstanding.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
                     <td className="px-4 py-2 whitespace-nowrap text-sm">
                                             <button
                         onClick={() => handleViewBill(bill)}
@@ -776,6 +880,12 @@ function Purchases({ db, userId, isAuthReady, appId }) {
                         className="text-red-600 hover:text-red-900 font-medium mr-2"
                                             >
                                                 Delete
+                                            </button>
+                                            <button
+                        onClick={() => handleAddPayment(bill)}
+                        className="text-green-600 hover:text-green-900 font-medium mr-2"
+                                            >
+                                                Payment
                                             </button>
                                             <button
                         onClick={() => {
@@ -802,7 +912,8 @@ function Purchases({ db, userId, isAuthReady, appId }) {
                                             </button>
                                         </td>
                                     </tr>
-                                ))}
+                                );
+                })}
                             </tbody>
                         </table>
                     </div>
@@ -891,6 +1002,112 @@ function Purchases({ db, userId, isAuthReady, appId }) {
                 </div>
               </div>
             )}
+
+      {/* Payment Modal */}
+      {showPaymentModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+          <div className="bg-white rounded-lg shadow-lg p-6 max-w-md w-full relative">
+            <button 
+              onClick={() => setShowPaymentModal(false)} 
+              className="absolute top-2 right-2 text-gray-500 hover:text-gray-800 text-xl"
+            >
+              &times;
+            </button>
+            
+            <h3 className="text-xl font-bold text-gray-900 mb-4">Add Payment</h3>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Receipt Number</label>
+                <input
+                  type="text"
+                  value={receiptNumber}
+                  onChange={(e) => setReceiptNumber(e.target.value)}
+                  className="w-full border border-gray-300 rounded-md shadow-sm p-2"
+                  readOnly
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Payment Date</label>
+                <input
+                  type="date"
+                  value={paymentDate}
+                  onChange={(e) => setPaymentDate(e.target.value)}
+                  className="w-full border border-gray-300 rounded-md shadow-sm p-2"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Amount</label>
+                <input
+                  type="number"
+                  value={paymentAmount}
+                  onChange={(e) => setPaymentAmount(e.target.value)}
+                  className="w-full border border-gray-300 rounded-md shadow-sm p-2"
+                  placeholder="Enter payment amount"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Payment Mode</label>
+                <select
+                  value={paymentMode}
+                  onChange={(e) => setPaymentMode(e.target.value)}
+                  className="w-full border border-gray-300 rounded-md shadow-sm p-2"
+                >
+                  <option value="Cash">Cash</option>
+                  <option value="Cheque">Cheque</option>
+                  <option value="Bank Transfer">Bank Transfer</option>
+                  <option value="UPI">UPI</option>
+                  <option value="Card">Card</option>
+                </select>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Reference</label>
+                <input
+                  type="text"
+                  value={paymentReference}
+                  onChange={(e) => setPaymentReference(e.target.value)}
+                  className="w-full border border-gray-300 rounded-md shadow-sm p-2"
+                  placeholder="Cheque number, UPI reference, etc."
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+                <textarea
+                  value={paymentNotes}
+                  onChange={(e) => setPaymentNotes(e.target.value)}
+                  className="w-full border border-gray-300 rounded-md shadow-sm p-2"
+                  rows="3"
+                  placeholder="Additional notes"
+                />
+              </div>
+            </div>
+            
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                onClick={() => {
+                  setShowPaymentModal(false);
+                  setSelectedBillForPayment(null);
+                }}
+                className="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSavePayment}
+                className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded"
+              >
+                Save Payment
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
     );
 }

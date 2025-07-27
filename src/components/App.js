@@ -21,20 +21,7 @@ const items = [
   { id: '1', name: 'Flex Banner', sgst: 9, cgst: 9, igst: 0 },
   { id: '2', name: 'Vinyl Print', sgst: 6, cgst: 6, igst: 0 },
 ];
-const [uid, setUid] = useState("");
 
-useEffect(() => {
-  onAuthStateChanged(auth, (user) => {
-    if (user) setUid(user.uid);
-    else setUid("Not logged in");
-  });
-}, []);
-
-return (
-  <div>
-    <h2>User UID: {uid}</h2>
-  </div>
-);
 function App() {
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);

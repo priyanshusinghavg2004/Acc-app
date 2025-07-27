@@ -4,6 +4,8 @@ import ChallanTemplate from './BillTemplates/ChallanTemplate';
 import QuotationTemplate from './BillTemplates/QuotationTemplate';
 import PurchaseBillTemplate from './BillTemplates/PurchaseBillTemplate';
 import PurchaseOrderTemplate from './BillTemplates/PurchaseOrderTemplate';
+import ReceiptTemplate from './BillTemplates/ReceiptTemplate';
+import PurchaseReceiptTemplate from './BillTemplates/PurchaseReceiptTemplate';
 import { doc, onSnapshot } from 'firebase/firestore';
 
 const PAGE_SIZES = [
@@ -21,6 +23,8 @@ const TEMPLATES = [
   { key: 'QuotationTemplate', label: 'Quotation', component: QuotationTemplate },
   { key: 'PurchaseOrderTemplate', label: 'Purchase Order', component: PurchaseOrderTemplate },
   { key: 'PurchaseBillTemplate', label: 'Purchase Bill', component: PurchaseBillTemplate },
+  { key: 'ReceiptTemplate', label: 'Payment Receipt', component: ReceiptTemplate },
+  { key: 'PurchaseReceiptTemplate', label: 'Purchase Receipt', component: PurchaseReceiptTemplate },
 ];
 
 const BILL_TYPES = [
@@ -29,6 +33,8 @@ const BILL_TYPES = [
   { key: 'quotation', label: 'Quotation', templateKey: 'QuotationTemplate' },
   { key: 'purchaseOrder', label: 'Purchase Order', templateKey: 'PurchaseOrderTemplate' },
   { key: 'purchaseBill', label: 'Purchase Bill', templateKey: 'PurchaseBillTemplate' },
+  { key: 'receipt', label: 'Payment Receipt', templateKey: 'ReceiptTemplate' },
+  { key: 'purchaseReceipt', label: 'Purchase Receipt', templateKey: 'PurchaseReceiptTemplate' },
 ];
 
 // Sample/blurred data for preview
@@ -82,6 +88,13 @@ const sampleParty = {
 const samplePayments = [
   { amount: 'XXXX', date: 'YYYY-MM-DD', mode: 'XXX', notes: 'XXX' },
 ];
+const sampleReceipt = {
+  amount: '5000',
+  date: '2024-04-10',
+  mode: 'UPI',
+  reference: 'TXN123456',
+  notes: 'Sample payment for invoice',
+};
 
 function BillTemplates({ db, userId, isAuthReady, appId }) {
   const [pageSize, setPageSize] = useState('a4');
@@ -187,19 +200,41 @@ function BillTemplates({ db, userId, isAuthReady, appId }) {
   return (
     <div className="min-h-screen bg-gray-100 overflow-auto flex flex-col">
       <h1 className="text-3xl font-bold mb-6 mt-8 text-center">Bill Templates</h1>
-      <div className="flex gap-4 justify-center mb-8">
-        {BILL_TYPES.map(billType => (
+      <div className="flex space-x-2 mb-4">
+        {BILL_TYPES.map(tab => (
           <button
-            key={billType.key}
-            className={`px-4 py-2 rounded-t-lg font-semibold border-b-2 ${activeTab === billType.key ? 'bg-white border-blue-600 text-blue-700' : 'bg-gray-200 border-transparent text-gray-600'}`}
-            onClick={() => setActiveTab(billType.key)}
+            key={tab.key}
+            className={`px-4 py-2 rounded-t font-semibold focus:outline-none ${activeTab === tab.key ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}`}
+            onClick={() => setActiveTab(tab.key)}
           >
-            {billType.label}
+            {tab.label}
           </button>
         ))}
       </div>
       <div className="max-w-4xl mx-auto w-full">
-        {renderTemplateSection(BILL_TYPES.find(b => b.key === activeTab))}
+        {activeTab === 'receipt' ? (
+          <div className="p-4 bg-white rounded shadow">
+            <ReceiptTemplate
+              receipt={sampleReceipt}
+              bill={sampleBill}
+              company={companyDetails || { firmName: 'Sample Company', address: 'Sample Address', gstin: 'XXGSTINXXXX' }}
+              party={sampleParty}
+              receiptNumber={'PYR25-26/1'}
+            />
+          </div>
+        ) : activeTab === 'purchaseReceipt' ? (
+          <div className="p-4 bg-white rounded shadow">
+            <PurchaseReceiptTemplate
+              receipt={sampleReceipt}
+              bill={sampleBill}
+              company={companyDetails || { firmName: 'Sample Company', address: 'Sample Address', gstin: 'XXGSTINXXXX' }}
+              party={sampleParty}
+              receiptNumber={'PYR25-26/1'}
+            />
+          </div>
+        ) : (
+          renderTemplateSection(BILL_TYPES.find(b => b.key === activeTab))
+        )}
       </div>
     </div>
   );
