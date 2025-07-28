@@ -104,28 +104,31 @@ const ReceiptTemplate = forwardRef(({ receipt, bill, company, party, receiptNumb
           )}
         </div>
         
-        {/* FIFO Allocation Details */}
+        {/* Invoice-wise Allocation (FIFO) */}
         {fifoAllocation && fifoAllocation.length > 0 && (
-          <div className="mt-6 border-t border-gray-200 pt-4">
-            <div className="font-semibold text-lg text-blue-700 mb-3">Invoice-wise Allocation (FIFO):</div>
+          <div className="mt-6">
+            <div className="font-semibold text-blue-700 mb-2">Invoice-wise Allocation (FIFO):</div>
             <div className="space-y-2">
-              {fifoAllocation.map((allocation, index) => (
-                <div key={index} className="p-3 bg-gray-50 rounded border">
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="font-medium">Invoice: {allocation.billNumber}</span>
-                    <span className={`text-sm font-medium ${allocation.allocatedAmount >= allocation.billOutstanding ? 'text-green-600' : 'text-orange-600'}`}>
-                      {allocation.allocatedAmount >= allocation.billOutstanding ? '(Full)' : '(Partial)'}
+              {fifoAllocation.map((alloc, idx) => (
+                <div key={idx} className="border rounded p-2 bg-gray-50 flex flex-col">
+                  <div className="flex justify-between items-center">
+                    <span>Invoice: <span className="font-mono">{alloc.billNumber}</span></span>
+                    <span className={alloc.isFullPayment ? 'text-green-600' : 'text-yellow-600'}>
+                      {alloc.isFullPayment ? '(Full)' : '(Partial)'}
                     </span>
                   </div>
-                  <div className="text-sm text-gray-600 mb-1">
-                    Outstanding: ₹{(allocation.billOutstanding || 0).toLocaleString('en-IN')}
-                  </div>
-                  <div className="text-lg font-medium text-blue-700">
-                    Allocated: ₹{(allocation.allocatedAmount || 0).toLocaleString('en-IN')}
-                  </div>
+                  <div className="text-sm text-gray-600">Outstanding: ₹{alloc.billOutstanding?.toLocaleString('en-IN')}</div>
+                  <div className="text-sm text-blue-700 font-semibold">Allocated: ₹{alloc.allocatedAmount?.toLocaleString('en-IN')}</div>
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Advance Available */}
+        {receipt.remainingAmount > 0 && (
+          <div className="mt-4 p-3 bg-yellow-50 border-l-4 border-yellow-400 text-yellow-800 rounded">
+            <span className="font-semibold">Advance Available:</span> ₹{parseFloat(receipt.remainingAmount).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
           </div>
         )}
       </div>

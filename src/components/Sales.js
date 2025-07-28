@@ -700,7 +700,45 @@ function Sales({ db, userId, isAuthReady, appId }) {
         savedBill = { id: docRef.id, ...billData };
       }
 
-
+      // --- ADVANCE ALLOCATION LOGIC ---
+      // Only allocate advance for invoices (not quotations, etc.)
+      if (docType === 'invoice' && typeof window.getPartyAdvance === 'function' && typeof window.allocateAdvanceToBill === 'function' && typeof window.markAdvanceUsed === 'function') {
+        const availableAdvance = window.getPartyAdvance(party);
+        if (availableAdvance > 0) {
+          const { allocatedAdvance, advanceAllocations, remainingBillAmount } = window.allocateAdvanceToBill(party, grandTotal);
+          if (allocatedAdvance > 0) {
+            // Mark advances as used
+            await window.markAdvanceUsed(advanceAllocations);
+            // Optionally, create a payment record for advance allocation
+            const paymentsRef = collection(db, `artifacts/${appId}/users/${userId}/payments`);
+            await addDoc(paymentsRef, {
+              receiptNumber: `ADV-${invoiceNumber}`,
+              paymentDate: new Date().toISOString().split('T')[0],
+              partyId: party,
+              partyName: parties.find(p => p.id === party)?.firmName || '',
+              totalAmount: allocatedAdvance,
+              paymentMode: 'Advance Allocation',
+              reference: 'Auto-advance',
+              notes: 'Advance automatically allocated to new invoice',
+              type: 'invoice',
+              paymentType: 'advance-allocation',
+              billId: savedBill.id,
+              billNumber: invoiceNumber,
+              allocations: [{
+                billType: 'invoice',
+                billId: savedBill.id,
+                billNumber: invoiceNumber,
+                allocatedAmount: allocatedAdvance,
+                billOutstanding: grandTotal,
+                isFullPayment: allocatedAdvance >= grandTotal
+              }],
+              advanceAllocations,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp()
+            });
+          }
+        }
+      }
 
       // Update stock for each sold item
       if (docType === 'invoice') {

@@ -252,7 +252,7 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
     };
 
     return (
-        <div className="p-6 bg-white rounded-lg shadow-md">
+        <div className="p-6 bg-white rounded-lg shadow-md company-details-form">
             <h2 className="text-2xl font-bold text-gray-800 mb-4">Company Details</h2>
 
             {message && (

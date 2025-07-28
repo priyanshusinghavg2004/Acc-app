@@ -1198,6 +1198,10 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
     const receiptNum = await generateReceiptNumber();
     setReceiptNumber(receiptNum);
     setShowPaymentModal(true);
+    // Show advance info
+    const collected = getPartyAdvance(bill.partyId || bill.party);
+    setAdvanceInfo({ collected, used: 0 });
+    setShowAdvanceInfo(collected > 0);
   };
 
   // Handle add khata payment (Party-wise)
@@ -1209,6 +1213,10 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
     const receiptNum = await generateReceiptNumber();
     setReceiptNumber(receiptNum);
     setShowPaymentModal(true);
+    // Show advance info
+    const collected = getPartyAdvance(partyId);
+    setAdvanceInfo({ collected, used: 0 });
+    setShowAdvanceInfo(collected > 0);
   };
 
   // Handle save payment
@@ -2197,6 +2205,116 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
   const filteredBills = sortBills(getFilteredBills());
   const partySummary = getPartyWiseSummary();
 
+  // --- ADVANCE AGGREGATION AND USAGE LOGIC ---
+
+  /**
+   * Get total available advance for a party (carry-forward across years, minus used/refunded)
+   * @param {string} partyId
+   * @returns {number}
+   */
+  const getPartyAdvance = (partyId) => {
+    // Only consider payments with positive remainingAmount and not refunded
+    let totalAdvance = 0;
+    payments.forEach(payment => {
+      if (
+        payment.partyId === partyId &&
+        payment.remainingAmount > 0 &&
+        !payment.advanceRefunded &&
+        !payment.advanceFullyUsed
+      ) {
+        // If advanceUsed is tracked, subtract it
+        const used = payment.advanceUsed || 0;
+        totalAdvance += (payment.remainingAmount - used);
+      }
+    });
+    return totalAdvance;
+  };
+
+  /**
+   * Allocate available advance to a new bill (FIFO: oldest advances first)
+   * @param {string} partyId
+   * @param {number} billAmount
+   * @returns {Object} { allocatedAdvance, advanceAllocations: [{paymentId, amountUsed}], remainingBillAmount }
+   */
+  const allocateAdvanceToBill = (partyId, billAmount) => {
+    // Get all advances for this party, sorted by payment date (oldest first)
+    const advances = payments
+      .filter(payment => payment.partyId === partyId && payment.remainingAmount > 0 && !payment.advanceRefunded && !payment.advanceFullyUsed)
+      .sort((a, b) => new Date(a.paymentDate || a.createdAt) - new Date(b.paymentDate || b.createdAt));
+
+    let remaining = billAmount;
+    let allocatedAdvance = 0;
+    const advanceAllocations = [];
+
+    for (const adv of advances) {
+      if (remaining <= 0) break;
+      const available = (adv.remainingAmount - (adv.advanceUsed || 0));
+      if (available <= 0) continue;
+      const use = Math.min(available, remaining);
+      advanceAllocations.push({ paymentId: adv.id, amountUsed: use });
+      allocatedAdvance += use;
+      remaining -= use;
+    }
+
+    return { allocatedAdvance, advanceAllocations, remainingBillAmount: remaining };
+  };
+
+  /**
+   * Mark advances as used (update payment records with advanceUsed field)
+   * @param {Array} allocations [{paymentId, amountUsed}]
+   */
+  const markAdvanceUsed = async (allocations) => {
+    for (const alloc of allocations) {
+      const payment = payments.find(p => p.id === alloc.paymentId);
+      if (!payment) continue;
+      const prevUsed = payment.advanceUsed || 0;
+      const newUsed = prevUsed + alloc.amountUsed;
+      const fullyUsed = (newUsed >= payment.remainingAmount);
+      // Update Firestore
+      const paymentRef = doc(db, `artifacts/${appId}/users/${userId}/payments`, alloc.paymentId);
+      await updateDoc(paymentRef, {
+        advanceUsed: newUsed,
+        advanceFullyUsed: fullyUsed
+      });
+    }
+  };
+
+  /**
+   * Refund an advance (set advanceRefunded flag)
+   * @param {string} paymentId
+   */
+  const refundAdvance = async (paymentId) => {
+    const paymentRef = doc(db, `artifacts/${appId}/users/${userId}/payments`, paymentId);
+    await updateDoc(paymentRef, { advanceRefunded: true });
+  };
+
+  // Get advance details for a party
+  const getAdvanceDetails = (partyId) => {
+    return payments.filter(p => p.partyId === partyId && p.remainingAmount > 0 && !p.advanceRefunded && !p.advanceFullyUsed);
+  };
+
+  // Set advance modal party
+  const [advanceModalParty, setAdvanceModalParty] = useState(null);
+
+  // Add state for advance info popup
+  const [showAdvanceInfo, setShowAdvanceInfo] = useState(false);
+  const [advanceInfo, setAdvanceInfo] = useState({ collected: 0, used: 0 });
+
+  // Add ESC key handling for modals (LIFO order)
+  useEffect(() => {
+    const handleEsc = (e) => {
+      if (e.key === 'Escape') {
+        if (showReceiptModal) {
+          setShowReceiptModal(false);
+        } else if (advanceModalParty) {
+          setAdvanceModalParty(null);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [showReceiptModal, advanceModalParty]);
+
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
       <h1 className="text-3xl font-bold text-gray-800 mb-6">Payments</h1>
@@ -2611,12 +2729,17 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
                   OUTSTANDING
                 </th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  ADVANCE
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   ACTIONS
                 </th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {partySummary.map((party) => (
+              {partySummary.map((party) => {
+                const advance = getPartyAdvance(party.partyId);
+                return (
                 <tr key={party.partyId} className="hover:bg-gray-50">
                   <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                     {party.partyName}
@@ -2635,6 +2758,18 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
                       ₹{parseFloat(party.outstanding || 0).toLocaleString('en-IN')}
                     </span>
                   </td>
+                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {advance > 0 ? (
+                        <button
+                          className="text-blue-600 underline hover:text-blue-800 font-semibold"
+                          onClick={() => setAdvanceModalParty(party.partyId)}
+                        >
+                          ₹{advance.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                        </button>
+                      ) : (
+                        <span className="text-gray-400">₹0</span>
+                      )}
+                    </td>
                   <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
                     <div className="flex space-x-2">
                       <button
@@ -2657,7 +2792,8 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
               {/* Totals Row */}
               {(() => {
                 const totals = getPartyWiseTotals();
@@ -2677,6 +2813,9 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
                     </td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
                       <strong className="text-red-600">₹{totals.totalOutstanding.toLocaleString('en-IN')}</strong>
+                    </td>
+                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                      <strong>-</strong>
                     </td>
                     <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
                       <strong>-</strong>
@@ -2970,6 +3109,18 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
                   readOnly
                 />
               </div>
+
+              {/* Advance Information */}
+              {showAdvanceInfo && (
+                <div className="mb-4 p-3 bg-yellow-50 border-l-4 border-yellow-400 text-yellow-800 rounded">
+                  <div className="font-semibold mb-1">Advance Information</div>
+                  <div>Advance Collected: <span className="font-bold">₹{advanceInfo.collected.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></div>
+                  {advanceInfo.used > 0 && (
+                    <div>Advance Used: <span className="font-bold">₹{advanceInfo.used.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></div>
+                  )}
+                  <button className="mt-2 text-blue-600 underline text-xs" onClick={() => setShowAdvanceInfo(false)}>Dismiss</button>
+                </div>
+              )}
             </div>
             
             <div className="flex space-x-3 mt-6">
@@ -3074,9 +3225,66 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
         </div>
       )}
 
-      {/* Receipt Modal */}
+
+
+      {/* Advance Details Modal */}
+      {advanceModalParty && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black bg-opacity-40">
+          <div className="bg-white rounded-lg shadow-lg p-6 max-w-lg w-full relative">
+            <button
+              className="absolute top-2 right-2 text-gray-500 hover:text-gray-800"
+              onClick={() => setAdvanceModalParty(null)}
+            >
+              ×
+            </button>
+            <h2 className="text-xl font-bold mb-4 text-blue-700">Advance Details</h2>
+            <div className="mb-4">
+              <span className="font-semibold">Party:</span> {getPartyName(advanceModalParty)}
+            </div>
+            <div className="space-y-3 max-h-72 overflow-y-auto">
+              {payments.filter(p => p.partyId === advanceModalParty && p.remainingAmount > 0 && !p.advanceRefunded && !p.advanceFullyUsed).map((adv, idx) => (
+                <div key={adv.id} className="border rounded p-3 bg-gray-50 flex flex-col">
+                  <div className="flex justify-between items-center">
+                    <span className="font-mono text-blue-700">Receipt: {adv.receiptNumber}</span>
+                    <span className="text-xs text-gray-500">{adv.paymentDate || adv.createdAt}</span>
+                  </div>
+                  <div className="text-sm text-gray-700">Amount: ₹{adv.remainingAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</div>
+                  <div className="text-xs text-gray-500">Mode: {adv.paymentMode}</div>
+                  <div className="text-xs text-gray-500">Reference: {adv.reference || '-'}</div>
+                  <div className="flex space-x-2 mt-2">
+                    <button
+                      className="text-blue-600 underline text-xs"
+                      onClick={() => handlePreviewReceipt(adv)}
+                    >
+                      Preview
+                    </button>
+                    <button
+                      className="text-red-600 underline text-xs"
+                      onClick={async () => { await refundAdvance(adv.id); setAdvanceModalParty(null); }}
+                    >
+                      Refund
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 text-right">
+              <button
+                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                onClick={() => setAdvanceModalParty(null)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+
+
+      {/* Receipt Preview Modal (should be rendered after advance modal for higher z-index) */}
       {showReceiptModal && selectedReceipt && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 z-60 flex items-center justify-center bg-black bg-opacity-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-4xl max-h-[80vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-semibold">Payment Receipt - {selectedReceipt.receiptNumber}</h2>
@@ -3103,7 +3311,6 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
                 </button>
               </div>
             </div>
-            
             <div className="border border-gray-200 rounded-lg p-4">
               {selectedReceipt.type === 'purchase' ? (
                 <PurchaseReceiptTemplate

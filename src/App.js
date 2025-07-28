@@ -17,7 +17,6 @@ import { auth, db } from './firebase.config';
 import { onAuthStateChanged } from 'firebase/auth';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { setDoc, doc, getDoc } from 'firebase/firestore';
-import { MenuIcon, XIcon } from '@heroicons/react/outline';
 
 function App() {
   const [user, setUser] = useState(null);
@@ -47,6 +46,32 @@ function App() {
   // const effectiveUserId = useManualUserId ? manualUserId : user?.uid;
   const [companyDetails, setCompanyDetails] = useState({});
 
+  // Custom tour state
+  const [showTour, setShowTour] = useState(false);
+  const [currentTourStep, setCurrentTourStep] = useState(0);
+  const tourSteps = [
+    {
+      title: 'Welcome to Acc-App!',
+      content: 'This is your accounting and business management dashboard. Let us show you around.',
+      position: 'center'
+    },
+    {
+      title: 'Navigation Menu',
+      content: 'Use this navigation bar to access all modules like Sales, Purchases, Company Details, and more.',
+      position: 'bottom'
+    },
+    {
+      title: 'Company Details',
+      content: 'Start by setting up your company details. This is essential for generating bills and invoices.',
+      position: 'bottom'
+    },
+    {
+      title: 'You\'re All Set!',
+      content: 'You can now explore all the features. The navigation menu will help you get around.',
+      position: 'center'
+    }
+  ];
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setUser(user);
@@ -54,6 +79,14 @@ function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  // Start tour for first-time users
+  useEffect(() => {
+    if (user && localStorage.getItem('hasSeenTour') !== 'true') {
+      setShowTour(true);
+      setCurrentTourStep(0);
+    }
+  }, [user]);
 
   useEffect(() => {
     if (openDropdown !== null) {
@@ -106,6 +139,14 @@ function App() {
       if (docSnap.exists()) setCompanyDetails(docSnap.data());
     });
   }, [db, user, isAuthReady, appId]);
+
+  useEffect(() => {
+    if (user && localStorage.getItem('hasSeenTour') !== 'true') {
+      window.startShepherdTour = true;
+    }
+  }, [user]);
+
+
 
   const [avatarDropdownOpen, setAvatarDropdownOpen] = useState(false);
   const avatarRef = useRef(null);
@@ -160,6 +201,20 @@ function App() {
       setRegisterError(err.message);
       console.error('Registration or Firestore error:', err);
     }
+  };
+
+  const handleTourNext = () => {
+    if (currentTourStep < tourSteps.length - 1) {
+      setCurrentTourStep(currentTourStep + 1);
+    } else {
+      setShowTour(false);
+      localStorage.setItem('hasSeenTour', 'true');
+    }
+  };
+
+  const handleTourSkip = () => {
+    setShowTour(false);
+    localStorage.setItem('hasSeenTour', 'true');
   };
 
   if (!user) {
@@ -252,6 +307,56 @@ function App() {
 
   return (
     <Router>
+      {/* Custom Tour Modal */}
+      {showTour && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 relative">
+            <div className="text-center">
+              <h3 className="text-xl font-bold text-gray-900 mb-4">
+                {tourSteps[currentTourStep].title}
+              </h3>
+              <p className="text-gray-600 mb-6">
+                {tourSteps[currentTourStep].content}
+              </p>
+              <div className="flex justify-between items-center">
+                <button
+                  onClick={handleTourSkip}
+                  className="text-gray-500 hover:text-gray-700 text-sm"
+                >
+                  Skip Tour
+                </button>
+                <div className="flex space-x-2">
+                  {currentTourStep > 0 && (
+                    <button
+                      onClick={() => setCurrentTourStep(currentTourStep - 1)}
+                      className="px-4 py-2 text-gray-600 border border-gray-300 rounded hover:bg-gray-50"
+                    >
+                      Previous
+                    </button>
+                  )}
+                  <button
+                    onClick={handleTourNext}
+                    className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                  >
+                    {currentTourStep === tourSteps.length - 1 ? 'Finish' : 'Next'}
+                  </button>
+                </div>
+              </div>
+              <div className="mt-4 flex justify-center space-x-1">
+                {tourSteps.map((_, index) => (
+                  <div
+                    key={index}
+                    className={`w-2 h-2 rounded-full ${
+                      index === currentTourStep ? 'bg-blue-600' : 'bg-gray-300'
+                    }`}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="min-h-screen bg-gray-100">
         {/* Navigation */}
         <nav className="fixed top-0 left-0 w-full z-50 bg-white shadow">
@@ -401,6 +506,16 @@ function App() {
                       {companyDetails.contactNumber && <div><span className="font-semibold">Contact:</span> {companyDetails.contactNumber}</div>}
                     </div>
                     <div className="border-t border-gray-200 my-2 w-full"></div>
+                    <button
+                      className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
+                      onClick={() => {
+                        setShowTour(true);
+                        setCurrentTourStep(0);
+                        setAvatarDropdownOpen(false);
+                      }}
+                    >
+                      Restart Tour
+                    </button>
                     <button
                       className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
                       onClick={() => signOut(auth)}
