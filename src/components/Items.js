@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { collection, addDoc, query, onSnapshot, serverTimestamp, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { useTableSort, SortableHeader } from '../utils/tableSort';
+import { useTablePagination } from '../utils/tablePagination';
+import PaginationControls from '../utils/PaginationControls';
 
 const Items = ({ db, userId, isAuthReady, appId }) => {
     const [itemName, setItemName] = useState('');
@@ -25,6 +28,13 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
     const [isRawMaterial, setIsRawMaterial] = useState(false);
     const [rawMaterialType, setRawMaterialType] = useState('Base Material');
 
+    // Table sorting hook with default sort by creation date descending (LIFO)
+    const { sortConfig, handleSort, getSortedData } = useTableSort([], { key: 'createdAt', direction: 'desc' });
+    
+    // Table pagination hook
+    const sortedItems = getSortedData(itemsList);
+    const pagination = useTablePagination(sortedItems, 10);
+
     // 1. Add 'Nos.' to predefinedUnits, alphabetically
     const predefinedUnits = [
         'Bag', 'Barrel', 'Block', 'Board', 'Bottle', 'Box', 'Bundle', 'Can', 'Carton', 'Centimeter', 'Cubic Feet', 'Cubic Meter', 'Cu. Inch', 'Cu. Yard', 'Cylinder', 'Day', 'Drum', 'Foot', 'Gallon', 'Gram', 'Hour', 'Impression', 'Inch', 'Jar', 'Job', 'Kg', 'Litre', 'Lot', 'Meter', 'Millimeter', 'Month', 'Nos.', 'Packet', 'Pair', 'Panel', 'Piece', 'Pieces', 'Plate', 'Quintal', 'Ream', 'Roll', 'Run', 'Set', 'Sheet', 'Slab', 'Sq. Ft.', 'Sq. Inch', 'Sq. Yard', 'Square Meter', 'Strip', 'Ton', 'Tube', 'Year', 'Other'
@@ -46,7 +56,7 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
                 snapshot.forEach((doc) => {
                     items.push({ id: doc.id, ...doc.data() });
                 });
-                items.sort((a, b) => a.itemName.localeCompare(b.itemName));
+                // LIFO sorting is now handled by the pagination utility
                 setItemsList(items);
             }, (error) => {
                 console.error("Error fetching items:", error);
@@ -430,18 +440,18 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
                     <table className="min-w-full divide-y divide-gray-200">
                         <thead className="bg-gray-50">
                             <tr>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Item Name</th>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Measurement</th>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Default Rate (₹)</th>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">HSN Code</th>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">GST %</th>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Stock</th>
+                                <SortableHeader columnKey="itemName" label="Item Name" onSort={handleSort} sortConfig={sortConfig} />
+                                <SortableHeader columnKey="quantityMeasurement" label="Measurement" onSort={handleSort} sortConfig={sortConfig} />
+                                <SortableHeader columnKey="defaultRate" label="Default Rate (₹)" onSort={handleSort} sortConfig={sortConfig} />
+                                <SortableHeader columnKey="itemType" label="Type" onSort={handleSort} sortConfig={sortConfig} />
+                                <SortableHeader columnKey="hsnCode" label="HSN Code" onSort={handleSort} sortConfig={sortConfig} />
+                                <SortableHeader columnKey="gstPercentage" label="GST %" onSort={handleSort} sortConfig={sortConfig} />
+                                <SortableHeader columnKey="stock" label="Stock" onSort={handleSort} sortConfig={sortConfig} />
                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                             </tr>
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
-                            {itemsList.map((item) => {
+                            {pagination.currentData.map((item) => {
                                 const opening = parseFloat(item.openingStock) || 0;
                                 // Purchases and sales up to today (for running stock)
                                 const allPurchases = purchaseBills
@@ -451,6 +461,7 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
                                     .flatMap(bill => (bill.rows || []).filter(row => row.item === item.id))
                                     .reduce((sum, row) => sum + (parseFloat(row.qty) || 0), 0);
                                 const liveStock = opening + allPurchases - allSales;
+                                
                                 return (
                                     <tr key={item.id}>
                                         <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{item.itemName}</td>
@@ -479,6 +490,9 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
                             })}
                         </tbody>
                     </table>
+                    
+                    {/* Pagination Controls */}
+                    <PaginationControls {...pagination} />
                 </div>
             )}
         </div>

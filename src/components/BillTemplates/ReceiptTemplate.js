@@ -1,6 +1,6 @@
 import React, { forwardRef } from 'react';
 
-const ReceiptTemplate = forwardRef(({ receipt, bill, company, party, receiptNumber, fifoAllocation = [] }, ref) => {
+const ReceiptTemplate = forwardRef(({ receipt, bill, company, party, receiptNumber, fifoAllocation = [], customImages = {} }, ref) => {
   if (!receipt) return null;
   
   // Helper function to get company name safely
@@ -33,119 +33,233 @@ const ReceiptTemplate = forwardRef(({ receipt, bill, company, party, receiptNumb
   };
   
   return (
-    <div ref={ref} className="bg-white p-8 rounded shadow max-w-lg mx-auto text-gray-900 font-sans" style={{ minHeight: '297mm', width: '210mm' }}>
+    <div ref={ref} className="receipt-container" style={{
+      backgroundColor: 'white',
+      padding: '40px',
+      borderRadius: '8px',
+      boxShadow: '0 2px 10px rgba(0,0,0,0.1)',
+      maxWidth: '800px',
+      margin: '0 auto',
+      fontFamily: 'Arial, sans-serif',
+      color: '#1f2937'
+    }}>
       {/* Header */}
-      <div className="text-center mb-6">
-        <h1 className="text-3xl font-bold text-gray-800 mb-2">PAYMENT RECEIPT</h1>
-        <div className="text-lg font-mono text-blue-600">Receipt No: {receiptNumber || 'N/A'}</div>
+      <div style={{ textAlign: 'center', marginBottom: '30px' }}>
+        <h1 style={{ fontSize: '28px', fontWeight: 'bold', color: '#1f2937', marginBottom: '10px' }}>PAYMENT RECEIPT</h1>
+        <div style={{ fontSize: '18px', color: '#2563eb', fontFamily: 'monospace' }}>Receipt No: {receiptNumber || 'N/A'}</div>
       </div>
       
       {/* Company Information */}
-      <div className="text-center mb-6 p-4 border-b-2 border-gray-300">
-        <div className="text-xl font-bold text-gray-800 mb-1">{getCompanyName()}</div>
-        {company?.address && <div className="text-sm text-gray-600 mb-1">{company.address}</div>}
-        {company?.gstin && <div className="text-sm text-gray-600">GSTIN: {company.gstin}</div>}
+      <div style={{ textAlign: 'center', marginBottom: '30px', paddingBottom: '20px', borderBottom: '2px solid #d1d5db' }}>
+        {/* Company Logo */}
+        {customImages.logo && (
+          <div style={{ marginBottom: '15px' }}>
+            <img 
+              src={customImages.logo} 
+              alt="Company Logo" 
+              style={{ 
+                maxHeight: '60px', 
+                maxWidth: '200px', 
+                objectFit: 'contain' 
+              }} 
+            />
+          </div>
+        )}
+        
+        <div style={{ fontSize: '20px', fontWeight: 'bold', color: '#1f2937', marginBottom: '5px' }}>{getCompanyName()}</div>
+        {company?.address && <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '5px' }}>{company.address}</div>}
+        {company?.gstin && <div style={{ fontSize: '14px', color: '#6b7280' }}>GSTIN: {company.gstin}</div>}
       </div>
       
       {/* Receipt Details */}
-      <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <span className="font-semibold text-gray-700">Date:</span>
-            <div className="text-lg">{formatDate(receipt.date)}</div>
-          </div>
-          <div>
-            <span className="font-semibold text-gray-700">Receipt No:</span>
-            <div className="text-lg font-mono text-blue-600">{receiptNumber || 'N/A'}</div>
-          </div>
+      <div style={{ marginBottom: '30px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '15px' }}>
+          <span style={{ fontWeight: '600', color: '#374151' }}>Date:</span>
+          <span style={{ fontSize: '16px' }}>{formatDate(receipt.date)}</span>
         </div>
         
-        <div className="border-t border-gray-200 pt-4">
-          <div className="mb-3">
-            <span className="font-semibold text-gray-700">Received From:</span>
-            <div className="text-lg font-medium">{getPartyName()}</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '15px' }}>
+          <span style={{ fontWeight: '600', color: '#374151' }}>Receipt No:</span>
+          <span style={{ fontSize: '16px', fontFamily: 'monospace', color: '#2563eb' }}>{receiptNumber || 'N/A'}</span>
+        </div>
+        
+        <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '20px', marginBottom: '20px' }}>
+          <div style={{ marginBottom: '15px' }}>
+            <span style={{ fontWeight: '600', color: '#374151' }}>Received From:</span>
+            <div style={{ fontSize: '16px', fontWeight: '500', marginTop: '5px' }}>{getPartyName()}</div>
           </div>
           
-          <div className="mb-3">
-            <span className="font-semibold text-gray-700">Amount:</span>
-            <div className="text-2xl font-bold text-green-600">
+          <div style={{ marginBottom: '15px' }}>
+            <span style={{ fontWeight: '600', color: '#374151' }}>Amount:</span>
+            <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#16a34a', marginTop: '5px' }}>
               ₹{parseFloat(receipt.totalAmount || receipt.amount || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
             </div>
           </div>
           
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <span className="font-semibold text-gray-700">Payment Mode:</span>
-              <div className="text-lg">{receipt.mode || receipt.paymentMethod || 'Cash'}</div>
-            </div>
-            <div>
-              <span className="font-semibold text-gray-700">Reference:</span>
-              <div className="text-lg">{receipt.reference || '-'}</div>
-            </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '15px' }}>
+            <span style={{ fontWeight: '600', color: '#374151' }}>Payment Mode:</span>
+            <span style={{ fontSize: '16px' }}>{receipt.mode || receipt.paymentMethod || 'Cash'}</span>
+          </div>
+          
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '15px' }}>
+            <span style={{ fontWeight: '600', color: '#374151' }}>Reference:</span>
+            <span style={{ fontSize: '16px' }}>{receipt.reference || '-'}</span>
           </div>
           
           {receipt.billReference ? (
-            <div className="mt-3">
-              <span className="font-semibold text-gray-700">Against Invoice:</span>
-              <div className="text-lg font-mono">{bill?.number || bill?.invoiceNumber || bill?.billNumber || 'N/A'}</div>
+            <div style={{ marginTop: '15px' }}>
+              <span style={{ fontWeight: '600', color: '#374151' }}>Against Invoice:</span>
+              <div style={{ fontSize: '16px', fontFamily: 'monospace', marginTop: '5px' }}>{bill?.number || bill?.invoiceNumber || bill?.billNumber || 'N/A'}</div>
             </div>
           ) : (
-            <div className="mt-3">
-              <span className="font-semibold text-gray-700">Payment Type:</span>
-              <div className="text-lg text-blue-600">Advance Payment</div>
+            <div style={{ marginTop: '15px' }}>
+              <span style={{ fontWeight: '600', color: '#374151' }}>Payment Type:</span>
+              <div style={{ fontSize: '16px', color: '#2563eb', marginTop: '5px' }}>Advance Payment</div>
             </div>
           )}
           
           {receipt.notes && (
-            <div className="mt-3">
-              <span className="font-semibold text-gray-700">Notes:</span>
-              <div className="text-lg">{receipt.notes}</div>
+            <div style={{ marginTop: '15px' }}>
+              <span style={{ fontWeight: '600', color: '#374151' }}>Notes:</span>
+              <div style={{ fontSize: '16px', marginTop: '5px' }}>{receipt.notes}</div>
             </div>
           )}
         </div>
         
         {/* Invoice-wise Allocation (FIFO) */}
         {fifoAllocation && fifoAllocation.length > 0 && (
-          <div className="mt-6">
-            <div className="font-semibold text-blue-700 mb-2">Invoice-wise Allocation (FIFO):</div>
-            <div className="space-y-2">
+          <div style={{ marginTop: '30px' }}>
+            <div style={{ fontWeight: '600', color: '#2563eb', marginBottom: '15px' }}>Invoice-wise Allocation (FIFO):</div>
+            <div>
               {fifoAllocation.map((alloc, idx) => (
-                <div key={idx} className="border rounded p-2 bg-gray-50 flex flex-col">
-                  <div className="flex justify-between items-center">
-                    <span>Invoice: <span className="font-mono">{alloc.billNumber}</span></span>
-                    <span className={alloc.isFullPayment ? 'text-green-600' : 'text-yellow-600'}>
+                <div key={idx} style={{ 
+                  border: '1px solid #e5e7eb', 
+                  borderRadius: '4px', 
+                  padding: '15px', 
+                  marginBottom: '10px', 
+                  backgroundColor: '#f9fafb' 
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                    <span>Invoice: <span style={{ fontFamily: 'monospace' }}>{alloc.billNumber}</span></span>
+                    <span style={{ color: alloc.isFullPayment ? '#16a34a' : '#ca8a04' }}>
                       {alloc.isFullPayment ? '(Full)' : '(Partial)'}
                     </span>
                   </div>
-                  <div className="text-sm text-gray-600">Outstanding: ₹{alloc.billOutstanding?.toLocaleString('en-IN')}</div>
-                  <div className="text-sm text-blue-700 font-semibold">Allocated: ₹{alloc.allocatedAmount?.toLocaleString('en-IN')}</div>
+                  <div style={{ fontSize: '14px', color: '#6b7280' }}>Outstanding: ₹{alloc.billOutstanding?.toLocaleString('en-IN')}</div>
+                  <div style={{ fontSize: '14px', color: '#2563eb', fontWeight: '600' }}>Allocated: ₹{alloc.allocatedAmount?.toLocaleString('en-IN')}</div>
                 </div>
               ))}
             </div>
           </div>
         )}
 
+        {/* Advance Allocation Details */}
+        {receipt.advanceAllocations && receipt.advanceAllocations.length > 0 && (
+          <div style={{ marginTop: '30px' }}>
+            <div style={{ fontWeight: '600', color: '#9333ea', marginBottom: '15px' }}>Advance Allocation Details:</div>
+            <div>
+              {receipt.advanceAllocations.map((advAlloc, idx) => (
+                <div key={idx} style={{ 
+                  border: '1px solid #e5e7eb', 
+                  borderRadius: '4px', 
+                  padding: '15px', 
+                  marginBottom: '10px', 
+                  backgroundColor: '#faf5ff' 
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                    <span>Advance Receipt: <span style={{ fontFamily: 'monospace' }}>{advAlloc.paymentId}</span></span>
+                    <span style={{ color: '#9333ea', fontWeight: '600' }}>Advance Used</span>
+                  </div>
+                  <div style={{ fontSize: '14px', color: '#9333ea', fontWeight: '600' }}>Amount Used: ₹{advAlloc.amountUsed?.toLocaleString('en-IN')}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* FIFO Allocation Summary */}
+        {receipt.fifoAllocationUsed && receipt.fifoAllocationUsed > 0 && (
+          <div style={{ 
+            marginTop: '20px', 
+            padding: '15px', 
+            backgroundColor: '#f0fdf4', 
+            borderLeft: '4px solid #16a34a', 
+            color: '#166534', 
+            borderRadius: '4px' 
+          }}>
+            <div style={{ fontWeight: '600', marginBottom: '5px' }}>FIFO Allocation Summary:</div>
+            <div>Excess amount allocated to other bills: <span style={{ fontWeight: 'bold' }}>₹{receipt.fifoAllocationUsed.toLocaleString('en-IN')}</span></div>
+            <div style={{ fontSize: '12px', marginTop: '5px' }}>This amount was automatically allocated to other outstanding bills using FIFO principle.</div>
+          </div>
+        )}
+
         {/* Advance Available */}
         {receipt.remainingAmount > 0 && (
-          <div className="mt-4 p-3 bg-yellow-50 border-l-4 border-yellow-400 text-yellow-800 rounded">
-            <span className="font-semibold">Advance Available:</span> ₹{parseFloat(receipt.remainingAmount).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+          <div style={{ 
+            marginTop: '20px', 
+            padding: '15px', 
+            backgroundColor: '#fefce8', 
+            borderLeft: '4px solid #ca8a04', 
+            color: '#92400e', 
+            borderRadius: '4px' 
+          }}>
+            <span style={{ fontWeight: '600' }}>Advance Available:</span> ₹{parseFloat(receipt.remainingAmount).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
           </div>
         )}
       </div>
       
-      {/* Footer */}
-      <div className="mt-12 pt-6 border-t border-gray-300">
-        <div className="flex justify-between items-end">
-          <div className="text-sm text-gray-500">
+              {/* Footer */}
+        <div style={{ 
+          marginTop: '40px', 
+          paddingTop: '20px', 
+          borderTop: '1px solid #d1d5db', 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: 'flex-end' 
+        }}>
+          <div style={{ fontSize: '12px', color: '#6b7280' }}>
             <div>Generated on: {new Date().toLocaleDateString()}</div>
             <div>Time: {new Date().toLocaleTimeString()}</div>
           </div>
-          <div className="text-center">
-            <div className="border-t-2 border-gray-400 w-32 mx-auto mb-2"></div>
-            <div className="font-semibold text-gray-700">Authorized Signatory</div>
+          
+          {/* Company Seal */}
+          {customImages.seal && (
+            <div style={{ position: 'absolute', bottom: '20px', left: '50%', transform: 'translateX(-50%)' }}>
+              <img 
+                src={customImages.seal} 
+                alt="Company Seal" 
+                style={{ 
+                  maxHeight: '80px', 
+                  maxWidth: '80px', 
+                  opacity: 0.7 
+                }} 
+              />
+            </div>
+          )}
+          
+          <div style={{ textAlign: 'center' }}>
+            {/* Signature */}
+            {customImages.signature ? (
+              <div>
+                <img 
+                  src={customImages.signature} 
+                  alt="Signature" 
+                  style={{ 
+                    maxHeight: '40px', 
+                    maxWidth: '120px', 
+                    marginBottom: '10px' 
+                  }} 
+                />
+                <div style={{ fontWeight: '600', color: '#374151' }}>Authorized Signatory</div>
+              </div>
+            ) : (
+              <div>
+                <div style={{ borderTop: '2px solid #9ca3af', width: '120px', margin: '0 auto 10px' }}></div>
+                <div style={{ fontWeight: '600', color: '#374151' }}>Authorized Signatory</div>
+              </div>
+            )}
           </div>
         </div>
-      </div>
     </div>
   );
 });

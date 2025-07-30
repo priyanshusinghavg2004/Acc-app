@@ -4,6 +4,9 @@ import InvoiceTemplate from './BillTemplates/InvoiceTemplate';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import JSZip from 'jszip';
+import { useTableSort } from '../utils/tableSort';
+import { useTablePagination } from '../utils/tablePagination';
+import PaginationControls from '../utils/PaginationControls';
 // Use jsPDF from the global window object
 const jsPDF = window.jspdf.jsPDF;
 console.log('autoTable on jsPDF:', typeof jsPDF.prototype.autoTable);
@@ -95,6 +98,11 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
   const [showBillSummaryModal, setShowBillSummaryModal] = useState(false);
 
   const [companyDetails, setCompanyDetails] = useState({});
+
+  // Pagination hooks for main tables
+  const partywiseSalesPagination = useTablePagination(data, 10);
+  const partywisePurchasePagination = useTablePagination(data, 10);
+  const outstandingPagination = useTablePagination(data, 10);
 
   // Add state for filter controls
   const [pendingDateFrom, setPendingDateFrom] = useState('');
@@ -266,9 +274,11 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
     if (!db || !userId || !isAuthReady) return;
     setLoading(true); setError('');
     if (reportType === 'partywise-sales') {
-      // Real-time fetch all sales bills
+      // Real-time fetch all sales bills and payments
       const salesRef = collection(db, `artifacts/${appId}/users/${userId}/salesBills`);
-      const unsub = onSnapshot(salesRef, (snap) => {
+      const paymentsRef = collection(db, `artifacts/${appId}/users/${userId}/payments`);
+      
+      const unsubSales = onSnapshot(salesRef, (snap) => {
         let arr = [];
         snap.forEach(doc => arr.push({ id: doc.id, ...doc.data() }));
         // Filter by date
@@ -276,14 +286,35 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
         if (dateTo) arr = arr.filter(bill => bill.invoiceDate <= dateTo);
         // Filter by party
         if (selectedParty) arr = arr.filter(bill => bill.party === selectedParty || bill.customerId === selectedParty);
-        // Group by party
+        
+        // Now fetch payments to calculate outstanding
+        const unsubPayments = onSnapshot(paymentsRef, (paySnap) => {
+          const payments = [];
+          paySnap.forEach(doc => payments.push({ id: doc.id, ...doc.data() }));
+          
+          // Group by party and calculate outstanding using new allocation logic
         const grouped = {};
         arr.forEach(bill => {
           const partyId = bill.party || bill.customerId || 'Unknown';
           if (!grouped[partyId]) grouped[partyId] = { total: 0, bills: [], partyId };
-          grouped[partyId].total += parseFloat(bill.totalAmount || bill.amount || 0);
+            const totalAmount = parseFloat(bill.totalAmount || bill.amount || 0);
+            grouped[partyId].total += totalAmount;
+            
+            // Calculate paid amount using allocations
+            const billPayments = payments.filter(p =>
+              p.allocations && p.allocations.some(a => a.billId === bill.id && a.billType === 'invoice')
+            );
+            const totalPaid = billPayments.reduce((sum, payment) => {
+              const allocation = payment.allocations.find(a => a.billId === bill.id && a.billType === 'invoice');
+              return sum + (allocation ? allocation.allocatedAmount : 0);
+            }, 0);
+            
+            // Add payment info to bill
+            bill.totalPaid = totalPaid;
+            bill.outstanding = totalAmount - totalPaid;
           grouped[partyId].bills.push(bill);
         });
+          
         // Map to array with party info
         const result = Object.values(grouped).map(g => {
           const party = partyList.find(p => p.id === g.partyId);
@@ -298,8 +329,12 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
         });
         setData(result);
         setLoading(false);
+        });
+        
+        return () => unsubPayments();
       }, err => { setError('Error fetching sales bills'); setLoading(false); });
-      return () => unsub();
+      
+      return () => unsubSales();
     }
     if (reportType === 'challan') {
       const challanRef = collection(db, `artifacts/${appId}/users/${userId}/challans`);
@@ -413,13 +448,16 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
         payments = [];
         paySnap.forEach(doc => {
           const pay = { id: doc.id, ...doc.data() };
-          if (pay.party === selectedParty) {
-            if (!dateFrom || pay.date >= dateFrom) {
-              if (!dateTo || pay.date <= dateTo) {
+          if (pay.partyId === selectedParty || pay.party === selectedParty) {
+            const paymentDate = pay.date || pay.paymentDate;
+            if (!dateFrom || paymentDate >= dateFrom) {
+              if (!dateTo || paymentDate <= dateTo) {
+                // Calculate total allocated amount for this payment
+                const totalAllocated = pay.allocations ? pay.allocations.reduce((sum, alloc) => sum + (alloc.allocatedAmount || 0), 0) : 0;
                 payments.push({
                   type: 'payment',
-                  date: pay.date,
-                  amount: parseFloat(pay.amount || 0),
+                  date: paymentDate,
+                  amount: totalAllocated,
                   description: pay.notes ? `Payment (${pay.notes})` : 'Payment',
                   ref: pay,
                 });
@@ -478,13 +516,16 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
         payments = [];
         paySnap.forEach(doc => {
           const pay = { id: doc.id, ...doc.data() };
-          if (pay.party === selectedParty) {
-            if (!dateFrom || pay.date >= dateFrom) {
-              if (!dateTo || pay.date <= dateTo) {
+          if (pay.partyId === selectedParty || pay.party === selectedParty) {
+            const paymentDate = pay.date || pay.paymentDate;
+            if (!dateFrom || paymentDate >= dateFrom) {
+              if (!dateTo || paymentDate <= dateTo) {
+                // Calculate total allocated amount for this payment
+                const totalAllocated = pay.allocations ? pay.allocations.reduce((sum, alloc) => sum + (alloc.allocatedAmount || 0), 0) : 0;
                 payments.push({
                   type: 'payment',
-                  date: pay.date,
-                  amount: parseFloat(pay.amount || 0),
+                  date: paymentDate,
+                  amount: totalAllocated,
                   description: pay.notes ? `Payment (${pay.notes})` : 'Payment',
                   ref: pay,
                 });
@@ -515,41 +556,87 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
     setLoading(true); setError('');
     // Fetch all parties, bills, and payments
     const salesRef = collection(db, `artifacts/${appId}/users/${userId}/salesBills`);
+    const purchaseRef = collection(db, `artifacts/${appId}/users/${userId}/purchaseBills`);
     const paymentsRef = collection(db, `artifacts/${appId}/users/${userId}/payments`);
+    
     onSnapshot(salesRef, (salesSnap) => {
-      const bills = [];
+      const salesBills = [];
       salesSnap.forEach(doc => {
         const bill = { id: doc.id, ...doc.data() };
-        bills.push(bill);
+        salesBills.push(bill);
       });
+      
+      onSnapshot(purchaseRef, (purchaseSnap) => {
+        const purchaseBills = [];
+        purchaseSnap.forEach(doc => {
+          const bill = { id: doc.id, ...doc.data() };
+          purchaseBills.push(bill);
+        });
+        
       onSnapshot(paymentsRef, (paySnap) => {
         const payments = [];
         paySnap.forEach(doc => {
           const pay = { id: doc.id, ...doc.data() };
           payments.push(pay);
         });
-        // Calculate outstanding for each party
+          
+          // Calculate outstanding for each party using new allocation logic
         const partyMap = {};
-        bills.forEach(bill => {
+          
+          // Process sales bills (receivables)
+          salesBills.forEach(bill => {
           const pid = bill.party || bill.customerId;
-          if (!partyMap[pid]) partyMap[pid] = { total: 0, paid: 0 };
-          partyMap[pid].total += parseFloat(bill.totalAmount || bill.amount || 0);
+            if (!partyMap[pid]) partyMap[pid] = { total: 0, paid: 0, outstanding: 0 };
+            const totalAmount = parseFloat(bill.totalAmount || bill.amount || 0);
+            partyMap[pid].total += totalAmount;
+            
+            // Calculate paid amount using allocations
+            const billPayments = payments.filter(p =>
+              p.allocations && p.allocations.some(a => a.billId === bill.id && a.billType === 'invoice')
+            );
+            const totalPaid = billPayments.reduce((sum, payment) => {
+              const allocation = payment.allocations.find(a => a.billId === bill.id && a.billType === 'invoice');
+              return sum + (allocation ? allocation.allocatedAmount : 0);
+            }, 0);
+            partyMap[pid].paid += totalPaid;
+          });
+          
+          // Process purchase bills (payables)
+          purchaseBills.forEach(bill => {
+            const pid = bill.party || bill.supplierId;
+            if (!partyMap[pid]) partyMap[pid] = { total: 0, paid: 0, outstanding: 0 };
+            const totalAmount = parseFloat(bill.totalAmount || bill.amount || 0);
+            partyMap[pid].total += totalAmount;
+            
+            // Calculate paid amount using allocations
+            const billPayments = payments.filter(p =>
+              p.allocations && p.allocations.some(a => a.billId === bill.id && a.billType === 'purchase')
+            );
+            const totalPaid = billPayments.reduce((sum, payment) => {
+              const allocation = payment.allocations.find(a => a.billId === bill.id && a.billType === 'purchase');
+              return sum + (allocation ? allocation.allocatedAmount : 0);
+            }, 0);
+            partyMap[pid].paid += totalPaid;
+          });
+          
+          // Calculate outstanding for each party
+          Object.keys(partyMap).forEach(pid => {
+            partyMap[pid].outstanding = partyMap[pid].total - partyMap[pid].paid;
         });
-        payments.forEach(pay => {
-          if (!partyMap[pay.party]) partyMap[pay.party] = { total: 0, paid: 0 };
-          partyMap[pay.party].paid += parseFloat(pay.amount || 0);
-        });
+          
         const result = Object.entries(partyMap).map(([pid, val]) => {
           const party = partyList.find(p => p.id === pid);
           return {
             partyName: party?.firmName || pid,
             total: val.total,
             paid: val.paid,
-            outstanding: val.total - val.paid,
+              outstanding: val.outstanding,
           };
         }).filter(row => row.outstanding !== 0);
+          
         setData(result);
         setLoading(false);
+        });
       });
     }, err => { setError('Error fetching outstanding'); setLoading(false); });
   }, [db, userId, isAuthReady, appId, reportType, partyList]);
@@ -580,8 +667,9 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
     if (reportType !== 'partywise-purchase') return;
     setLoading(true); setError('');
     const purchaseRef = collection(db, `artifacts/${appId}/users/${userId}/purchaseBills`);
-    const paymentsRef = collection(db, `artifacts/${appId}/users/${userId}/purchasePayments`);
-    onSnapshot(purchaseRef, (snap) => {
+    const paymentsRef = collection(db, `artifacts/${appId}/users/${userId}/payments`);
+    
+    const unsubPurchase = onSnapshot(purchaseRef, (snap) => {
       let arr = [];
       snap.forEach(doc => arr.push({ id: doc.id, ...doc.data() }));
       // Filter by date
@@ -589,24 +677,35 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
       if (dateTo) arr = arr.filter(bill => bill.billDate <= dateTo);
       // Filter by party
       if (selectedParty) arr = arr.filter(bill => bill.party === selectedParty);
-      // Group by party
+      
+      // Now fetch payments to calculate outstanding
+      const unsubPayments = onSnapshot(paymentsRef, (paySnap) => {
+        const payments = [];
+        paySnap.forEach(doc => payments.push({ id: doc.id, ...doc.data() }));
+        
+        // Group by party and calculate outstanding using new allocation logic
       const grouped = {};
       arr.forEach(bill => {
         const partyId = bill.party || 'Unknown';
         if (!grouped[partyId]) grouped[partyId] = { total: 0, bills: [], partyId };
-        grouped[partyId].total += parseFloat(bill.amount || 0);
+          const totalAmount = parseFloat(bill.totalAmount || bill.amount || 0);
+          grouped[partyId].total += totalAmount;
+          
+          // Calculate paid amount using allocations
+          const billPayments = payments.filter(p =>
+            p.allocations && p.allocations.some(a => a.billId === bill.id && a.billType === 'purchase')
+          );
+          const totalPaid = billPayments.reduce((sum, payment) => {
+            const allocation = payment.allocations.find(a => a.billId === bill.id && a.billType === 'purchase');
+            return sum + (allocation ? allocation.allocatedAmount : 0);
+          }, 0);
+          
+          // Add payment info to bill
+          bill.totalPaid = totalPaid;
+          bill.outstanding = totalAmount - totalPaid;
         grouped[partyId].bills.push(bill);
       });
-      // Fetch payments and map to bills
-      onSnapshot(paymentsRef, (paySnap) => {
-        const paymentsArr = [];
-        paySnap.forEach(doc => paymentsArr.push({ id: doc.id, ...doc.data() }));
-        // Attach payments to bills
-        Object.values(grouped).forEach(g => {
-          g.bills.forEach(bill => {
-            bill.payments = paymentsArr.filter(p => p.billId === bill.id || p.party === bill.party);
-          });
-        });
+        
         // Map to array with party info
         const result = Object.values(grouped).map(g => {
           const party = partyList.find(p => p.id === g.partyId);
@@ -622,7 +721,11 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
         setData(result);
         setLoading(false);
       });
+      
+      return () => unsubPayments();
     }, err => { setError('Error fetching purchase bills'); setLoading(false); });
+    
+    return () => unsubPurchase();
   }, [db, userId, isAuthReady, appId, reportType, dateFrom, dateTo, selectedParty, partyList]);
 
   // Utility to get current financial year date range
@@ -876,7 +979,7 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
   // Helper functions to calculate totals for different report types
   const calculatePartywiseTotals = (data) => {
     const totals = data.reduce((acc, row) => {
-      const totalPaid = (row.bills || []).reduce((sum, bill) => sum + ((bill.payments || []).reduce((s, p) => s + (parseFloat(p.amount) || 0), 0)), 0);
+      const totalPaid = (row.bills || []).reduce((sum, bill) => sum + (bill.totalPaid || 0), 0);
       const outstanding = (row.total || 0) - totalPaid;
       return {
         total: acc.total + (row.total || 0),
@@ -1306,7 +1409,7 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
           { key: 'billCount', label: 'No. of Bills' },
         ];
         const preparedData = data.map(row => {
-          const totalPaid = (row.bills || []).reduce((sum, bill) => sum + ((bill.payments || []).reduce((s, p) => s + (parseFloat(p.amount) || 0), 0)), 0);
+          const totalPaid = getPartyPaidAmount(row.bills);
           const outstanding = (row.total || 0) - totalPaid;
           return { ...row, totalPaid, outstanding };
         });
@@ -1822,7 +1925,7 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
   // Table for Partywise Sales (template)
   const renderPartywiseSales = () => {
     const preparedData = data.map(row => {
-      const totalPaid = (row.bills || []).reduce((sum, bill) => sum + ((bill.payments || []).reduce((s, p) => s + (parseFloat(p.amount) || 0), 0)), 0);
+      const totalPaid = getPartyPaidAmount(row.bills);
       const outstanding = (row.total || 0) - totalPaid;
       return { ...row, totalPaid, outstanding };
     });
@@ -1851,6 +1954,13 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
     }
     // Add total row at the end
     sortedData.push(totalRow);
+    
+    // Use sortedData for pagination instead of the original data
+    const paginatedData = sortedData.slice(
+      partywiseSalesPagination.startIndex, 
+      partywiseSalesPagination.endIndex + 1
+    );
+    
     return (
       <div className="overflow-x-auto rounded-lg border border-gray-200">
         <table className="min-w-full divide-y divide-gray-200 text-sm">
@@ -1874,7 +1984,7 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
             </tr>
           </thead>
           <tbody>
-            {sortedData.map((row, idx) => {
+            {paginatedData.map((row, idx) => {
               const isTotalRow = row.partyName?.includes('TOTAL');
               return (
                 <tr key={idx} className={isTotalRow ? "bg-gray-100 font-bold" : "hover:bg-blue-50"}>
@@ -1890,6 +2000,7 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
             })}
           </tbody>
         </table>
+        <PaginationControls {...partywiseSalesPagination} />
       </div>
     );
   };
@@ -2178,6 +2289,10 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
 
   // Render Outstanding Report table
   const renderOutstanding = () => {
+    console.log('=== OUTSTANDING DEBUG ===');
+    console.log('Raw data:', data);
+    console.log('Payments data:', payments);
+    
     const sortFns = getSortFns('outstanding');
     const config = sortConfigs['outstanding'] || { key: '', direction: 'asc' };
     let sortedData = [...data];
@@ -2212,7 +2327,7 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
             </tr>
           </thead>
           <tbody>
-            {sortedData.map((row, idx) => {
+            {outstandingPagination.currentData.map((row, idx) => {
               const isTotalRow = row.partyName?.includes('TOTAL');
               return (
                 <tr key={idx} className={isTotalRow ? "bg-gray-100 font-bold" : "hover:bg-blue-50"}>
@@ -2225,6 +2340,7 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
             })}
           </tbody>
         </table>
+        <PaginationControls {...outstandingPagination} />
       </div>
     );
   };
@@ -2232,7 +2348,7 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
   // Render Partywise Purchase table
   const renderPartywisePurchase = () => {
     const preparedData = data.map(row => {
-      const totalPaid = (row.bills || []).reduce((sum, bill) => sum + ((bill.payments || []).reduce((s, p) => s + (parseFloat(p.amount) || 0), 0)), 0);
+      const totalPaid = getPartyPaidAmount(row.bills);
       const outstanding = (row.total || 0) - totalPaid;
       return { ...row, totalPaid, outstanding };
     });
@@ -2261,6 +2377,13 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
     }
     // Add total row at the end
     sortedData.push(totalRow);
+    
+    // Use sortedData for pagination instead of the original data
+    const paginatedData = sortedData.slice(
+      partywisePurchasePagination.startIndex, 
+      partywisePurchasePagination.endIndex + 1
+    );
+    
     return (
       <div className="overflow-x-auto rounded-lg border border-gray-200">
         <table className="min-w-full divide-y divide-gray-200 text-sm">
@@ -2276,7 +2399,7 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
             </tr>
           </thead>
           <tbody>
-            {sortedData.map((row, idx) => {
+            {paginatedData.map((row, idx) => {
               const isTotalRow = row.partyName?.includes('TOTAL');
               return (
                 <tr key={idx} className={isTotalRow ? "bg-gray-100 font-bold" : "hover:bg-blue-50"}>
@@ -2292,6 +2415,7 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
             })}
           </tbody>
         </table>
+        <PaginationControls {...partywisePurchasePagination} />
       </div>
     );
   };
@@ -3395,17 +3519,133 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
     if (!db || !userId || !isAuthReady) return;
     const paymentsRef = collection(db, `artifacts/${appId}/users/${userId}/payments`);
     const unsub = onSnapshot(paymentsRef, (snap) => {
-      let arr = [];
+      const arr = [];
       snap.forEach(doc => arr.push({ id: doc.id, ...doc.data() }));
       setPayments(arr);
     });
     return () => unsub();
   }, [db, userId, isAuthReady, appId]);
 
+  // Utility: Get paid amount for a bill
+  function getBillPaidAmount(billId) {
+    const billPayments = payments.filter(p => {
+      const matches = p.billId === billId || 
+        p.invoiceId === billId || 
+        p.purchaseBillId === billId ||
+        p.invoiceNumber === billId ||
+        p.billNumber === billId;
+      
+      return matches;
+    });
+    
+    const totalPaid = billPayments.reduce((sum, p) => {
+      // Try multiple possible amount fields
+      const amount = parseFloat(p.amount) || parseFloat(p.totalAmount) || parseFloat(p.paymentAmount) || 0;
+      return sum + amount;
+    }, 0);
+    
+    return totalPaid;
+  }
+
+  // Utility: Get paid amount for a party (sum of all bills for that party)
+  function getPartyPaidAmount(bills) {
+    if (!bills || bills.length === 0) {
+      return 0;
+    }
+    
+    const totalPaid = (bills || []).reduce((sum, bill) => {
+      const billPaid = getBillPaidAmount(bill.id);
+      return sum + billPaid;
+    }, 0);
+    
+    return totalPaid;
+  }
+
+  // Debug function to show data structure
+  const debugDataStructure = () => {
+    console.log('🔍 === COMPREHENSIVE DATA STRUCTURE DEBUG ===');
+    console.log('📊 Data length:', data.length);
+    
+    if (data.length > 0) {
+      console.log('📋 First data item:', data[0]);
+      console.log('📄 First data item bills:', data[0].bills);
+      if (data[0].bills && data[0].bills.length > 0) {
+        console.log('📝 First bill structure:', data[0].bills[0]);
+        console.log('🔗 First bill ID:', data[0].bills[0].id);
+        console.log('📋 First bill number:', data[0].bills[0].invoiceNumber || data[0].bills[0].billNumber || data[0].bills[0].number);
+      }
+    }
+    
+    console.log('💳 Payments length:', payments.length);
+    if (payments.length > 0) {
+      console.log('💳 First payment structure:', payments[0]);
+      console.log('🔑 All payment fields:', Object.keys(payments[0]));
+      console.log('📋 Sample payments with bill references:');
+      payments.slice(0, 5).forEach((p, i) => {
+        console.log(`💳 Payment ${i + 1}:`, {
+          id: p.id,
+          billId: p.billId,
+          invoiceId: p.invoiceId,
+          purchaseBillId: p.purchaseBillId,
+          invoiceNumber: p.invoiceNumber,
+          billNumber: p.billNumber,
+          amount: p.amount,
+          totalAmount: p.totalAmount,
+          paymentAmount: p.paymentAmount,
+          remainingAmount: p.remainingAmount,
+          partyId: p.partyId,
+          date: p.date,
+          type: p.type
+        });
+      });
+      
+      // Check for any payments that might match the first bill
+      if (data.length > 0 && data[0].bills && data[0].bills.length > 0) {
+        const firstBillId = data[0].bills[0].id;
+        const firstBillNumber = data[0].bills[0].invoiceNumber || data[0].bills[0].billNumber || data[0].bills[0].number;
+        
+        console.log('🔍 Checking for payments matching first bill:');
+        console.log('   Bill ID:', firstBillId);
+        console.log('   Bill Number:', firstBillNumber);
+        
+        const matchingPayments = payments.filter(p => 
+          p.billId === firstBillId || 
+          p.invoiceId === firstBillId || 
+          p.purchaseBillId === firstBillId ||
+          p.invoiceNumber === firstBillNumber ||
+          p.billNumber === firstBillNumber ||
+          p.invoiceNumber === firstBillId ||
+          p.billNumber === firstBillId
+        );
+        
+        console.log('✅ Matching payments found:', matchingPayments.length);
+                 matchingPayments.forEach((p, i) => {
+           console.log(`   Payment ${i + 1}:`, {
+             id: p.id,
+             billId: p.billId,
+             invoiceId: p.invoiceId,
+             purchaseBillId: p.purchaseBillId,
+             invoiceNumber: p.invoiceNumber,
+             billNumber: p.billNumber,
+             amount: p.amount,
+             totalAmount: p.totalAmount,
+             paymentAmount: p.paymentAmount,
+             remainingAmount: p.remainingAmount
+           });
+         });
+      }
+    }
+    
+    console.log('🔍 === END DEBUG ===');
+  };
+
   // Main render
   return (
     <div className="p-6 bg-white rounded-lg shadow-md">
       <h2 className="text-2xl font-bold text-gray-800 mb-4">Reports</h2>
+      
+
+      
       {renderFilters()}
       {loading && <div className="text-blue-600 px-4 py-2">Loading...</div>}
       {error && <div className="text-red-600">{error}</div>}

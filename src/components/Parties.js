@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { collection, addDoc, query, onSnapshot, serverTimestamp, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { useTableSort, SortableHeader } from '../utils/tableSort';
+import { useTablePagination } from '../utils/tablePagination';
+import PaginationControls from '../utils/PaginationControls';
 
 const Parties = ({ db, userId, isAuthReady, appId }) => {
     const [firmName, setFirmName] = useState('');
@@ -20,6 +23,13 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
     const [creditPeriod, setCreditPeriod] = useState('0');
     const [creditLimit, setCreditLimit] = useState('0');
     const [sameAsWhatsapp, setSameAsWhatsapp] = useState(false);
+
+      // Table sorting hook with default sort by creation date descending (LIFO)
+  const { sortConfig, handleSort, getSortedData } = useTableSort([], { key: 'createdAt', direction: 'desc' });
+    
+    // Table pagination hook
+    const sortedParties = getSortedData(partiesList);
+    const pagination = useTablePagination(sortedParties, 10);
 
     const indianStates = [
         'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh',
@@ -50,7 +60,7 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
                 snapshot.forEach((doc) => {
                     parties.push({ id: doc.id, ...doc.data() });
                 });
-                parties.sort((a, b) => a.firmName.localeCompare(b.firmName));
+                // LIFO sorting is now handled by the pagination utility
                 setPartiesList(parties);
             }, (error) => {
                 console.error("Error fetching parties:", error);
@@ -333,19 +343,19 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
                     <table className="min-w-full divide-y divide-gray-200">
                         <thead className="bg-gray-50">
                             <tr>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Firm Name</th>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Person Name</th>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contact</th>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">WhatsApp</th>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">GSTIN</th>
-                                <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Address</th>
+                                <SortableHeader columnKey="firmName" label="Firm Name" onSort={handleSort} sortConfig={sortConfig} />
+                                <SortableHeader columnKey="personName" label="Person Name" onSort={handleSort} sortConfig={sortConfig} />
+                                <SortableHeader columnKey="partyType" label="Type" onSort={handleSort} sortConfig={sortConfig} />
+                                <SortableHeader columnKey="contact" label="Contact" onSort={handleSort} sortConfig={sortConfig} />
+                                <SortableHeader columnKey="email" label="Email" onSort={handleSort} sortConfig={sortConfig} />
+                                <SortableHeader columnKey="whatsapp" label="WhatsApp" onSort={handleSort} sortConfig={sortConfig} />
+                                <SortableHeader columnKey="gstin" label="GSTIN" onSort={handleSort} sortConfig={sortConfig} />
+                                <SortableHeader columnKey="address" label="Address" onSort={handleSort} sortConfig={sortConfig} />
                                 <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                             </tr>
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
-                            {partiesList.map((party) => (
+                            {pagination.currentData.map((party) => (
                                 <tr key={party.id}>
                                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{party.firmName}</td>
                                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{party.personName}</td>
@@ -373,6 +383,9 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
                             ))}
                         </tbody>
                     </table>
+                    
+                    {/* Pagination Controls */}
+                    <PaginationControls {...pagination} />
                 </div>
             )}
         </div>

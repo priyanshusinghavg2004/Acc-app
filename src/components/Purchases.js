@@ -1,11 +1,34 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { collection, onSnapshot, doc, addDoc, serverTimestamp, getDoc, setDoc, deleteDoc, getDocs, query } from 'firebase/firestore';
+import { useLocation } from 'react-router-dom';
 import BillTemplates from './BillTemplates';
 import PurchaseBillTemplate from './BillTemplates/PurchaseBillTemplate';
 import PurchaseOrderTemplate from './BillTemplates/PurchaseOrderTemplate';
+import ReceiptTemplate from './BillTemplates/ReceiptTemplate';
+import ActionButtons from './ActionButtons';
+import ImageManager from './ImageManager';
+import imageManager from '../utils/imageManager';
 
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
+import { useTableSort, SortableHeader } from '../utils/tableSort';
+import { useTablePagination } from '../utils/tablePagination';
+import PaginationControls from '../utils/PaginationControls';
+import { 
+  getPartyAdvance, 
+  allocateAdvanceToBill, 
+  markAdvanceUsed 
+} from '../utils/advanceUtils';
+import { 
+  StandardModal, 
+  StandardButton, 
+  ActionBar, 
+  PreviewModal, 
+  ConfirmationModal, 
+  FormModal, 
+  globalModalManager, 
+  useModalManager 
+} from './Modal';
 
 const initialItemRow = {
   item: '',
@@ -26,8 +49,19 @@ const areaUnits = [
 ];
 
 function Purchases({ db, userId, isAuthReady, appId }) {
+  // Modal manager hook
+  const { modals, openModal, closeModal, closeTopModal } = useModalManager();
+  
+  // URL parameter handling for document type selection
+  const location = useLocation();
+  
   // Document type: purchaseBill or purchaseOrder
-  const [docType, setDocType] = useState('purchaseBill');
+  const [docType, setDocType] = useState(() => {
+    const urlParams = new URLSearchParams(location.search);
+    const tabParam = urlParams.get('tab');
+    if (tabParam === 'orders') return 'purchaseOrder';
+    return 'purchaseBill';
+  });
   const docTypeOptions = [
     { value: 'purchaseBill', label: 'PURCHASE BILL', collection: 'purchaseBills', numberLabel: 'Purchase Bill Number' },
     { value: 'purchaseOrder', label: 'PURCHASE ORDER', collection: 'purchaseOrders', numberLabel: 'Purchase Order Number' },
@@ -71,6 +105,62 @@ function Purchases({ db, userId, isAuthReady, appId }) {
   const [payments, setPayments] = useState([]);
   const [selectedBillForPayment, setSelectedBillForPayment] = useState(null);
 
+  // Payment Receipt Preview states
+  const [showReceiptModal, setShowReceiptModal] = useState(false);
+  const [selectedPaymentForReceipt, setSelectedPaymentForReceipt] = useState(null);
+  const [receiptZoom, setReceiptZoom] = useState(1);
+  const receiptRef = useRef();
+  
+  // Payment Details Modal states (for multiple receipts)
+  const [showPaymentDetailsModal, setShowPaymentDetailsModal] = useState(false);
+  const [selectedBillForReceipts, setSelectedBillForReceipts] = useState(null);
+  
+  // Image Management states
+  const [showImageManager, setShowImageManager] = useState(false);
+  const [selectedImages, setSelectedImages] = useState({});
+
+  // Table sorting hook with default sort by bill number descending (LIFO)
+  const { sortConfig, handleSort, getSortedData } = useTableSort([], { key: 'billNumber', direction: 'desc' });
+  const { currentPage, totalPages, handlePageChange, getPaginatedData } = useTablePagination(getSortedData(bills), 10);
+  
+  // Image management functions
+  const handleImageSelect = (image) => {
+    setSelectedImages(prev => ({
+      ...prev,
+      [image.category]: image
+    }));
+    setShowImageManager(false);
+  };
+  
+  const loadSavedImages = async () => {
+    try {
+      const logo = await imageManager.getImagesByCategory('logo', userId);
+      const seal = await imageManager.getImagesByCategory('seal', userId);
+      const signature = await imageManager.getImagesByCategory('signature', userId);
+      const qr = await imageManager.getImagesByCategory('qr', userId);
+      
+      setSelectedImages({
+        logo: logo[0] || null,
+        seal: seal[0] || null,
+        signature: signature[0] || null,
+        qr: qr[0] || null
+      });
+    } catch (error) {
+      console.error('Error loading saved images:', error);
+    }
+  };
+  
+  // Global ESC key handler for LIFO modal management
+  useEffect(() => {
+    const handleEsc = (e) => {
+      if (e.key === 'Escape') {
+        closeTopModal();
+      }
+    };
+    
+    document.addEventListener('keydown', handleEsc);
+    return () => document.removeEventListener('keydown', handleEsc);
+  }, [closeTopModal]);
 
   // Define handleViewBill
   const handleViewBill = (bill) => {
@@ -150,6 +240,13 @@ function Purchases({ db, userId, isAuthReady, appId }) {
       return () => unsubscribe();
     }
   }, [db, userId, isAuthReady, appId]);
+  
+  // Load saved images on component mount
+  useEffect(() => {
+    if (userId) {
+      loadSavedImages();
+    }
+  }, [userId]);
 
   // Generate receipt number for purchase payments
   const generateReceiptNumber = async () => {
@@ -207,6 +304,21 @@ function Purchases({ db, userId, isAuthReady, appId }) {
     return totalAmount - totalPaid;
   };
 
+  // Table pagination hook - placed after function definitions
+  const sortedBills = getSortedData(bills.map((bill) => {
+    const partyName = getPartyName(bill.party);
+    const outstanding = getBillOutstanding(bill);
+    const totalAmount = parseFloat(bill.totalAmount || bill.amount) || 0;
+    const paid = totalAmount - outstanding;
+    return {
+      ...bill,
+      partyName,
+      paid: Math.max(0, paid),
+      outstanding: Math.max(0, outstanding)
+    };
+  }));
+  const pagination = useTablePagination(sortedBills, 10);
+
   // Fetch bills for the selected type
   useEffect(() => {
     if (!db || !userId || !isAuthReady || !appId) return;
@@ -221,11 +333,7 @@ function Purchases({ db, userId, isAuthReady, appId }) {
         snapshot.forEach((doc) => {
           arr.push({ id: doc.id, ...doc.data() });
         });
-        arr.sort((a, b) => {
-          const aNum = a.number || '';
-          const bNum = b.number || '';
-          return bNum.localeCompare(aNum);
-        });
+        // LIFO sorting is now handled by the pagination utility
         setBills(arr);
       }, (error) => {
         console.error('Error fetching bills:', error);
@@ -421,7 +529,45 @@ function Purchases({ db, userId, isAuthReady, appId }) {
         savedBill = { id: docRef.id, ...billData };
       }
 
-
+      // --- ADVANCE ALLOCATION LOGIC ---
+      // Only allocate advance for purchase bills (not purchase orders)
+      if (docType === 'purchaseBill') {
+        const availableAdvance = getPartyAdvance(party, payments);
+        if (availableAdvance > 0) {
+          const { allocatedAdvance, advanceAllocations, remainingBillAmount } = allocateAdvanceToBill(party, grandTotal, payments);
+          if (allocatedAdvance > 0) {
+            // Mark advances as used
+            await markAdvanceUsed(advanceAllocations, db, appId, userId, payments);
+            // Optionally, create a payment record for advance allocation
+            const paymentsRef = collection(db, `artifacts/${appId}/users/${userId}/payments`);
+            await addDoc(paymentsRef, {
+              receiptNumber: `ADV-${billNumber}`,
+              paymentDate: new Date().toISOString().split('T')[0],
+              partyId: party,
+              partyName: parties.find(p => p.id === party)?.firmName || '',
+              totalAmount: allocatedAdvance,
+              paymentMode: 'Advance Allocation',
+              reference: 'Auto-advance',
+              notes: 'Advance automatically allocated to new purchase bill',
+              type: 'purchase',
+              paymentType: 'advance-allocation',
+              billId: savedBill.id,
+              billNumber: billNumber,
+              allocations: [{
+                billType: 'purchase',
+                billId: savedBill.id,
+                billNumber: billNumber,
+                allocatedAmount: allocatedAdvance,
+                billOutstanding: grandTotal,
+                isFullPayment: allocatedAdvance >= grandTotal
+              }],
+              advanceAllocations,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp()
+            });
+          }
+        }
+      }
 
       setBillNumber('');
       setBillDate(new Date().toISOString().split('T')[0]);
@@ -460,6 +606,273 @@ function Purchases({ db, userId, isAuthReady, appId }) {
   };
 
   // Payment handling functions
+  // Get bill payments for receipt preview
+  const getBillPayments = (bill) => {
+    return payments.filter(p => 
+      p.allocations && p.allocations.some(a => a.billId === bill.id && a.billType === 'purchase')
+    );
+  };
+
+  // Handle payment receipt preview
+  const handlePreviewReceipt = (payment) => {
+    setSelectedPaymentForReceipt(payment);
+    setShowReceiptModal(true);
+  };
+
+  // Handle payment receipt preview from bill
+  const handleViewPaymentReceipts = (bill) => {
+    const billPayments = getBillPayments(bill);
+    if (billPayments.length > 0) {
+      setSelectedBillForReceipts(bill);
+      setShowPaymentDetailsModal(true);
+    }
+  };
+
+  // Print receipt
+  const printReceipt = () => {
+    if (receiptRef.current) {
+      const printContents = receiptRef.current.innerHTML;
+      const printWindow = window.open('', '', 'height=800,width=1000');
+      printWindow.document.write('<html><head><title>Payment Receipt</title>');
+      printWindow.document.write('<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss/dist/tailwind.min.css">');
+      printWindow.document.write('<style>');
+      printWindow.document.write('.print\\:hidden { display: none !important; }');
+      printWindow.document.write('@media print { .print\\:hidden { display: none !important; } }');
+      printWindow.document.write('.print\\:grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }');
+      printWindow.document.write('.print\\:bg-white { background-color: white !important; }');
+      printWindow.document.write('.print\\:border { border-width: 1px !important; }');
+      printWindow.document.write('.print\\:border-gray-300 { border-color: #d1d5db !important; }');
+      printWindow.document.write('.print\\:flex-row { flex-direction: row !important; }');
+      printWindow.document.write('.print\\:text-sm { font-size: 0.875rem !important; }');
+      printWindow.document.write('.print\\:text-xs { font-size: 0.75rem !important; }');
+      printWindow.document.write('.print\\:text-lg { font-size: 1.125rem !important; }');
+      printWindow.document.write('.print\\:text-xl { font-size: 1.25rem !important; }');
+      printWindow.document.write('.print\\:text-2xl { font-size: 1.5rem !important; }');
+      printWindow.document.write('.print\\:font-bold { font-weight: 700 !important; }');
+      printWindow.document.write('.print\\:font-semibold { font-weight: 600 !important; }');
+      printWindow.document.write('.print\\:text-center { text-align: center !important; }');
+      printWindow.document.write('.print\\:text-right { text-align: right !important; }');
+      printWindow.document.write('.print\\:text-left { text-align: left !important; }');
+      printWindow.document.write('.print\\:p-4 { padding: 1rem !important; }');
+      printWindow.document.write('.print\\:p-2 { padding: 0.5rem !important; }');
+      printWindow.document.write('.print\\:p-1 { padding: 0.25rem !important; }');
+      printWindow.document.write('.print\\:m-4 { margin: 1rem !important; }');
+      printWindow.document.write('.print\\:m-2 { margin: 0.5rem !important; }');
+      printWindow.document.write('.print\\:m-1 { margin: 0.25rem !important; }');
+      printWindow.document.write('.print\\:border-b { border-bottom-width: 1px !important; }');
+      printWindow.document.write('.print\\:border-gray-300 { border-color: #d1d5db !important; }');
+      printWindow.document.write('.print\\:w-full { width: 100% !important; }');
+      printWindow.document.write('.print\\:h-auto { height: auto !important; }');
+      printWindow.document.write('.print\\:max-w-none { max-width: none !important; }');
+      printWindow.document.write('.print\\:shadow-none { box-shadow: none !important; }');
+      printWindow.document.write('.print\\:bg-white { background-color: white !important; }');
+      printWindow.document.write('.print\\:text-black { color: black !important; }');
+      printWindow.document.write('.print\\:text-gray-800 { color: #1f2937 !important; }');
+      printWindow.document.write('.print\\:text-gray-600 { color: #4b5563 !important; }');
+      printWindow.document.write('.print\\:text-gray-500 { color: #6b7280 !important; }');
+      printWindow.document.write('.print\\:text-blue-600 { color: #2563eb !important; }');
+      printWindow.document.write('.print\\:text-green-600 { color: #16a34a !important; }');
+      printWindow.document.write('.print\\:text-red-600 { color: #dc2626 !important; }');
+      printWindow.document.write('.print\\:text-yellow-600 { color: #ca8a04 !important; }');
+      printWindow.document.write('.print\\:text-purple-600 { color: #9333ea !important; }');
+      printWindow.document.write('.print\\:text-pink-600 { color: #db2777 !important; }');
+      printWindow.document.write('.print\\:text-indigo-600 { color: #4f46e5 !important; }');
+      printWindow.document.write('.print\\:text-teal-600 { color: #0d9488 !important; }');
+      printWindow.document.write('.print\\:text-orange-600 { color: #ea580c !important; }');
+      printWindow.document.write('.print\\:text-cyan-600 { color: #0891b2 !important; }');
+      printWindow.document.write('.print\\:text-lime-600 { color: #65a30d !important; }');
+      printWindow.document.write('.print\\:text-emerald-600 { color: #059669 !important; }');
+      printWindow.document.write('.print\\:text-rose-600 { color: #e11d48 !important; }');
+      printWindow.document.write('.print\\:text-violet-600 { color: #7c3aed !important; }');
+      printWindow.document.write('.print\\:text-fuchsia-600 { color: #c026d3 !important; }');
+      printWindow.document.write('.print\\:text-sky-600 { color: #0284c7 !important; }');
+      printWindow.document.write('.print\\:text-slate-600 { color: #475569 !important; }');
+      printWindow.document.write('.print\\:text-zinc-600 { color: #52525b !important; }');
+      printWindow.document.write('.print\\:text-neutral-600 { color: #525252 !important; }');
+      printWindow.document.write('.print\\:text-stone-600 { color: #57534e !important; }');
+      printWindow.document.write('.print\\:text-red-500 { color: #ef4444 !important; }');
+      printWindow.document.write('.print\\:text-green-500 { color: #22c55e !important; }');
+      printWindow.document.write('.print\\:text-blue-500 { color: #3b82f6 !important; }');
+      printWindow.document.write('.print\\:text-yellow-500 { color: #eab308 !important; }');
+      printWindow.document.write('.print\\:text-purple-500 { color: #a855f7 !important; }');
+      printWindow.document.write('.print\\:text-pink-500 { color: #ec4899 !important; }');
+      printWindow.document.write('.print\\:text-indigo-500 { color: #6366f1 !important; }');
+      printWindow.document.write('.print\\:text-teal-500 { color: #14b8a6 !important; }');
+      printWindow.document.write('.print\\:text-orange-500 { color: #f97316 !important; }');
+      printWindow.document.write('.print\\:text-cyan-500 { color: #06b6d4 !important; }');
+      printWindow.document.write('.print\\:text-lime-500 { color: #84cc16 !important; }');
+      printWindow.document.write('.print\\:text-emerald-500 { color: #10b981 !important; }');
+      printWindow.document.write('.print\\:text-rose-500 { color: #f43f5e !important; }');
+      printWindow.document.write('.print\\:text-violet-500 { color: #8b5cf6 !important; }');
+      printWindow.document.write('.print\\:text-fuchsia-500 { color: #d946ef !important; }');
+      printWindow.document.write('.print\\:text-sky-500 { color: #0ea5e9 !important; }');
+      printWindow.document.write('.print\\:text-slate-500 { color: #64748b !important; }');
+      printWindow.document.write('.print\\:text-zinc-500 { color: #71717a !important; }');
+      printWindow.document.write('.print\\:text-neutral-500 { color: #737373 !important; }');
+      printWindow.document.write('.print\\:text-stone-500 { color: #78716c !important; }');
+      printWindow.document.write('</style>');
+      printWindow.document.write('</head><body>');
+      printWindow.document.write(printContents);
+      printWindow.document.write('</body></html>');
+      printWindow.document.close();
+      printWindow.focus();
+      setTimeout(() => {
+        printWindow.print();
+        printWindow.close();
+      }, 100);
+    }
+  };
+
+  // Generate PDF receipt
+  const generatePDFReceipt = async () => {
+    if (!selectedPaymentForReceipt) return;
+    
+    const { jsPDF } = window.jspdf;
+    if (!jsPDF) {
+      alert('PDF generation library not available');
+      return;
+    }
+    
+    try {
+      const doc = new jsPDF();
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const margin = 20;
+      const contentWidth = pageWidth - (2 * margin);
+      let yPosition = margin;
+      
+      // Helper function to safely get text
+      const safeText = (text) => text || '';
+      
+      // Add company logo if available
+      if (selectedImages.logo && selectedImages.logo.data) {
+        try {
+          const logoImg = new Image();
+          logoImg.src = selectedImages.logo.data;
+          await new Promise((resolve, reject) => {
+            logoImg.onload = resolve;
+            logoImg.onerror = reject;
+          });
+          
+          const logoWidth = 30;
+          const logoHeight = (logoImg.height * logoWidth) / logoImg.width;
+          const logoX = margin;
+          const logoY = yPosition - 5;
+          
+          doc.addImage(selectedImages.logo.data, 'JPEG', logoX, logoY, logoWidth, logoHeight);
+          yPosition += logoHeight + 5;
+        } catch (error) {
+          console.error('Error adding logo to PDF:', error);
+        }
+      }
+      
+      // Company details
+      doc.setFontSize(18);
+      doc.setFont(undefined, 'bold');
+      doc.text(safeText(company.firmName) || 'Company Name', pageWidth / 2, yPosition, { align: 'center' });
+      yPosition += 10;
+      
+      doc.setFontSize(10);
+      doc.setFont(undefined, 'normal');
+      if (safeText(company.address)) {
+        doc.text(safeText(company.address), pageWidth / 2, yPosition, { align: 'center' });
+        yPosition += 5;
+      }
+      if (safeText(company.city)) {
+        doc.text(safeText(company.city), pageWidth / 2, yPosition, { align: 'center' });
+        yPosition += 5;
+      }
+      if (safeText(company.gstin)) {
+        doc.text(`GSTIN: ${safeText(company.gstin)}`, pageWidth / 2, yPosition, { align: 'center' });
+        yPosition += 5;
+      }
+      
+      yPosition += 10;
+      
+      // Receipt title
+      doc.setFontSize(16);
+      doc.setFont(undefined, 'bold');
+      doc.text('PAYMENT RECEIPT', pageWidth / 2, yPosition, { align: 'center' });
+      yPosition += 15;
+      
+      // Receipt details
+      doc.setFontSize(12);
+      doc.setFont(undefined, 'normal');
+      
+      const receiptData = [
+        ['Receipt Number:', safeText(selectedPaymentForReceipt.receiptNumber)],
+        ['Date:', safeText(selectedPaymentForReceipt.paymentDate)],
+        ['Party Name:', safeText(selectedPaymentForReceipt.partyName)],
+        ['Payment Mode:', safeText(selectedPaymentForReceipt.paymentMode)],
+        ['Amount:', `₹${(selectedPaymentForReceipt.totalAmount || 0).toLocaleString()}`],
+      ];
+      
+      if (safeText(selectedPaymentForReceipt.reference)) {
+        receiptData.push(['Reference:', safeText(selectedPaymentForReceipt.reference)]);
+      }
+      if (safeText(selectedPaymentForReceipt.notes)) {
+        receiptData.push(['Notes:', safeText(selectedPaymentForReceipt.notes)]);
+      }
+      
+      receiptData.forEach(([label, value]) => {
+        doc.setFont(undefined, 'bold');
+        doc.text(label, margin, yPosition);
+        doc.setFont(undefined, 'normal');
+        doc.text(value, margin + 50, yPosition);
+        yPosition += 8;
+      });
+      
+      // Allocations
+      if (selectedPaymentForReceipt.allocations && selectedPaymentForReceipt.allocations.length > 0) {
+        yPosition += 10;
+        doc.setFontSize(14);
+        doc.setFont(undefined, 'bold');
+        doc.text('Payment Allocations:', margin, yPosition);
+        yPosition += 10;
+        
+        doc.setFontSize(10);
+        doc.setFont(undefined, 'normal');
+        selectedPaymentForReceipt.allocations.forEach((allocation, index) => {
+          const billType = safeText(allocation.billType).toUpperCase();
+          const billNumber = safeText(allocation.billNumber);
+          const allocatedAmount = allocation.allocatedAmount || 0;
+          doc.text(`${index + 1}. ${billType} ${billNumber}: ₹${allocatedAmount.toLocaleString()}`, margin + 5, yPosition);
+          yPosition += 6;
+        });
+      }
+      
+      // Advance allocations
+      if (selectedPaymentForReceipt.advanceAllocations && selectedPaymentForReceipt.advanceAllocations.length > 0) {
+        yPosition += 10;
+        doc.setFontSize(14);
+        doc.setFont(undefined, 'bold');
+        doc.text('Advance Allocations:', margin, yPosition);
+        yPosition += 10;
+        
+        doc.setFontSize(10);
+        doc.setFont(undefined, 'normal');
+        selectedPaymentForReceipt.advanceAllocations.forEach((advance, index) => {
+          const amountUsed = advance.amountUsed || 0;
+          doc.text(`${index + 1}. Advance Payment: ₹${amountUsed.toLocaleString()}`, margin + 5, yPosition);
+          yPosition += 6;
+        });
+      }
+      
+      // Footer
+      yPosition = pageHeight - 30;
+      doc.setFontSize(10);
+      doc.setFont(undefined, 'normal');
+      doc.text('Thank you for your payment!', pageWidth / 2, yPosition, { align: 'center' });
+      
+      // Save PDF
+      const fileName = `receipt_${safeText(selectedPaymentForReceipt.receiptNumber)}_${safeText(selectedPaymentForReceipt.paymentDate)}.pdf`;
+      doc.save(fileName);
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      alert('Error generating PDF. Please try again.');
+    }
+  };
+
   const handleAddPayment = async (bill) => {
     setPaymentAmount('');
     setPaymentDate(new Date().toISOString().split('T')[0]);
@@ -489,8 +902,114 @@ function Purchases({ db, userId, isAuthReady, appId }) {
     try {
       const paymentAmountNum = parseFloat(paymentAmount);
       const billOutstanding = getBillOutstanding(selectedBillForPayment);
-      const allocatedAmount = Math.min(paymentAmountNum, billOutstanding);
       
+      // First, try to allocate available advance
+      const availableAdvance = getPartyAdvance(selectedBillForPayment.party, payments);
+      let advanceAllocations = [];
+      let advanceUsed = 0;
+      let remainingPaymentAmount = paymentAmountNum;
+      
+      if (availableAdvance > 0) {
+        // Allocate advance to this bill
+        const advanceResult = allocateAdvanceToBill(selectedBillForPayment.party, billOutstanding, payments);
+        if (advanceResult.allocatedAdvance > 0) {
+          advanceAllocations = advanceResult.advanceAllocations;
+          advanceUsed = advanceResult.allocatedAdvance;
+          remainingPaymentAmount = paymentAmountNum - advanceUsed;
+          
+          // Mark advances as used
+          if (Array.isArray(advanceResult.advanceAllocations) && advanceResult.advanceAllocations.length > 0) {
+            await markAdvanceUsed(advanceResult.advanceAllocations, db, appId, userId, payments);
+          }
+        }
+      }
+      
+      // Check if remaining payment amount exceeds bill outstanding (FIFO allocation)
+      if (remainingPaymentAmount > billOutstanding) {
+        // Allocate excess amount to other outstanding bills for the same party using FIFO
+        const excessAmount = remainingPaymentAmount - billOutstanding;
+        const partyBills = bills.filter(bill => 
+          (bill.party === selectedBillForPayment.party || bill.partyId === selectedBillForPayment.party) && 
+          bill.id !== selectedBillForPayment.id && 
+          getBillOutstanding(bill) > 0
+        );
+        
+        // Sort by date (FIFO - oldest first)
+        partyBills.sort((a, b) => new Date(a.date || a.billDate) - new Date(b.date || b.billDate));
+        
+        let remainingExcess = excessAmount;
+        const additionalAllocations = [];
+        
+        for (const bill of partyBills) {
+          if (remainingExcess <= 0) break;
+          
+          const billOutstanding = getBillOutstanding(bill);
+          const allocatedAmount = Math.min(remainingExcess, billOutstanding);
+          
+          additionalAllocations.push({
+            billType: 'purchase',
+            billId: bill.id,
+            billNumber: bill.number,
+            allocatedAmount: allocatedAmount,
+            billOutstanding: billOutstanding,
+            isFullPayment: allocatedAmount >= billOutstanding
+          });
+          
+          remainingExcess -= allocatedAmount;
+        }
+        
+        // Create allocations array with primary bill and additional allocations
+        const allocations = [
+          {
+            billType: 'purchase',
+            billId: selectedBillForPayment.id,
+            billNumber: selectedBillForPayment.number,
+            allocatedAmount: billOutstanding,
+            billOutstanding: billOutstanding,
+            isFullPayment: true
+          },
+          ...additionalAllocations
+        ];
+        
+        const paymentData = {
+          receiptNumber: receiptNumber,
+          paymentDate: paymentDate,
+          partyId: selectedBillForPayment.party,
+          partyName: getPartyName(selectedBillForPayment.party),
+          totalAmount: paymentAmountNum,
+          paymentMode: paymentMode,
+          reference: paymentReference,
+          notes: paymentNotes,
+          type: 'purchase',
+          paymentType: 'bill',
+          billId: selectedBillForPayment.id,
+          billNumber: selectedBillForPayment.number,
+          allocations: allocations,
+          remainingAmount: remainingExcess,
+          fifoAllocationUsed: excessAmount - remainingExcess,
+          advanceAllocations: advanceAllocations,
+          advanceUsed: advanceUsed,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        };
+        
+        // Add to payments collection
+        const paymentsRef = collection(db, `artifacts/${appId}/users/${userId}/payments`);
+        await addDoc(paymentsRef, paymentData);
+        
+        // Reset payment form
+        setPaymentAmount('');
+        setPaymentDate(new Date().toISOString().split('T')[0]);
+        setPaymentMode('Cash');
+        setPaymentReference('');
+        setPaymentNotes('');
+        setReceiptNumber('');
+        setSelectedBillForPayment(null);
+        setShowPaymentModal(false);
+        
+        alert(`Payment added successfully! ₹${billOutstanding} allocated to this bill, ₹${excessAmount - remainingExcess} allocated to other bills using FIFO.`);
+      } else {
+        // Normal payment (amount <= bill outstanding)
       const paymentData = {
         receiptNumber: receiptNumber,
         paymentDate: paymentDate,
@@ -508,11 +1027,14 @@ function Purchases({ db, userId, isAuthReady, appId }) {
           billType: 'purchase',
           billId: selectedBillForPayment.id,
           billNumber: selectedBillForPayment.number,
-          allocatedAmount: allocatedAmount,
+            allocatedAmount: paymentAmountNum,
           billOutstanding: billOutstanding,
-          isFullPayment: allocatedAmount >= billOutstanding
+            isFullPayment: paymentAmountNum >= billOutstanding
         }],
-        remainingAmount: paymentAmountNum - allocatedAmount,
+          remainingAmount: 0,
+          fifoAllocationUsed: 0,
+          advanceAllocations: advanceAllocations,
+          advanceUsed: advanceUsed,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       };
@@ -532,6 +1054,7 @@ function Purchases({ db, userId, isAuthReady, appId }) {
       setShowPaymentModal(false);
       
       alert('Payment added successfully!');
+      }
     } catch (error) {
       console.error('Error saving payment:', error);
       alert('Error saving payment. Please try again.');
@@ -657,7 +1180,15 @@ function Purchases({ db, userId, isAuthReady, appId }) {
                     </div>
                     </div>
       <div className="bg-white rounded-lg shadow-md p-8 w-full max-w-5xl">
-        <h2 className="text-3xl font-bold text-center mb-6 uppercase">{docTypeOptions.find(opt => opt.value === docType)?.label || 'PURCHASE BILL'}</h2>
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-3xl font-bold uppercase">{docTypeOptions.find(opt => opt.value === docType)?.label || 'PURCHASE BILL'}</h2>
+          <button
+            onClick={() => setShowImageManager(true)}
+            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg text-sm transition-all duration-200"
+          >
+            Manage Images
+          </button>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
                     <div>
             <label className="block text-sm font-medium text-gray-700">{docTypeOptions.find(opt => opt.value === docType)?.numberLabel || 'Purchase Bill Number'}</label>
@@ -835,60 +1366,40 @@ function Purchases({ db, userId, isAuthReady, appId }) {
                         <table className="min-w-full divide-y divide-gray-200">
                             <thead className="bg-gray-50">
                                 <tr>
-                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Invoice Number</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Party</th>
-                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Amount</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Paid</th>
-                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Outstanding</th>
+                                    <SortableHeader columnKey="number" label="Invoice Number" onSort={handleSort} sortConfig={sortConfig} />
+                                    <SortableHeader columnKey="billDate" label="Date" onSort={handleSort} sortConfig={sortConfig} />
+                                    <SortableHeader columnKey="party" label="Party" onSort={handleSort} sortConfig={sortConfig} />
+                                    <SortableHeader columnKey="amount" label="Total Amount" onSort={handleSort} sortConfig={sortConfig} />
+                                    <SortableHeader columnKey="paid" label="Paid" onSort={handleSort} sortConfig={sortConfig} />
+                                    <SortableHeader columnKey="outstanding" label="Outstanding" onSort={handleSort} sortConfig={sortConfig} />
                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                                 </tr>
                             </thead>
                             <tbody className="bg-white divide-y divide-gray-200">
-                {bills.map((bill) => {
-                    // Calculate payment information
-                    const outstanding = getBillOutstanding(bill);
-                    const totalAmount = parseFloat(bill.totalAmount || bill.amount) || 0;
-                    const totalPaid = totalAmount - outstanding;
-                    
-                    return (
+                {pagination.currentData.map((bill) => (
                                     <tr key={bill.id}>
                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{bill.number}</td>
                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{bill.billDate}</td>
-                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{(() => {
-                      const p = parties.find(pt => pt.id === bill.party);
-                      return p ? p.firmName : bill.party || 'Unknown';
-                    })()}</td>
+                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{bill.partyName}</td>
                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">₹{bill.amount}</td>
-                    <td className="px-4 py-2 whitespace-nowrap text-sm text-green-600 font-medium">₹{totalPaid.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
-                    <td className="px-4 py-2 whitespace-nowrap text-sm text-red-600 font-medium">₹{outstanding.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+                    <td className="px-4 py-2 whitespace-nowrap text-sm text-green-600 font-medium">₹{(bill.paid || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+                    <td className="px-4 py-2 whitespace-nowrap text-sm text-red-600 font-medium">₹{(bill.outstanding || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
                     <td className="px-4 py-2 whitespace-nowrap text-sm">
-                                            <button
-                        onClick={() => handleViewBill(bill)}
-                        className="text-blue-600 hover:text-blue-900 font-medium mr-2"
-                      >
-                        View
-                      </button>
-                      <button
-                        onClick={() => handleEditBill(bill)}
-                                                className="text-indigo-600 hover:text-indigo-900 font-medium mr-2"
-                                            >
-                                                Edit
-                                            </button>
-                                            <button
-                        onClick={() => handleDeleteBill(bill.id)}
-                        className="text-red-600 hover:text-red-900 font-medium mr-2"
-                                            >
-                                                Delete
-                                            </button>
-                                            <button
-                        onClick={() => handleAddPayment(bill)}
-                        className="text-green-600 hover:text-green-900 font-medium mr-2"
-                                            >
-                                                Payment
-                                            </button>
-                                            <button
-                        onClick={() => {
+                      <ActionButtons
+                        actions={[
+                          { type: 'view', onClick: () => handleViewBill(bill) },
+                          { type: 'edit', onClick: () => handleEditBill(bill) },
+                          { type: 'delete', onClick: () => handleDeleteBill(bill.id) },
+                          { type: 'payment', onClick: () => handleAddPayment(bill) },
+                          {
+                            type: 'receipts',
+                            onClick: () => handleViewPaymentReceipts(bill),
+                            count: getBillPayments(bill).length,
+                            receiptNumbers: getBillPayments(bill).map(payment => payment.receiptNumber)
+                          },
+                          {
+                            type: docType === 'purchaseBill' ? 'purchaseBill' : 'purchaseOrder',
+                            onClick: () => {
                           setInvoiceBill({
                             ...bill,
                             companyDetails: company,
@@ -905,17 +1416,18 @@ function Purchases({ db, userId, isAuthReady, appId }) {
                             logoUrl: company.logoUrl || '',
                           });
                           setShowInvoiceModal(true);
-                        }}
-                        className="text-green-600 hover:text-green-900 font-medium"
-                      >
-                        {docType === 'purchaseBill' ? 'Purchase Bill' : docType === 'purchaseOrder' ? 'Purchase Order' : 'Bill'}
-                                            </button>
+                            }
+                          }
+                        ]}
+                      />
                                         </td>
                                     </tr>
-                                );
-                })}
+                                ))}
                             </tbody>
                         </table>
+                        
+                        {/* Pagination Controls */}
+                        <PaginationControls {...pagination} />
                     </div>
                 )}
             </div>
@@ -1016,6 +1528,32 @@ function Purchases({ db, userId, isAuthReady, appId }) {
             
             <h3 className="text-xl font-bold text-gray-900 mb-4">Add Payment</h3>
             
+            {/* Bill Information */}
+            {selectedBillForPayment && (
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                <h4 className="font-semibold text-blue-800 mb-2">Bill Information</h4>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div><span className="font-medium">Bill Number:</span> {selectedBillForPayment.number}</div>
+                  <div><span className="font-medium">Party:</span> {getPartyName(selectedBillForPayment.party)}</div>
+                  <div><span className="font-medium">Total Amount:</span> ₹{selectedBillForPayment.amount?.toLocaleString()}</div>
+                  <div><span className="font-medium">Outstanding:</span> ₹{getBillOutstanding(selectedBillForPayment).toLocaleString()}</div>
+                </div>
+              </div>
+            )}
+            
+            {/* Advance Information */}
+            {selectedBillForPayment && (
+              <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
+                <h4 className="font-semibold text-green-800 mb-2">Advance Information</h4>
+                <div className="text-sm space-y-1">
+                  <div><span className="font-medium">Available Advance:</span> ₹{getPartyAdvance(selectedBillForPayment.party, payments).toLocaleString()}</div>
+                  <div className="text-xs text-green-600">
+                    Note: If payment amount exceeds bill outstanding, excess will be allocated to other bills using FIFO (First-In, First-Out) method.
+                  </div>
+                </div>
+              </div>
+            )}
+            
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Receipt Number</label>
@@ -1046,7 +1584,18 @@ function Purchases({ db, userId, isAuthReady, appId }) {
                   onChange={(e) => setPaymentAmount(e.target.value)}
                   className="w-full border border-gray-300 rounded-md shadow-sm p-2"
                   placeholder="Enter payment amount"
+                  step="0.01"
+                  min="0"
                 />
+                {selectedBillForPayment && paymentAmount && (
+                  <div className="mt-1 text-xs text-gray-600">
+                    <div>Bill Outstanding: ₹{getBillOutstanding(selectedBillForPayment).toLocaleString()}</div>
+                    <div>Available Advance: ₹{getPartyAdvance(selectedBillForPayment.party, payments).toLocaleString()}</div>
+                    <div className="font-medium text-blue-600">
+                      Actual payment needed: ₹{Math.max(0, getBillOutstanding(selectedBillForPayment) - getPartyAdvance(selectedBillForPayment.party, payments)).toLocaleString()}
+                    </div>
+                  </div>
+                )}
               </div>
               
               <div>
@@ -1107,6 +1656,167 @@ function Purchases({ db, userId, isAuthReady, appId }) {
           </div>
         </div>
       )}
+
+      {/* Payment Details Modal */}
+      {showPaymentDetailsModal && selectedBillForReceipts && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <div>
+                <h2 className="text-xl font-semibold">Payment Receipts</h2>
+                <p className="text-sm text-gray-600 mt-1">
+                  {docType === 'purchaseBill' ? 'Purchase Bill' : 'Purchase Order'}: {selectedBillForReceipts.number} | 
+                  Party: {getPartyName(selectedBillForReceipts.party)} | 
+                  Total Amount: ₹{(selectedBillForReceipts.amount || 0).toLocaleString('en-IN')}
+                </p>
+              </div>
+              <button
+                onClick={() => setShowPaymentDetailsModal(false)}
+                className="text-gray-500 hover:text-gray-700 text-xl"
+              >
+                ✕
+              </button>
+            </div>
+            
+            {/* Payment Summary */}
+            <div className="bg-gray-50 p-4 rounded-lg mb-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                <div>
+                  <span className="font-medium text-gray-700">Total Bill Amount:</span>
+                  <span className="ml-2 text-lg font-semibold">₹{(selectedBillForReceipts.amount || 0).toLocaleString('en-IN')}</span>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-700">Total Paid:</span>
+                  <span className="ml-2 text-lg font-semibold text-green-600">₹{(selectedBillForReceipts.paid || 0).toLocaleString('en-IN')}</span>
+                </div>
+                <div>
+                  <span className="font-medium text-gray-700">Outstanding:</span>
+                  <span className="ml-2 text-lg font-semibold text-red-600">₹{(selectedBillForReceipts.outstanding || 0).toLocaleString('en-IN')}</span>
+                </div>
+              </div>
+            </div>
+            
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      PAYMENT RECEIPT NO
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      AGAINST {docType === 'purchaseBill' ? 'PURCHASE BILL' : 'PURCHASE ORDER'}
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      AMOUNT PAID
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      DATE
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      MODE
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      ACTIONS
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {getBillPayments(selectedBillForReceipts).map((payment) => {
+                    const allocation = payment.allocations.find(a => a.billId === selectedBillForReceipts.id && a.billType === 'purchase');
+                    return (
+                      <tr key={payment.id} className="hover:bg-gray-50">
+                        <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                          {payment.receiptNumber}
+                        </td>
+                        <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {allocation?.billNumber || 'N/A'}
+                        </td>
+                        <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                          ₹{parseFloat(allocation?.allocatedAmount || 0).toLocaleString('en-IN')}
+                        </td>
+                        <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {payment.paymentDate}
+                        </td>
+                        <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {payment.paymentMode}
+                        </td>
+                        <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                          <div className="flex space-x-2">
+                            <button
+                              onClick={() => {
+                                setSelectedPaymentForReceipt(payment);
+                                setShowReceiptModal(true);
+                                setShowPaymentDetailsModal(false);
+                              }}
+                              className="text-blue-600 hover:text-blue-900"
+                            >
+                              Preview
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Payment Receipt Preview Modal */}
+      <PreviewModal
+        isOpen={showReceiptModal && selectedPaymentForReceipt}
+        onClose={() => setShowReceiptModal(false)}
+        title="Payment Receipt Preview"
+        showBackButton={true}
+        onBack={() => {
+          setShowReceiptModal(false);
+          setShowPaymentDetailsModal(true);
+        }}
+        showPrintButton={true}
+        onPrint={printReceipt}
+        showPdfButton={true}
+        onPdf={generatePDFReceipt}
+        maxWidth="max-w-4xl"
+        maxHeight="max-h-[90vh]"
+        zIndex="z-50"
+      >
+        <div ref={receiptRef} className="flex justify-center">
+          <ReceiptTemplate
+            receipt={{
+              totalAmount: selectedPaymentForReceipt?.totalAmount,
+              date: selectedPaymentForReceipt?.paymentDate,
+              mode: selectedPaymentForReceipt?.paymentMode,
+              reference: selectedPaymentForReceipt?.reference,
+              notes: selectedPaymentForReceipt?.notes,
+              billReference: selectedPaymentForReceipt?.billId,
+              allocations: selectedPaymentForReceipt?.allocations,
+              advanceAllocations: selectedPaymentForReceipt?.advanceAllocations,
+              fifoAllocationUsed: selectedPaymentForReceipt?.fifoAllocationUsed,
+              remainingAmount: selectedPaymentForReceipt?.remainingAmount
+            }}
+            bill={{
+              number: selectedPaymentForReceipt?.billNumber,
+              invoiceNumber: selectedPaymentForReceipt?.billNumber,
+              billNumber: selectedPaymentForReceipt?.billNumber
+            }}
+            company={company}
+            party={{ firmName: selectedPaymentForReceipt?.partyName }}
+            receiptNumber={selectedPaymentForReceipt?.receiptNumber}
+            fifoAllocation={selectedPaymentForReceipt?.allocations}
+            customImages={selectedImages}
+          />
+        </div>
+      </PreviewModal>
+
+      {/* Image Manager Modal */}
+      <ImageManager
+        userId={userId}
+        onImageSelect={handleImageSelect}
+        showModal={showImageManager}
+        onClose={() => setShowImageManager(false)}
+      />
 
     </div>
     );
