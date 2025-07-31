@@ -31,7 +31,16 @@
     "start": "react-scripts start",
     "build": "react-scripts build",
     "electron": "electron .",
-    "electron-build": "npm run build && electron-builder"
+    "electron-build": "npm run build && electron-builder",
+    "security:deploy": "node deploy-security.js",
+    "security:test": "node security-test.js",
+    "security:report": "node -e \"console.log(JSON.stringify(require('./security-report.json'), null, 2))\"",
+    "firebase:deploy": "firebase deploy",
+    "firebase:deploy:rules": "firebase deploy --only firestore:rules,storage:rules",
+    "firebase:deploy:functions": "firebase deploy --only functions",
+    "firebase:deploy:hosting": "firebase deploy --only hosting",
+    "firebase:emulators": "firebase emulators:start",
+    "deploy": "npm run build && firebase deploy --only hosting"
   },
   "build": {
     "appId": "com.yourcompany.FlexiAccountant",

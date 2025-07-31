@@ -22,7 +22,7 @@ const stateCodeMap = {
     'Delhi': '07', 'Jammu and Kashmir': '01', 'Ladakh': '38', 'Lakshadweep': '31', 'Puducherry': '34'
 };
 
-const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => {
+const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId, onOpenWizard }) => {
     const [firmName, setFirmName] = useState('');
     const [gstin, setGstin] = useState('');
     const [address, setAddress] = useState('');
@@ -253,7 +253,17 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId }) => 
 
     return (
         <div className="p-6 bg-white rounded-lg shadow-md company-details-form">
-            <h2 className="text-2xl font-bold text-gray-800 mb-4">Company Details</h2>
+            <div className="flex justify-between items-center mb-4">
+                <h2 className="text-2xl font-bold text-gray-800">Company Details</h2>
+                {onOpenWizard && (
+                    <button
+                        onClick={onOpenWizard}
+                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm"
+                    >
+                        ✏️ Edit with Wizard
+                    </button>
+                )}
+            </div>
 
             {message && (
                 <div className={`p-3 mb-4 rounded-md ${message.includes('Error') ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>

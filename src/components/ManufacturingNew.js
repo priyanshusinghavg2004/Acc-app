@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { collection, addDoc, query, onSnapshot, serverTimestamp, doc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { sanitizeManufacturingData, validateInput, logSecurityEvent, apiRateLimiter } from '../utils/security';
 
 const ManufacturingNew = ({ db, userId, isAuthReady, appId }) => {
     // Core State
@@ -150,12 +151,36 @@ const ManufacturingNew = ({ db, userId, isAuthReady, appId }) => {
     // Handle Production Order Save
     const handleSaveProductionOrder = async () => {
         try {
+            // Security: Rate limiting
+            if (!apiRateLimiter.canMakeRequest()) {
+                setMessage('❌ Too many requests. Please wait a moment.');
+                return;
+            }
+
+            // Security: Input validation
+            if (!validateInput(newProductionOrder.orderNumber, 'string') ||
+                !validateInput(newProductionOrder.customerId, 'string') ||
+                !validateInput(newProductionOrder.productId, 'string')) {
+                setMessage('❌ Please fill all required fields.');
+                return;
+            }
+
+            // Security: Data sanitization
+            const sanitizedOrder = sanitizeManufacturingData(newProductionOrder);
+            
             const orderData = {
-                ...newProductionOrder,
+                ...sanitizedOrder,
                 businessType: businessType,
                 createdAt: serverTimestamp(),
                 updatedAt: serverTimestamp()
             };
+            
+            // Security: Log the action
+            logSecurityEvent('production_order_created', {
+                orderNumber: sanitizedOrder.orderNumber,
+                userId: userId,
+                appId: appId
+            });
             
             await addDoc(collection(db, `salaryPayments/${appId}/productionOrders`), orderData);
             

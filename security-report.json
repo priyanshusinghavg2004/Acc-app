@@ -1,0 +1,25 @@
+{
+  "timestamp": "2025-07-30T14:06:27.912Z",
+  "projectId": "acc-app-e5316",
+  "region": "asia-south1",
+  "securityMeasures": {
+    "firestoreRules": "Deployed with authentication and app-level access control",
+    "storageRules": "Deployed with authenticated access only",
+    "cloudFunctions": "Deployed with authentication middleware and rate limiting",
+    "cors": "Configured for secure cross-origin requests",
+    "inputValidation": "Implemented in client-side security utilities",
+    "rateLimiting": "Implemented in Cloud Functions and client-side",
+    "auditLogging": "Implemented for security events"
+  },
+  "endpoints": {
+    "api": "https://asia-south1-acc-app-e5316.cloudfunctions.net/api",
+    "health": "https://asia-south1-acc-app-e5316.cloudfunctions.net/health"
+  },
+  "recommendations": [
+    "Enable Firebase App Check for additional security",
+    "Set up monitoring and alerting for security events",
+    "Implement data backup strategy",
+    "Regular security audits and penetration testing",
+    "Keep dependencies updated"
+  ]
+}

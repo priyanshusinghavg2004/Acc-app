@@ -134,20 +134,50 @@ function App() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [openDropdown]);
 
+  // Add a ref to track if we've already tried to show the wizard
+  const wizardShownRef = useRef(false);
+
+  // Reset wizard shown ref when user changes
+  useEffect(() => {
+    wizardShownRef.current = false;
+  }, [user?.uid]);
+
   // Fetch company details for logo/avatar
   useEffect(() => {
     if (!db || !user?.uid || !isAuthReady) return;
     const docRef = doc(db, `artifacts/${appId}/users/${user.uid}/companyDetails`, 'myCompany');
     getDoc(docRef).then(docSnap => {
-      if (docSnap.exists()) setCompanyDetails(docSnap.data());
+      if (docSnap.exists()) {
+        setCompanyDetails(docSnap.data());
+        // If company details exist, don't show the wizard
+        setShowCompanyDetailsWizard(false);
+        wizardShownRef.current = false;
+      } else {
+        // If no company details exist, show the wizard for first-time users
+        // Only show if user is not in the middle of registration process and we haven't shown it yet
+        if (!emailVerificationSent && !wizardShownRef.current) {
+          console.log('No company details found, showing wizard for first-time user');
+          setShowCompanyDetailsWizard(true);
+          wizardShownRef.current = true;
+        }
+      }
+    }).catch(error => {
+      console.error('Error fetching company details:', error);
     });
-  }, [db, user, isAuthReady, appId]);
+  }, [db, user, isAuthReady, appId, emailVerificationSent]);
 
   useEffect(() => {
     if (user && localStorage.getItem('hasSeenTour') !== 'true') {
       window.startShepherdTour = true;
     }
   }, [user]);
+
+  // Separate effect to handle wizard state changes (only log when it actually changes)
+  useEffect(() => {
+    if (showCompanyDetailsWizard) {
+      console.log('Company wizard is now active');
+    }
+  }, [showCompanyDetailsWizard]);
 
   // Monitor user's email verification status
   useEffect(() => {
@@ -397,6 +427,14 @@ function App() {
                         className="text-xs text-orange-600 underline hover:text-orange-800"
                       >
                         🧪 Skip Email Verification (Development Only)
+                      </button>
+                      <button 
+                        onClick={() => {
+                          setShowCompanyDetailsWizard(true);
+                        }} 
+                        className="block text-xs text-blue-600 underline hover:text-blue-800 mt-1"
+                      >
+                        🧪 Open Company Wizard (Development Only)
                       </button>
                     </div>
                   )}
@@ -685,7 +723,29 @@ function AppContent({
         }}
       />
 
-      <div className="min-h-screen bg-gray-100">
+      {/* Show company wizard overlay for first-time users */}
+      {showCompanyDetailsWizard && (
+        <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-40">
+          <div className="bg-white rounded-lg p-8 max-w-md mx-4 text-center">
+            <h2 className="text-2xl font-bold text-gray-900 mb-4">Welcome to LekhaJokha!</h2>
+            <p className="text-gray-600 mb-6">
+              Please complete your company profile setup to get started with your business management.
+            </p>
+            <div className="animate-pulse">
+              <div className="w-8 h-8 bg-blue-600 rounded-full mx-auto mb-4"></div>
+              <p className="text-sm text-gray-500">Loading company setup...</p>
+            </div>
+            <button 
+              onClick={() => setShowCompanyDetailsWizard(false)}
+              className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+            >
+              Skip for now
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className={`min-h-screen bg-gray-100 ${showCompanyDetailsWizard ? 'hidden' : ''}`}>
         {/* Navigation */}
         <nav ref={navBarRef} className="fixed top-0 left-0 w-full z-50 bg-white shadow"
           onMouseEnter={() => {
@@ -1170,6 +1230,7 @@ function AppContent({
                 userId={user?.uid}
                 isAuthReady={isAuthReady}
                 appId={appId}
+                onOpenWizard={() => setShowCompanyDetailsWizard(true)}
               />
             } />
             <Route path="/expenses" element={
