@@ -5,6 +5,7 @@ import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
+import { migrateExpenseData, checkMigrationNeeded } from '../utils/migrateExpenseData';
 
 const GROUPS = [
   { key: 'salaries', label: 'Salaries' },
@@ -64,13 +65,19 @@ function getComponentAnnualAmount(type, value, mode, basicSalary, ctc) {
   }
 }
 
-const Expenses = () => {
+const Expenses = ({ db, userId, isAuthReady, appId }) => {
+  // Component loaded successfully (only log once)
+  useEffect(() => {
+    console.log('🔥 EXPENSES COMPONENT LOADED! 🔥');
+  }, []);
+  
+
   const [selectedGroup, setSelectedGroup] = useState(GROUPS[0].key);
   const [filters, setFilters] = useState({ date: '', head: '', amount: '' });
   const [exportDropdownOpen, setExportDropdownOpen] = useState(false);
   const exportRef = useRef();
 
-  // Employees
+  // Employees - Updated to be user-specific
   const [employees, setEmployees] = useState([]);
   const [employeeForm, setEmployeeForm] = useState({ 
     name: '', 
@@ -182,29 +189,53 @@ const Expenses = () => {
 
   // --- Firestore listeners ---
   useEffect(() => {
-    // Employees
-    const unsub = onSnapshot(collection(db, 'employees'), snap => {
-      setEmployees(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    // Employees - Updated to be user-specific
+    if (!isAuthReady || !userId || !appId) {
+      console.log('Skipping employees listener - not ready:', { isAuthReady, userId, appId });
+      return;
+    }
+    
+    const unsub = onSnapshot(collection(db, `artifacts/${appId}/users/${userId}/employees`), snap => {
+      const employeeData = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setEmployees(employeeData);
+    }, (error) => {
+      console.error('Error in employees listener:', error);
     });
     return () => unsub();
-  }, []);
+  }, [isAuthReady, userId, appId]);
 
   useEffect(() => {
-    // Expenses for selected group
-    const q = query(collection(db, 'expenses'), where('group', '==', selectedGroup));
+    // Expenses for selected group - Updated to be user-specific
+    if (!isAuthReady || !userId || !appId) {
+      console.log('Skipping expenses listener - not ready:', { isAuthReady, userId, appId });
+      return;
+    }
+    
+    const q = query(collection(db, `artifacts/${appId}/users/${userId}/expenses`), where('group', '==', selectedGroup));
     const unsub = onSnapshot(q, snap => {
-      setExpenses(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      const expenseData = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setExpenses(expenseData);
+    }, (error) => {
+      console.error('Error in expenses listener:', error);
     });
     return () => unsub();
-  }, [selectedGroup]);
+  }, [selectedGroup, isAuthReady, userId, appId]);
 
   useEffect(() => {
-    // Salary Payments
-    const unsub = onSnapshot(collection(db, 'salaryPayments'), snap => {
-      setSalaryPayments(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    // Salary Payments - Updated to be user-specific
+    if (!isAuthReady || !userId || !appId) {
+      return;
+    }
+    
+    const unsub = onSnapshot(collection(db, `artifacts/${appId}/users/${userId}/salaryPayments`), snap => {
+      const payments = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setSalaryPayments(payments);
+    }, (error) => {
+      console.error('Error in salary payments listener:', error);
     });
+    
     return () => unsub();
-  }, []);
+  }, [isAuthReady, userId, appId]);
 
   // ESC key handler for edit modals
   useEffect(() => {
@@ -759,7 +790,7 @@ const Expenses = () => {
     
     // Save employee data with document URLs and calculated amounts
     const totalCTC = calculateTotalCTC();
-    await addDoc(collection(db, 'employees'), { 
+    await addDoc(collection(db, `artifacts/${appId}/users/${userId}/employees`), { 
       ...employeeForm, 
       salary: totalCTC,
       employeeId: newId, 
@@ -818,7 +849,7 @@ const Expenses = () => {
     
     for (const emp of employeesWithoutId) {
       const newId = generateEmployeeId(employees);
-      await updateDoc(doc(db, 'employees', emp.id), { employeeId: newId });
+      await updateDoc(doc(db, `artifacts/${appId}/users/${userId}/employees`, emp.id), { employeeId: newId });
       console.log(`Fixed employee ${emp.name} with ID: ${newId}`);
     }
   };
@@ -927,7 +958,7 @@ const Expenses = () => {
     const emp = employees.find(e => e.id === id);
     if (emp && window.confirm(`Are you sure you want to delete employee "${emp.name}" (${emp.employeeId})? This action cannot be undone.`)) {
       try {
-        await deleteDoc(doc(db, 'employees', id));
+        await deleteDoc(doc(db, `artifacts/${appId}/users/${userId}/employees`, id));
         alert('Employee deleted successfully!');
       } catch (error) {
         console.error('Error deleting employee:', error);
@@ -1121,7 +1152,7 @@ const Expenses = () => {
       }
     });
 
-    await updateDoc(doc(db, 'employees', id), updateData);
+          await updateDoc(doc(db, `artifacts/${appId}/users/${userId}/employees`, id), updateData);
     
     setEditingEmployeeId(null);
     setEditingEmployee({});
@@ -1159,7 +1190,7 @@ const Expenses = () => {
     e.preventDefault();
     if (!salaryForm.employeeId || !salaryForm.month || !salaryForm.amount) return;
     const emp = employees.find(e => e.id === salaryForm.employeeId);
-    await addDoc(collection(db, 'expenses'), {
+    await addDoc(collection(db, `artifacts/${appId}/users/${userId}/expenses`), {
       group: 'salaries',
       employeeId: salaryForm.employeeId,
       employeeName: emp?.name || '',
@@ -1187,7 +1218,7 @@ const Expenses = () => {
       await uploadBytes(storageRef, file);
       receiptUrl = await getDownloadURL(storageRef);
     }
-    await addDoc(collection(db, 'expenses'), {
+    await addDoc(collection(db, `artifacts/${appId}/users/${userId}/expenses`), {
       group: selectedGroup,
       date: expenseForm.date,
       head: expenseForm.head,
@@ -1221,7 +1252,7 @@ const Expenses = () => {
     setEditingExpense(f => ({ ...f, [name]: value }));
   };
   const handleSaveExpense = async id => {
-    await updateDoc(doc(db, 'expenses', id), {
+    await updateDoc(doc(db, `artifacts/${appId}/users/${userId}/expenses`, id), {
       date: editingExpense.date || '',
       head: editingExpense.head || '',
       amount: Number(editingExpense.amount) || 0,
@@ -1254,7 +1285,7 @@ const Expenses = () => {
   const handleDeleteExpense = async id => {
     if (window.confirm('Are you sure you want to delete this expense?')) {
       try {
-        await deleteDoc(doc(db, 'expenses', id));
+        await deleteDoc(doc(db, `artifacts/${appId}/users/${userId}/expenses`, id));
         alert('Expense deleted successfully!');
       } catch (error) {
         console.error('Error deleting expense:', error);
@@ -2737,7 +2768,7 @@ const Expenses = () => {
         const totalDeductions = salaryDeductions.reduce((sum, deduction) => sum + (Number(deduction.amount) || 0), 0);
         const netAmount = totalEarnings - totalDeductions;
         
-        await addDoc(collection(db, 'salaryPayments'), {
+        await addDoc(collection(db, `artifacts/${appId}/users/${userId}/salaryPayments`), {
           employeeId: salaryEmployeeId,
           employeeName: emp?.name || '',
           post: emp?.designation || '',
@@ -3151,6 +3182,61 @@ const Expenses = () => {
                 </tr>
               </tfoot>
             </table>
+            
+            {/* Debug Test Button */}
+            <div className="mt-4 p-4 bg-gray-100 rounded-lg">
+              <h4 className="text-sm font-semibold mb-2">Debug Tools</h4>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    console.log('=== TEST DELETE FUNCTION ===');
+                    console.log('Salary payments count:', salaryPayments.length);
+                    if (salaryPayments.length > 0) {
+                      const firstPayment = salaryPayments[0];
+                      console.log('Testing delete with first payment:', firstPayment.id);
+                      handleDeleteSalaryPayment(firstPayment.id);
+                    } else {
+                      console.log('No salary payments to test with');
+                    }
+                  }}
+                  className="bg-purple-600 text-white px-3 py-1 rounded text-xs hover:bg-purple-700"
+                >
+                  Test Delete Function
+                </button>
+                <button
+                  onClick={() => {
+                    console.log('=== MANUAL MIGRATION TRIGGER ===');
+                    console.log('Current auth state:', { isAuthReady, userId, appId });
+                    try {
+                      const result = migrateExpenseData(db, appId, userId);
+                      console.log('Manual migration result:', result);
+                      if (result.success) {
+                        alert('Manual migration completed successfully!');
+                        window.location.reload();
+                      } else {
+                        alert('Manual migration failed: ' + result.error);
+                      }
+                    } catch (error) {
+                      console.error('Manual migration error:', error);
+                      alert('Manual migration error: ' + error.message);
+                    }
+                  }}
+                  className="bg-red-600 text-white px-3 py-1 rounded text-xs hover:bg-red-700"
+                >
+                  Manual Migration
+                </button>
+                <button
+                  onClick={() => {
+                    console.log('=== CACHE BUSTER ===');
+                    console.log('Cache buster timestamp:', Date.now());
+                    window.location.reload();
+                  }}
+                  className="bg-orange-600 text-white px-3 py-1 rounded text-xs hover:bg-orange-700"
+                >
+                  Force Refresh
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       );
@@ -3399,6 +3485,14 @@ const Expenses = () => {
   };
 
   const handleDeleteSalaryPayment = async (paymentId) => {
+    // Check if the payment ID exists in the current data
+    const paymentExists = salaryPayments.find(p => p.id === paymentId);
+    if (!paymentExists) {
+      console.error('Payment not found in current data:', paymentId);
+      alert('Payment not found. Please refresh the page and try again.');
+      return;
+    }
+    
     setPendingDeletePaymentId(paymentId);
     setShowDeleteMpinModal(true);
     setDeleteMpinInput('');
@@ -3408,7 +3502,8 @@ const Expenses = () => {
   const handleConfirmDeleteSalaryPayment = async () => {
     if (deleteMpinInput === MPIN) {
       try {
-        await deleteDoc(doc(db, 'salaryPayments', pendingDeletePaymentId));
+        await deleteDoc(doc(db, `artifacts/${appId}/users/${userId}/salaryPayments`, pendingDeletePaymentId));
+        
         alert('Salary payment deleted successfully!');
         setShowDeleteMpinModal(false);
         setPendingDeletePaymentId(null);
@@ -3416,7 +3511,7 @@ const Expenses = () => {
         setDeleteMpinError('');
       } catch (error) {
         console.error('Error deleting salary payment:', error);
-        alert('Error deleting salary payment. Please try again.');
+        alert(`Error deleting salary payment: ${error.message}. Please try again.`);
         setShowDeleteMpinModal(false);
         setPendingDeletePaymentId(null);
         setDeleteMpinInput('');
@@ -3442,7 +3537,7 @@ const Expenses = () => {
       const totalDeductions = salaryDeductions.reduce((sum, deduction) => sum + (Number(deduction.amount) || 0), 0);
       const netAmount = totalEarnings - totalDeductions;
 
-      await updateDoc(doc(db, 'salaryPayments', editingSalaryPayment.id), {
+      await updateDoc(doc(db, `artifacts/${appId}/users/${userId}/salaryPayments`, editingSalaryPayment.id), {
         fixedRows: fixedSalaryRows,
         performanceRows: performanceSalaryRows,
         deductions: salaryDeductions,
@@ -3527,33 +3622,157 @@ const Expenses = () => {
     console.log('========================');
   };
 
-  // Make test function available globally
+  // Test function for debugging salary delete functionality
+  const testSalaryDelete = () => {
+    console.log('=== Salary Delete Test ===');
+    console.log('Salary Payments:', salaryPayments);
+    console.log('Pending Delete ID:', pendingDeletePaymentId);
+    console.log('Show Delete Modal:', showDeleteMpinModal);
+    console.log('Delete MPIN Input:', deleteMpinInput);
+    console.log('Delete MPIN Error:', deleteMpinError);
+    console.log('MPIN:', MPIN);
+    console.log('=======================');
+  };
+
+  // Make test functions available globally
   useEffect(() => {
     window.testEmployeeData = testEmployeeData;
-  }, [employees]);
+    window.testSalaryDelete = testSalaryDelete;
+  }, [employees, salaryPayments, pendingDeletePaymentId, showDeleteMpinModal, deleteMpinInput, deleteMpinError]);
 
-  // Reset MPIN modal when employee tab is unlocked
+  // Reset MPIN modal when employee tab is unlocked or when not on employee tab
   useEffect(() => {
-    if (employeeTabUnlocked) {
+    if (employeeTabUnlocked || selectedGroup !== 'employee') {
       setShowMpinModal(false);
     }
-  }, [employeeTabUnlocked]);
+  }, [employeeTabUnlocked, selectedGroup]);
 
-  // Debug showMpinModal state changes
+  // Debug showMpinModal state changes (only when it actually changes)
   useEffect(() => {
-    console.log('showMpinModal changed to:', showMpinModal);
+    // MPIN modal state changed
   }, [showMpinModal]);
 
   // Auto-show MPIN modal when employee tab is selected and not unlocked
   useEffect(() => {
-    if (selectedGroup === 'employee' && !employeeTabUnlocked) {
+    // Only show MPIN modal if user is properly authenticated and employee tab is selected
+    if (selectedGroup === 'employee' && !employeeTabUnlocked && isAuthReady && userId) {
       setShowMpinModal(true);
     }
-  }, [selectedGroup, employeeTabUnlocked]);
+  }, [selectedGroup, employeeTabUnlocked, isAuthReady, userId]);
+
+  // Migration functionality
+  const [migrationStatus, setMigrationStatus] = useState(null);
+  const [isMigrating, setIsMigrating] = useState(false);
+  const [migrationSuccess, setMigrationSuccess] = useState(false);
+
+  // Check for migration on component mount
+  useEffect(() => {
+    if (isAuthReady && userId) {
+      checkMigrationNeeded(db).then(status => {
+        setMigrationStatus(status);
+      });
+    }
+  }, [isAuthReady, userId]);
+
+  const handleMigration = async () => {
+    if (!userId || !appId) return;
+    
+    setIsMigrating(true);
+    try {
+      const result = await migrateExpenseData(db, appId, userId);
+      if (result.success) {
+        setMigrationSuccess(true);
+        setMigrationStatus({ needed: false, counts: { employees: 0, expenses: 0, salaryPayments: 0 } });
+        setTimeout(() => setMigrationSuccess(false), 5000); // Hide after 5 seconds
+      } else {
+        alert(`Migration failed: ${result.error}`);
+      }
+    } catch (error) {
+      alert(`Migration error: ${error.message}`);
+    } finally {
+      setIsMigrating(false);
+    }
+  };
+
+  // Authentication check after all hooks are declared
+  if (!isAuthReady) {
+    return <div className="max-w-5xl mx-auto p-6 bg-white rounded shadow mt-8">
+      <h2 className="text-2xl font-bold mb-4">Expenses</h2>
+      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+        <p className="text-yellow-800">Authentication not ready. Please wait...</p>
+      </div>
+    </div>;
+  }
+  
+  if (!userId) {
+    return <div className="max-w-5xl mx-auto p-6 bg-white rounded shadow mt-8">
+      <h2 className="text-2xl font-bold mb-4">Expenses</h2>
+      <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+        <p className="text-red-800">No user ID found. Please log in again.</p>
+        <button 
+          onClick={() => window.location.reload()} 
+          className="mt-2 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+        >
+          Reload Page
+        </button>
+      </div>
+    </div>;
+  }
+  
+  if (!appId) {
+    return <div className="max-w-5xl mx-auto p-6 bg-white rounded shadow mt-8">
+      <h2 className="text-2xl font-bold mb-4">Expenses</h2>
+      <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+        <p className="text-red-800">No app ID found. Please check configuration.</p>
+      </div>
+    </div>;
+  }
 
   return (
     <div className="max-w-5xl mx-auto p-6 bg-white rounded shadow mt-8">
       <h2 className="text-2xl font-bold mb-4">Expenses</h2>
+      
+
+      
+      {/* Migration Notice */}
+      {migrationStatus?.needed && (
+        <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-semibold text-yellow-800 mb-2">Data Migration Required</h3>
+              <p className="text-yellow-700 mb-2">
+                Your expense data needs to be migrated to the new user-specific structure. 
+                This will ensure your data is properly organized and secure.
+              </p>
+              <div className="text-sm text-yellow-600">
+                Found: {migrationStatus.counts.employees} employees, {migrationStatus.counts.expenses} expenses, {migrationStatus.counts.salaryPayments} salary payments
+              </div>
+            </div>
+            <button
+              onClick={handleMigration}
+              disabled={isMigrating}
+              className="px-4 py-2 bg-yellow-600 text-white rounded hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isMigrating ? 'Migrating...' : 'Migrate Data'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Migration Success Message */}
+      {migrationSuccess && (
+        <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+          <div className="flex items-center">
+            <svg className="w-5 h-5 text-green-600 mr-2" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+            </svg>
+            <div>
+              <h3 className="text-lg font-semibold text-green-800">Migration Completed Successfully!</h3>
+              <p className="text-green-700">Your expense data has been migrated to the new user-specific structure.</p>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Summary/Analytics */}
       <div className="flex gap-8 mb-4 flex-wrap">
         <div className="bg-blue-50 border border-blue-200 rounded px-4 py-2 text-blue-800 font-semibold">Total: ₹{totalAmount.toLocaleString('en-IN')}</div>

@@ -3,6 +3,14 @@ import { collection, addDoc, query, onSnapshot, serverTimestamp, doc, updateDoc,
 import { sanitizeManufacturingData, validateInput, logSecurityEvent, apiRateLimiter } from '../utils/security';
 
 const ManufacturingNew = ({ db, userId, isAuthReady, appId }) => {
+    // Debug: Track component lifecycle
+    useEffect(() => {
+        console.log('ManufacturingNew: Component mounted');
+        return () => {
+            console.log('ManufacturingNew: Component unmounted');
+        };
+    }, []);
+
     // Core State
     const [activeTab, setActiveTab] = useState('production-orders');
     const [businessType, setBusinessType] = useState('pure-manufacturing');
@@ -94,8 +102,6 @@ const ManufacturingNew = ({ db, userId, isAuthReady, appId }) => {
     useEffect(() => {
         if (!db || !userId || !isAuthReady) return;
 
-        // console.log('Setting up Firestore listeners for new manufacturing system...');
-
         // Fetch items
         const itemsRef = collection(db, `salaryPayments/${appId}/items`);
         const unsubscribeItems = onSnapshot(itemsRef, (snapshot) => {
@@ -104,6 +110,8 @@ const ManufacturingNew = ({ db, userId, isAuthReady, appId }) => {
                 itemsData.push({ id: doc.id, ...doc.data() });
             });
             setItems(itemsData);
+            // Debug: Log only once when data is fetched
+            console.log('ManufacturingNew: Items fetched successfully', itemsData.length);
         });
 
         // Fetch parties
@@ -114,20 +122,8 @@ const ManufacturingNew = ({ db, userId, isAuthReady, appId }) => {
                 partiesData.push({ id: doc.id, ...doc.data() });
             });
             setParties(partiesData);
-        });
-
-        // Fetch production orders based on business type
-        const ordersRef = collection(db, `salaryPayments/${appId}/productionOrders`);
-        const unsubscribeOrders = onSnapshot(ordersRef, (snapshot) => {
-            const ordersData = [];
-            snapshot.forEach((doc) => {
-                const orderData = { id: doc.id, ...doc.data() };
-                // Filter by business type
-                if (orderData.businessType === businessType) {
-                    ordersData.push(orderData);
-                }
-            });
-            setProductionOrders(ordersData);
+            // Debug: Log only once when data is fetched
+            console.log('ManufacturingNew: Parties fetched successfully', partiesData.length);
         });
 
         // Fetch process definitions
@@ -143,8 +139,30 @@ const ManufacturingNew = ({ db, userId, isAuthReady, appId }) => {
         return () => {
             unsubscribeItems();
             unsubscribeParties();
-            unsubscribeOrders();
             unsubscribeProcess();
+        };
+    }, [db, userId, isAuthReady, appId]);
+
+    // Separate useEffect for production orders to avoid re-subscribing when businessType changes
+    useEffect(() => {
+        if (!db || !userId || !isAuthReady) return;
+
+        // Fetch production orders based on business type
+        const ordersRef = collection(db, `salaryPayments/${appId}/productionOrders`);
+        const unsubscribeOrders = onSnapshot(ordersRef, (snapshot) => {
+            const ordersData = [];
+            snapshot.forEach((doc) => {
+                const orderData = { id: doc.id, ...doc.data() };
+                // Filter by business type
+                if (orderData.businessType === businessType) {
+                    ordersData.push(orderData);
+                }
+            });
+            setProductionOrders(ordersData);
+        });
+
+        return () => {
+            unsubscribeOrders();
         };
     }, [db, userId, isAuthReady, appId, businessType]);
 

@@ -2,11 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { collection, onSnapshot, doc, getDocs, setDoc, deleteDoc } from 'firebase/firestore';
 import { Link } from 'react-router-dom';
 import { 
-    BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+    BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
     LineChart, Line, PieChart, Pie, Cell, AreaChart, Area
 } from 'recharts';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
+import MobileResponsiveChart from './MobileResponsiveChart';
 dayjs.extend(relativeTime);
 
 const Dashboard = ({ db, userId, isAuthReady, appId }) => {
@@ -26,6 +27,7 @@ const Dashboard = ({ db, userId, isAuthReady, appId }) => {
     const [monthlyData, setMonthlyData] = useState([]);
     const [recentTransactions, setRecentTransactions] = useState([]);
     const [paymentStatusData, setPaymentStatusData] = useState([]);
+    const [chartsLoading, setChartsLoading] = useState(true);
 
     // Todo list state
     const [todos, setTodos] = useState([
@@ -68,6 +70,30 @@ const Dashboard = ({ db, userId, isAuthReady, appId }) => {
         { id: 28, text: "Offline mode for mobile app", completed: false, priority: "low", category: "mobile" },
         { id: 29, text: "GPS tracking for delivery and field staff", completed: false, priority: "low", category: "mobile" },
         { id: 30, text: "Mobile barcode scanning app", completed: false, priority: "medium", category: "mobile" },
+        
+        // Mobile Optimizations (Completed)
+        { id: 56, text: "Mobile bottom navigation bar with touch-friendly icons", completed: true, priority: "high", category: "mobile" },
+        { id: 57, text: "Touch gesture controls (swipe, pinch, long press)", completed: true, priority: "high", category: "mobile" },
+        { id: 58, text: "Mobile responsive charts with touch interactions", completed: true, priority: "high", category: "mobile" },
+        { id: 59, text: "Offline indicator with sync status and pending actions", completed: true, priority: "high", category: "mobile" },
+        { id: 60, text: "Voice commands for hands-free navigation and actions", completed: true, priority: "medium", category: "mobile" },
+        { id: 61, text: "Mobile-optimized viewport and PWA manifest", completed: true, priority: "high", category: "mobile" },
+        { id: 62, text: "Touch gesture utilities for charts and tables", completed: true, priority: "medium", category: "mobile" },
+        { id: 63, text: "Pull-to-refresh functionality for mobile", completed: true, priority: "medium", category: "mobile" },
+        { id: 64, text: "Haptic feedback for mobile interactions", completed: true, priority: "low", category: "mobile" },
+        { id: 65, text: "Mobile-responsive table components", completed: true, priority: "high", category: "mobile" },
+        
+        // Mobile Testing Required
+        { id: 66, text: "Test mobile gesture controls on different devices", completed: false, priority: "high", category: "testing" },
+        { id: 67, text: "Test voice commands accuracy and response time", completed: false, priority: "high", category: "testing" },
+        { id: 68, text: "Test offline functionality and data sync", completed: false, priority: "high", category: "testing" },
+        { id: 69, text: "Test mobile responsive design on various screen sizes", completed: false, priority: "high", category: "testing" },
+        { id: 70, text: "Test touch interactions on charts and tables", completed: false, priority: "medium", category: "testing" },
+        { id: 71, text: "Test mobile navigation and bottom nav functionality", completed: false, priority: "medium", category: "testing" },
+        { id: 72, text: "Test PWA installation and offline capabilities", completed: false, priority: "medium", category: "testing" },
+        { id: 73, text: "Test haptic feedback on supported devices", completed: false, priority: "low", category: "testing" },
+        { id: 74, text: "Performance testing on mobile devices", completed: false, priority: "high", category: "testing" },
+        { id: 75, text: "Cross-browser testing on mobile browsers", completed: false, priority: "medium", category: "testing" },
         
         // Analytics & Insights
         { id: 31, text: "Business analytics dashboard with KPIs", completed: false, priority: "medium", category: "analytics" },
@@ -143,6 +169,7 @@ const Dashboard = ({ db, userId, isAuthReady, appId }) => {
     useEffect(() => {
         if (!db || !userId || !isAuthReady) return;
         const fetchDashboardData = async () => {
+            setChartsLoading(true);
             // Fetch parties
             const partiesSnap = await getDocs(collection(db, `artifacts/${appId}/users/${userId}/parties`));
             const parties = [];
@@ -496,7 +523,139 @@ const Dashboard = ({ db, userId, isAuthReady, appId }) => {
             } else {
                 setCompanyDetails({ firmName: '', gstin: '', contactNumber: '', address: '', gstinType: '' });
             }
+
+            // Prepare chart data
+            prepareChartData(salesBills, purchaseBills, paymentsData);
+            setChartsLoading(false);
         };
+
+        const prepareChartData = (salesBills, purchaseBills, paymentsData) => {
+            // Monthly data for bar chart
+            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const currentYear = new Date().getFullYear();
+            const monthlyData = months.map((month, index) => {
+                const monthStart = new Date(currentYear, index, 1);
+                const monthEnd = new Date(currentYear, index + 1, 0);
+                
+                const monthSales = salesBills.reduce((sum, bill) => {
+                    const billDate = new Date(bill.invoiceDate || bill.date);
+                    if (billDate >= monthStart && billDate <= monthEnd) {
+                        return sum + parseFloat(bill.amount || bill.totalAmount || 0);
+                    }
+                    return sum;
+                }, 0);
+
+                const monthPurchases = purchaseBills.reduce((sum, bill) => {
+                    const billDate = new Date(bill.billDate || bill.date);
+                    if (billDate >= monthStart && billDate <= monthEnd) {
+                        return sum + parseFloat(bill.amount || bill.totalAmount || 0);
+                    }
+                    return sum;
+                }, 0);
+
+                return {
+                    month,
+                    sales: monthSales,
+                    purchases: monthPurchases
+                };
+            });
+            setMonthlyData(monthlyData);
+
+            // Payment status data for pie chart
+            let paid = 0, partial = 0, overdue = 0, pending = 0;
+            
+            // Check sales bills payment status
+            salesBills.forEach(bill => {
+                const totalAmount = parseFloat(bill.amount || bill.totalAmount || 0);
+                const billPayments = paymentsData.filter(p =>
+                    p.allocations && p.allocations.some(a => a.billId === bill.id && a.billType === 'invoice')
+                );
+                const totalPaid = billPayments.reduce((sum, payment) => {
+                    const allocation = payment.allocations.find(a => a.billId === bill.id && a.billType === 'invoice');
+                    return sum + (allocation ? allocation.allocatedAmount : 0);
+                }, 0);
+                
+                if (totalPaid >= totalAmount) {
+                    paid += totalAmount;
+                } else if (totalPaid > 0) {
+                    partial += totalAmount;
+                } else {
+                    const billDate = new Date(bill.invoiceDate || bill.date);
+                    const daysSince = dayjs().diff(dayjs(billDate), 'day');
+                    if (daysSince > 30) {
+                        overdue += totalAmount;
+                    } else {
+                        pending += totalAmount;
+                    }
+                }
+            });
+
+            // Check purchase bills payment status
+            purchaseBills.forEach(bill => {
+                const totalAmount = parseFloat(bill.amount || bill.totalAmount || 0);
+                const billPayments = paymentsData.filter(p =>
+                    p.allocations && p.allocations.some(a => a.billId === bill.id && a.billType === 'purchase')
+                );
+                const totalPaid = billPayments.reduce((sum, payment) => {
+                    const allocation = payment.allocations.find(a => a.billId === bill.id && a.billType === 'purchase');
+                    return sum + (allocation ? allocation.allocatedAmount : 0);
+                }, 0);
+                
+                if (totalPaid >= totalAmount) {
+                    paid += totalAmount;
+                } else if (totalPaid > 0) {
+                    partial += totalAmount;
+                } else {
+                    const billDate = new Date(bill.billDate || bill.date);
+                    const daysSince = dayjs().diff(dayjs(billDate), 'day');
+                    if (daysSince > 30) {
+                        overdue += totalAmount;
+                    } else {
+                        pending += totalAmount;
+                    }
+                }
+            });
+
+            const paymentStatusData = [
+                { name: 'Paid', value: paid },
+                { name: 'Partial', value: partial },
+                { name: 'Overdue', value: overdue },
+                { name: 'Pending', value: pending }
+            ].filter(item => item.value > 0);
+            
+            setPaymentStatusData(paymentStatusData);
+
+            // Recent transactions data for area chart
+            const last7Days = [];
+            for (let i = 6; i >= 0; i--) {
+                const date = dayjs().subtract(i, 'day');
+                const dayStart = date.startOf('day').toDate();
+                const dayEnd = date.endOf('day').toDate();
+                
+                const daySales = salesBills.filter(bill => {
+                    const billDate = new Date(bill.invoiceDate || bill.date);
+                    return billDate >= dayStart && billDate <= dayEnd;
+                });
+                
+                const dayPurchases = purchaseBills.filter(bill => {
+                    const billDate = new Date(bill.billDate || bill.date);
+                    return billDate >= dayStart && billDate <= dayEnd;
+                });
+
+                const totalAmount = daySales.reduce((sum, bill) => sum + parseFloat(bill.amount || bill.totalAmount || 0), 0) +
+                                  dayPurchases.reduce((sum, bill) => sum + parseFloat(bill.amount || bill.totalAmount || 0), 0);
+                
+                const totalCount = daySales.length + dayPurchases.length;
+
+                last7Days.push({
+                    date: date.format('MMM DD'),
+                    amount: totalAmount,
+                    count: totalCount
+                });
+            }
+            setRecentTransactions(last7Days);
+        };
+        
         fetchDashboardData();
     }, [db, userId, isAuthReady, appId]);
 
@@ -652,6 +811,7 @@ useEffect(() => {
             case 'security': return 'bg-red-100 text-red-800';
             case 'ux': return 'bg-yellow-100 text-yellow-800';
             case 'missing': return 'bg-gray-100 text-gray-800';
+            case 'testing': return 'bg-teal-100 text-teal-800';
             default: return 'bg-gray-100 text-gray-800';
         }
     };
@@ -667,6 +827,7 @@ useEffect(() => {
             case 'security': return 'Security';
             case 'ux': return 'UX';
             case 'missing': return 'Missing';
+            case 'testing': return 'Testing';
             default: return 'Other';
         }
     };
@@ -697,11 +858,128 @@ useEffect(() => {
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
-            <div className="p-6">
+            <div className="p-4 sm:p-6">
                 {/* Header */}
-                <div className="mb-8">
-                    <h1 className="text-3xl font-bold text-gray-800 mb-2">Dashboard</h1>
-                    <p className="text-gray-600">Welcome back! Here's your business overview.</p>
+                <div className="mb-6 sm:mb-8">
+                    <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 mb-2">Dashboard</h1>
+                    <p className="text-sm sm:text-base text-gray-600">Welcome back! Here's your business overview.</p>
+                </div>
+
+                {/* Quick Action Buttons */}
+                <div className="mb-6 sm:mb-8">
+                    <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 border border-gray-100 quick-actions-section">
+                        <h2 className="text-lg sm:text-xl font-semibold text-gray-800 mb-4">Quick Actions</h2>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-4 sm:mb-6">
+                            <Link 
+                                to="/sales"
+                                className="flex items-center justify-center p-4 sm:p-6 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg hover:from-green-600 hover:to-green-700 transition-all duration-200 transform hover:scale-105 shadow-lg min-h-[120px] sm:min-h-[140px]"
+                            >
+                                <div className="text-center">
+                                    <div className="mb-2 sm:mb-3">
+                                        <svg className="w-8 h-8 sm:w-12 sm:h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
+                                        </svg>
+                                    </div>
+                                    <h3 className="text-sm sm:text-lg font-bold mb-1">Create Sales Invoice</h3>
+                                    <p className="text-green-100 text-xs sm:text-sm">Generate invoices and manage sales</p>
+                                </div>
+                            </Link>
+                            
+                            <Link 
+                                to="/purchases"
+                                className="flex items-center justify-center p-4 sm:p-6 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg hover:from-blue-600 hover:to-blue-700 transition-all duration-200 transform hover:scale-105 shadow-lg min-h-[120px] sm:min-h-[140px]"
+                            >
+                                <div className="text-center">
+                                    <div className="mb-2 sm:mb-3">
+                                        <svg className="w-8 h-8 sm:w-12 sm:h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
+                                        </svg>
+                                    </div>
+                                    <h3 className="text-sm sm:text-lg font-bold mb-1">Create Purchase Bill</h3>
+                                    <p className="text-blue-100 text-xs sm:text-sm">Record purchases and manage vendors</p>
+                                </div>
+                            </Link>
+
+                            <Link 
+                                to="/payments"
+                                className="flex items-center justify-center p-4 sm:p-6 bg-gradient-to-r from-purple-500 to-purple-600 text-white rounded-lg hover:from-purple-600 hover:to-purple-700 transition-all duration-200 transform hover:scale-105 shadow-lg min-h-[120px] sm:min-h-[140px]"
+                            >
+                                <div className="text-center">
+                                    <div className="mb-2 sm:mb-3">
+                                        <svg className="w-8 h-8 sm:w-12 sm:h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                                        </svg>
+                                    </div>
+                                    <h3 className="text-sm sm:text-lg font-bold mb-1">Manage Payments</h3>
+                                    <p className="text-purple-100 text-xs sm:text-sm">Track receivables and payables</p>
+                                </div>
+                            </Link>
+
+                            <Link 
+                                to="/parties"
+                                className="flex items-center justify-center p-4 sm:p-6 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-lg hover:from-orange-600 hover:to-orange-700 transition-all duration-200 transform hover:scale-105 shadow-lg min-h-[120px] sm:min-h-[140px]"
+                            >
+                                <div className="text-center">
+                                    <div className="mb-2 sm:mb-3">
+                                        <svg className="w-8 h-8 sm:w-12 sm:h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                                        </svg>
+                                    </div>
+                                    <h3 className="text-sm sm:text-lg font-bold mb-1">Manage Parties</h3>
+                                    <p className="text-orange-100 text-xs sm:text-sm">Add customers and suppliers</p>
+                                </div>
+                            </Link>
+                        </div>
+                        
+                        {/* Secondary Quick Actions */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
+                            <Link 
+                                to="/items"
+                                className="flex items-center justify-center p-3 sm:p-4 bg-gradient-to-r from-teal-500 to-teal-600 text-white rounded-lg hover:from-teal-600 hover:to-teal-700 transition-all duration-200 transform hover:scale-105 shadow-lg min-h-[100px] sm:min-h-[120px]"
+                            >
+                                <div className="text-center">
+                                    <div className="mb-2">
+                                        <svg className="w-6 h-6 sm:w-8 sm:h-8 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                                        </svg>
+                                    </div>
+                                    <h3 className="text-xs sm:text-sm font-bold mb-1">Manage Items</h3>
+                                    <p className="text-teal-100 text-xs">Add products and services</p>
+                                </div>
+                            </Link>
+
+                            <Link 
+                                to="/manufacturing"
+                                className="flex items-center justify-center p-3 sm:p-4 bg-gradient-to-r from-indigo-500 to-indigo-600 text-white rounded-lg hover:from-indigo-600 hover:to-indigo-700 transition-all duration-200 transform hover:scale-105 shadow-lg min-h-[100px] sm:min-h-[120px]"
+                            >
+                                <div className="text-center">
+                                    <div className="mb-2">
+                                        <svg className="w-6 h-6 sm:w-8 sm:h-8 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                        </svg>
+                                    </div>
+                                    <h3 className="text-xs sm:text-sm font-bold mb-1">Manufacturing</h3>
+                                    <p className="text-indigo-100 text-xs">Production management</p>
+                                </div>
+                            </Link>
+
+                            <Link 
+                                to="/reports"
+                                className="flex items-center justify-center p-3 sm:p-4 bg-gradient-to-r from-pink-500 to-pink-600 text-white rounded-lg hover:from-pink-600 hover:to-pink-700 transition-all duration-200 transform hover:scale-105 shadow-lg min-h-[100px] sm:min-h-[120px]"
+                            >
+                                <div className="text-center">
+                                    <div className="mb-2">
+                                        <svg className="w-6 h-6 sm:w-8 sm:h-8 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                                        </svg>
+                                    </div>
+                                    <h3 className="text-xs sm:text-sm font-bold mb-1">Reports</h3>
+                                    <p className="text-pink-100 text-xs">Business analytics</p>
+                                </div>
+                            </Link>
+                        </div>
+                    </div>
                 </div>
 
             {message && (
@@ -711,62 +989,207 @@ useEffect(() => {
             )}
 
                 {/* Stats Cards */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-                    <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-100">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-6 sm:mb-8">
+                    <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 border border-gray-100">
                         <div className="flex items-center justify-between">
                             <div>
-                                <p className="text-sm font-medium text-gray-600">Monthly Sales</p>
-                                <p className="text-2xl font-bold text-green-600">{formatCurrency(totalSalesThisMonth)}</p>
+                                <p className="text-xs sm:text-sm font-medium text-gray-600">Monthly Sales</p>
+                                <p className="text-lg sm:text-2xl font-bold text-green-600">{formatCurrency(totalSalesThisMonth)}</p>
                             </div>
-                            <div className="p-3 bg-green-100 rounded-full">
-                                <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <div className="p-2 sm:p-3 bg-green-100 rounded-full">
+                                <svg className="w-5 h-5 sm:w-6 sm:h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
                                 </svg>
                             </div>
                         </div>
                     </div>
 
-                    <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-100">
+                    <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 border border-gray-100">
                         <div className="flex items-center justify-between">
                             <div>
-                                <p className="text-sm font-medium text-gray-600">Monthly Purchases</p>
-                                <p className="text-2xl font-bold text-blue-600">{formatCurrency(totalPurchasesThisMonth)}</p>
+                                <p className="text-xs sm:text-sm font-medium text-gray-600">Monthly Purchases</p>
+                                <p className="text-lg sm:text-2xl font-bold text-blue-600">{formatCurrency(totalPurchasesThisMonth)}</p>
                             </div>
-                            <div className="p-3 bg-blue-100 rounded-full">
-                                <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <div className="p-2 sm:p-3 bg-blue-100 rounded-full">
+                                <svg className="w-5 h-5 sm:w-6 sm:h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
                                 </svg>
                             </div>
                         </div>
                     </div>
 
-                    <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-100">
+                    <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 border border-gray-100">
                         <div className="flex items-center justify-between">
                             <div>
-                                <p className="text-sm font-medium text-gray-600">Outstanding Receivables</p>
-                                <p className="text-2xl font-bold text-orange-600">{formatCurrency(totalOutstandingReceivables)}</p>
+                                <p className="text-xs sm:text-sm font-medium text-gray-600">Outstanding Receivables</p>
+                                <p className="text-lg sm:text-2xl font-bold text-orange-600">{formatCurrency(totalOutstandingReceivables)}</p>
                             </div>
-                            <div className="p-3 bg-orange-100 rounded-full">
-                                <svg className="w-6 h-6 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <div className="p-2 sm:p-3 bg-orange-100 rounded-full">
+                                <svg className="w-5 h-5 sm:w-6 sm:h-6 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                                 </svg>
                             </div>
                         </div>
                     </div>
 
-                    <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-100">
+                    <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 border border-gray-100">
                         <div className="flex items-center justify-between">
                             <div>
-                                <p className="text-sm font-medium text-gray-600">Outstanding Payables</p>
-                                <p className="text-2xl font-bold text-red-600">{formatCurrency(totalOutstandingPayables)}</p>
+                                <p className="text-xs sm:text-sm font-medium text-gray-600">Outstanding Payables</p>
+                                <p className="text-lg sm:text-2xl font-bold text-red-600">{formatCurrency(totalOutstandingPayables)}</p>
                             </div>
-                            <div className="p-3 bg-red-100 rounded-full">
-                                <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <div className="p-2 sm:p-3 bg-red-100 rounded-full">
+                                <svg className="w-5 h-5 sm:w-6 sm:h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                                 </svg>
                             </div>
                         </div>
                     </div>
+                </div>
+
+                {/* Mobile-Optimized Charts Section */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-6 sm:mb-8">
+                    {/* Monthly Sales vs Purchases Chart */}
+                    <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 border border-gray-100">
+                        <h3 className="text-lg sm:text-xl font-semibold text-gray-800 mb-4">Monthly Overview</h3>
+                        <MobileResponsiveChart height={320} loading={chartsLoading}>
+                            <BarChart data={monthlyData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                                <XAxis 
+                                    dataKey="month" 
+                                    tick={{ fontSize: 12 }}
+                                    tickLine={false}
+                                    axisLine={false}
+                                />
+                                <YAxis 
+                                    tick={{ fontSize: 12 }}
+                                    tickLine={false}
+                                    axisLine={false}
+                                    tickFormatter={(value) => `${(value / 1000).toFixed(0)}K`}
+                                />
+                                <Tooltip 
+                                    contentStyle={{ 
+                                        backgroundColor: 'white', 
+                                        border: '1px solid #e5e7eb',
+                                        borderRadius: '8px',
+                                        fontSize: '12px'
+                                    }}
+                                    formatter={(value, name) => [
+                                        formatCurrency(value), 
+                                        name === 'sales' ? 'Sales' : 'Purchases'
+                                    ]}
+                                />
+                                <Legend 
+                                    wrapperStyle={{ fontSize: '12px' }}
+                                    iconType="circle"
+                                />
+                                <Bar 
+                                    dataKey="sales" 
+                                    fill="#10b981" 
+                                    radius={[4, 4, 0, 0]}
+                                    name="Sales"
+                                />
+                                <Bar 
+                                    dataKey="purchases" 
+                                    fill="#3b82f6" 
+                                    radius={[4, 4, 0, 0]}
+                                    name="Purchases"
+                                />
+                            </BarChart>
+                        </MobileResponsiveChart>
+                    </div>
+
+                    {/* Payment Status Distribution */}
+                    <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 border border-gray-100">
+                        <h3 className="text-lg sm:text-xl font-semibold text-gray-800 mb-4">Payment Status</h3>
+                        <MobileResponsiveChart height={320} loading={chartsLoading}>
+                            <PieChart>
+                                <Pie
+                                    data={paymentStatusData}
+                                    cx="50%"
+                                    cy="50%"
+                                    innerRadius={40}
+                                    outerRadius={80}
+                                    paddingAngle={5}
+                                    dataKey="value"
+                                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                                    labelLine={false}
+                                >
+                                    {paymentStatusData.map((entry, index) => (
+                                        <Cell 
+                                            key={`cell-${index}`} 
+                                            fill={['#10b981', '#f59e0b', '#ef4444', '#8b5cf6'][index % 4]} 
+                                        />
+                                    ))}
+                                </Pie>
+                                <Tooltip 
+                                    contentStyle={{ 
+                                        backgroundColor: 'white', 
+                                        border: '1px solid #e5e7eb',
+                                        borderRadius: '8px',
+                                        fontSize: '12px'
+                                    }}
+                                    formatter={(value, name) => [formatCurrency(value), name]}
+                                />
+                            </PieChart>
+                        </MobileResponsiveChart>
+                    </div>
+                </div>
+
+                {/* Recent Transactions Chart */}
+                <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 border border-gray-100 mb-6 sm:mb-8">
+                    <h3 className="text-lg sm:text-xl font-semibold text-gray-800 mb-4">Recent Transaction Trends</h3>
+                    <MobileResponsiveChart height={320} loading={chartsLoading}>
+                        <AreaChart data={recentTransactions} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                            <XAxis 
+                                dataKey="date" 
+                                tick={{ fontSize: 12 }}
+                                tickLine={false}
+                                axisLine={false}
+                            />
+                            <YAxis 
+                                tick={{ fontSize: 12 }}
+                                tickLine={false}
+                                axisLine={false}
+                                tickFormatter={(value) => `${(value / 1000).toFixed(0)}K`}
+                            />
+                            <Tooltip 
+                                contentStyle={{ 
+                                    backgroundColor: 'white', 
+                                    border: '1px solid #e5e7eb',
+                                    borderRadius: '8px',
+                                    fontSize: '12px'
+                                }}
+                                formatter={(value, name) => [
+                                    formatCurrency(value), 
+                                    name === 'amount' ? 'Amount' : 'Count'
+                                ]}
+                            />
+                            <Legend 
+                                wrapperStyle={{ fontSize: '12px' }}
+                                iconType="circle"
+                            />
+                            <Area 
+                                type="monotone" 
+                                dataKey="amount" 
+                                stackId="1"
+                                stroke="#10b981" 
+                                fill="#10b981" 
+                                fillOpacity={0.6}
+                                name="Amount"
+                            />
+                            <Area 
+                                type="monotone" 
+                                dataKey="count" 
+                                stackId="2"
+                                stroke="#3b82f6" 
+                                fill="#3b82f6" 
+                                fillOpacity={0.6}
+                                name="Count"
+                            />
+                        </AreaChart>
+                    </MobileResponsiveChart>
                 </div>
 
                 {/* Charts Section */}

@@ -15,6 +15,17 @@ import Payments from './components/Payments';
 import Expenses from './components/Expenses';
 import Modal from './components/Modal';
 import CompanyDetailsWizard from './components/CompanyDetailsWizard';
+import MobileBottomNav from './components/MobileBottomNav';
+import OfflineIndicator from './components/OfflineIndicator';
+import UserOnboarding from './components/UserOnboarding';
+import HelpSupport from './components/HelpSupport';
+import NotificationSettings from './components/NotificationSettings';
+import AdvancedSearch from './components/AdvancedSearch';
+import QuickSearch from './components/QuickSearch';
+import DataExport from './components/DataExport';
+import VoiceCommands from './components/VoiceCommands';
+import GestureControls from './components/GestureControls';
+import GestureIntegration from './components/GestureIntegration';
 import { auth, db } from './firebase.config';
 import { onAuthStateChanged } from 'firebase/auth';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendEmailVerification, updateProfile } from 'firebase/auth';
@@ -80,11 +91,24 @@ function App() {
     }
   ];
 
+  // Onboarding and Help state
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  const [showNotificationSettings, setShowNotificationSettings] = useState(false);
+  const [showAdvancedSearch, setShowAdvancedSearch] = useState(false);
+  const [showDataExport, setShowDataExport] = useState(false);
+  const [showVoiceCommands, setShowVoiceCommands] = useState(false);
+  const [showGestureControls, setShowGestureControls] = useState(false);
+
   // Add state to store the newly created user's UID during registration:
   const [newUserId, setNewUserId] = useState(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
+      console.log('=== AUTH STATE CHANGED ===');
+      console.log('User:', user ? user.uid : 'NULL');
+      console.log('User email:', user ? user.email : 'NULL');
+      console.log('Is email verified:', user ? user.emailVerified : 'NULL');
       setUser(user);
       setIsAuthReady(true);
       // Clear newUserId when user logs out
@@ -365,6 +389,41 @@ function App() {
     localStorage.setItem('hasSeenTour', 'true');
   };
 
+  // Handle gesture actions
+  const handleGestureAction = (action) => {
+    switch (action) {
+      case 'search':
+        setShowAdvancedSearch(true);
+        break;
+      case 'export':
+        setShowDataExport(true);
+        break;
+      case 'help':
+        setShowHelp(true);
+        break;
+      case 'settings':
+        setShowNotificationSettings(true);
+        break;
+      case 'voiceCommands':
+        setShowVoiceCommands(true);
+        break;
+      case 'zoomIn':
+        // Handle zoom in action
+        document.body.style.zoom = Math.min(parseFloat(document.body.style.zoom || 1) * 1.1, 2);
+        break;
+      case 'zoomOut':
+        // Handle zoom out action
+        document.body.style.zoom = Math.max(parseFloat(document.body.style.zoom || 1) / 1.1, 0.5);
+        break;
+      case 'contextMenu':
+        // Handle context menu action
+        console.log('Context menu triggered');
+        break;
+      default:
+        console.log('Gesture action:', action);
+    }
+  };
+
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-100">
@@ -521,6 +580,21 @@ function App() {
         registerEmail={registerEmail}
         newUserId={newUserId}
         emailVerificationSent={emailVerificationSent}
+        showHelp={showHelp}
+        setShowHelp={setShowHelp}
+        showOnboarding={showOnboarding}
+        setShowOnboarding={setShowOnboarding}
+        showNotificationSettings={showNotificationSettings}
+        setShowNotificationSettings={setShowNotificationSettings}
+        showAdvancedSearch={showAdvancedSearch}
+        setShowAdvancedSearch={setShowAdvancedSearch}
+        showDataExport={showDataExport}
+        setShowDataExport={setShowDataExport}
+        showVoiceCommands={showVoiceCommands}
+        setShowVoiceCommands={setShowVoiceCommands}
+        showGestureControls={showGestureControls}
+        setShowGestureControls={setShowGestureControls}
+        handleGestureAction={handleGestureAction}
       />
     </Router>
   );
@@ -544,7 +618,22 @@ function AppContent({
   registerContact,
   registerEmail,
   newUserId,
-  emailVerificationSent
+  emailVerificationSent,
+  showHelp,
+  setShowHelp,
+  showOnboarding,
+  setShowOnboarding,
+  showNotificationSettings,
+  setShowNotificationSettings,
+  showAdvancedSearch,
+  setShowAdvancedSearch,
+  showDataExport,
+  setShowDataExport,
+  showVoiceCommands,
+  setShowVoiceCommands,
+  showGestureControls,
+  setShowGestureControls,
+  handleGestureAction
 }) {
   const currentLocation = useLocation();
   
@@ -745,7 +834,7 @@ function AppContent({
         </div>
       )}
 
-      <div className={`min-h-screen bg-gray-100 ${showCompanyDetailsWizard ? 'hidden' : ''}`}>
+      <div className={`min-h-screen bg-gray-100 ${showCompanyDetailsWizard ? 'hidden' : ''} pb-16 lg:pb-0`}>
         {/* Navigation */}
         <nav ref={navBarRef} className="fixed top-0 left-0 w-full z-50 bg-white shadow"
           onMouseEnter={() => {
@@ -901,6 +990,18 @@ function AppContent({
                   </Link>
                 </div>
               </div>
+              
+              {/* Desktop: Quick Search */}
+              <div className="hidden lg:flex items-center mx-4">
+                <QuickSearch 
+                  onAdvancedSearch={(query) => {
+                    setShowAdvancedSearch(true);
+                    // The AdvancedSearch component will handle the query
+                  }}
+                  placeholder="Search invoices, bills, parties..."
+                />
+              </div>
+              
               {/* Desktop: User avatar/profile dropdown */}
               <div className="hidden lg:flex items-center ml-4 relative" ref={avatarRef}>
                 <button
@@ -938,15 +1039,78 @@ function AppContent({
                       {companyDetails.contactNumber && <div><span className="font-semibold">Contact:</span> {companyDetails.contactNumber}</div>}
                     </div>
                     <div className="border-t border-gray-200 my-2 w-full"></div>
+                            <button
+          className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
+          onClick={() => {
+            setShowTour(true);
+            setCurrentTourStep(0);
+            setAvatarDropdownOpen(false);
+          }}
+        >
+          Restart Tour
+        </button>
+        <button
+          className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
+          onClick={() => {
+            setShowOnboarding(true);
+            setAvatarDropdownOpen(false);
+          }}
+        >
+          Restart Onboarding
+        </button>
                     <button
                       className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
                       onClick={() => {
-                        setShowTour(true);
-                        setCurrentTourStep(0);
+                        setShowHelp(true);
                         setAvatarDropdownOpen(false);
                       }}
                     >
-                      Restart Tour
+                      Help & Support
+                    </button>
+                    <button
+                      className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
+                      onClick={() => {
+                        setShowNotificationSettings(true);
+                        setAvatarDropdownOpen(false);
+                      }}
+                    >
+                      🔔 Notification Settings
+                    </button>
+                    <button
+                      className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
+                      onClick={() => {
+                        setShowAdvancedSearch(true);
+                        setAvatarDropdownOpen(false);
+                      }}
+                    >
+                      🔍 Advanced Search
+                    </button>
+                    <button
+                      className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
+                      onClick={() => {
+                        setShowDataExport(true);
+                        setAvatarDropdownOpen(false);
+                      }}
+                    >
+                      📊 Export Data
+                    </button>
+                    <button
+                      className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
+                      onClick={() => {
+                        setShowVoiceCommands(true);
+                        setAvatarDropdownOpen(false);
+                      }}
+                    >
+                      🎤 Voice Commands
+                    </button>
+                    <button
+                      className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
+                      onClick={() => {
+                        setShowGestureControls(true);
+                        setAvatarDropdownOpen(false);
+                      }}
+                    >
+                      👆 Gesture Controls
                     </button>
                     <button
                       className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
@@ -962,7 +1126,7 @@ function AppContent({
               <div className="lg:hidden">
                 <button
                   ref={mobileMenuButtonRef}
-                  className="p-2 rounded-full bg-white shadow-lg border border-gray-200 hover:bg-gray-50 transition-colors duration-200"
+                  className="p-3 rounded-full bg-white shadow-lg border border-gray-200 hover:bg-gray-50 transition-colors duration-200 min-w-[44px] min-h-[44px] flex items-center justify-center"
                   onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
                   aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
                   aria-expanded={mobileMenuOpen}
@@ -983,6 +1147,9 @@ function AppContent({
           </div>
         </nav>
         
+        {/* Mobile Bottom Navigation */}
+        <MobileBottomNav />
+        
         {/* Mobile Menu Overlay */}
         {mobileMenuOpen && (
           <div className="fixed inset-0 z-40 lg:hidden">
@@ -995,7 +1162,7 @@ function AppContent({
             {/* Mobile Menu */}
             <div 
               ref={mobileMenuRef}
-              className="fixed top-0 right-0 h-full w-80 max-w-[85vw] bg-white shadow-xl transform transition-transform duration-300 ease-in-out"
+              className="fixed top-0 right-0 h-full w-80 max-w-[90vw] bg-white shadow-xl transform transition-transform duration-300 ease-in-out"
             >
               <div className="flex flex-col h-full">
                 {/* Header */}
@@ -1116,15 +1283,69 @@ function AppContent({
 
                 {/* Footer */}
                 <div className="border-t border-gray-200 p-4">
+                          <button
+          className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded transition-colors duration-150"
+          onClick={() => {
+            setShowTour(true);
+            setCurrentTourStep(0);
+            setMobileMenuOpen(false);
+          }}
+        >
+          Restart Tour
+        </button>
+        <button
+          className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded transition-colors duration-150"
+          onClick={() => {
+            setShowOnboarding(true);
+            setMobileMenuOpen(false);
+          }}
+        >
+          Restart Onboarding
+        </button>
                   <button
                     className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded transition-colors duration-150"
                     onClick={() => {
-                      setShowTour(true);
-                      setCurrentTourStep(0);
+                      setShowHelp(true);
                       setMobileMenuOpen(false);
                     }}
                   >
-                    Restart Tour
+                    Help & Support
+                  </button>
+                  <button
+                    className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded transition-colors duration-150"
+                    onClick={() => {
+                      setShowNotificationSettings(true);
+                      setMobileMenuOpen(false);
+                    }}
+                  >
+                    🔔 Notification Settings
+                  </button>
+                  <button
+                    className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded transition-colors duration-150"
+                    onClick={() => {
+                      setShowAdvancedSearch(true);
+                      setMobileMenuOpen(false);
+                    }}
+                  >
+                    🔍 Advanced Search
+                  </button>
+                  <button
+                    className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded transition-colors duration-150"
+                    onClick={() => {
+                      setShowDataExport(true);
+                      setMobileMenuOpen(false);
+                    }}
+                  >
+                    📊 Export Data
+                  </button>
+                  <button
+                    className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded transition-colors duration-150"
+                    onClick={() => {
+                      setShowVoiceCommands(true);
+                      setMobileMenuOpen(false);
+                    }}
+                  >
+                    🎤 Voice Commands
                   </button>
                   <button
                     className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded transition-colors duration-150"
@@ -1142,8 +1363,19 @@ function AppContent({
         )}
         
         {/* Add top padding to main content so it's not hidden behind navbar */}
-        <div className="pt-24 md:pt-20 max-w-6xl mx-auto px-4">
-          <Routes>
+        <GestureIntegration 
+          gestureSettings={{
+            swipeEnabled: true,
+            pinchEnabled: true,
+            longPressEnabled: true,
+            doubleTapEnabled: true,
+            hapticFeedback: true
+          }}
+          onGestureAction={handleGestureAction}
+          enableGlobalGestures={true}
+        >
+          <div className="pt-24 md:pt-20 max-w-6xl mx-auto px-4">
+            <Routes>
             <Route path="/" element={
               <Dashboard 
                 db={db}
@@ -1243,7 +1475,82 @@ function AppContent({
             } />
           </Routes>
         </div>
+        </GestureIntegration>
       </div>
+      
+      {/* Offline Indicator */}
+      <OfflineIndicator />
+      
+      {/* User Onboarding */}
+      {showOnboarding && (
+        <UserOnboarding 
+          user={user}
+          onComplete={() => setShowOnboarding(false)}
+        />
+      )}
+      
+      {/* Help & Support */}
+      <HelpSupport 
+        isVisible={showHelp}
+        onClose={() => setShowHelp(false)}
+      />
+      
+      {/* Notification Settings */}
+      <NotificationSettings 
+        userId={user?.uid}
+        appId={appId}
+        isVisible={showNotificationSettings}
+        onClose={() => setShowNotificationSettings(false)}
+      />
+      
+      {/* Advanced Search */}
+      <AdvancedSearch 
+        db={db}
+        userId={user?.uid}
+        appId={appId}
+        isVisible={showAdvancedSearch}
+        onClose={() => setShowAdvancedSearch(false)}
+      />
+      
+      {/* Data Export */}
+      <DataExport 
+        db={db}
+        userId={user?.uid}
+        appId={appId}
+        isVisible={showDataExport}
+        onClose={() => setShowDataExport(false)}
+      />
+      
+      {/* Voice Commands */}
+      <VoiceCommands 
+        isVisible={showVoiceCommands}
+        onClose={() => setShowVoiceCommands(false)}
+        onVoiceAction={(action) => {
+          switch (action) {
+            case 'search':
+              setShowAdvancedSearch(true);
+              break;
+            case 'export':
+              setShowDataExport(true);
+              break;
+            case 'help':
+              setShowHelp(true);
+              break;
+            case 'settings':
+              setShowNotificationSettings(true);
+              break;
+            default:
+              console.log('Voice action:', action);
+          }
+        }}
+      />
+      
+      {/* Gesture Controls */}
+      <GestureControls 
+        isVisible={showGestureControls}
+        onClose={() => setShowGestureControls(false)}
+        onGestureAction={handleGestureAction}
+      />
     </>
   );
 }

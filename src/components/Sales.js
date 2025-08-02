@@ -1536,20 +1536,20 @@ function Sales({ db, userId, isAuthReady, appId }) {
 
 
     return (
-    <div className="min-h-screen bg-gray-100 flex flex-col items-center py-8">
+    <div className="min-h-screen bg-gray-100 flex flex-col items-center py-4 sm:py-8">
       {errorMessage && (
-        <div className="fixed top-6 left-1/2 transform -translate-x-1/2 bg-red-100 border border-red-400 text-red-700 px-6 py-3 rounded shadow-lg z-50 flex items-center gap-4">
-          <span>{errorMessage}</span>
-          <button onClick={() => setErrorMessage('')} className="ml-4 text-red-700 font-bold text-lg">&times;</button>
+        <div className="fixed top-6 left-1/2 transform -translate-x-1/2 bg-red-100 border border-red-400 text-red-700 px-4 sm:px-6 py-3 rounded shadow-lg z-50 flex items-center gap-4 max-w-[90vw]">
+          <span className="text-sm sm:text-base">{errorMessage}</span>
+          <button onClick={() => setErrorMessage('')} className="ml-4 text-red-700 font-bold text-lg min-w-[44px] min-h-[44px] flex items-center justify-center">&times;</button>
         </div>
       )}
-      <div className="w-full max-w-5xl mb-6">
-        <div className="flex gap-2 justify-center mb-4">
+      <div className="w-full max-w-5xl mb-4 sm:mb-6 px-4 sm:px-0">
+        <div className="flex flex-wrap gap-1 sm:gap-2 justify-center mb-4">
           {docTypeOptions.map(opt => (
             <button
               key={opt.value}
               onClick={() => setDocType(opt.value)}
-              className={`px-6 py-2 rounded-t-lg font-bold text-lg border-b-4 transition-all duration-200 ${
+              className={`px-3 sm:px-6 py-2 rounded-t-lg font-bold text-sm sm:text-lg border-b-4 transition-all duration-200 min-h-[44px] ${
                 docType === opt.value
                   ? 'bg-blue-600 text-white border-blue-600 shadow-lg'
                   : 'bg-gray-200 text-gray-700 border-transparent hover:bg-blue-100'
@@ -1560,27 +1560,27 @@ function Sales({ db, userId, isAuthReady, appId }) {
           ))}
         </div>
       </div>
-      <div className="bg-white rounded-lg shadow-md p-8 w-full max-w-5xl">
-        <h2 className="text-3xl font-bold text-center mb-6 uppercase">{docTypeOptions.find(opt => opt.value === docType)?.label || 'INVOICE'}</h2>
+      <div className="bg-white rounded-lg shadow-md p-4 sm:p-8 w-full max-w-5xl mx-4 sm:mx-0">
+        <h2 className="text-xl sm:text-3xl font-bold text-center mb-4 sm:mb-6 uppercase">{docTypeOptions.find(opt => opt.value === docType)?.label || 'INVOICE'}</h2>
         {/* Remove print area (SunriseTemplate for printing) */}
         {/* Remove print button from the form actions */}
         {/* Hide form/table UI when printing - not needed */}
                     <div>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-4">
                     <div>
               <label className="block text-sm font-medium text-gray-700">{numberLabel}</label>
               <input type="text" value={invoiceNumber} onChange={e => setInvoiceNumber(e.target.value)}
-                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2" />
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-3 sm:p-2 text-base" />
                     </div>
                     <div>
               <label className="block text-sm font-medium text-gray-700">Invoice Date</label>
               <input type="date" value={invoiceDate} onChange={e => setInvoiceDate(e.target.value)}
-                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2" />
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-3 sm:p-2 text-base" />
                     </div>
                     <div>
               <label className="block text-sm font-medium text-gray-700">Party (Buyer)</label>
               <select value={party} onChange={e => setParty(e.target.value)}
-                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2">
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-3 sm:p-2 text-base">
                 <option value="">Select Party</option>
                 {parties.map(p => <option key={p.id} value={p.id}>{p.firmName}</option>)}
                         </select>

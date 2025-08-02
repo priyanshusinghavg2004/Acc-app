@@ -208,8 +208,8 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
     };
 
     return (
-        <div className="p-6 bg-white rounded-lg shadow-md">
-            <h2 className="text-2xl font-bold text-gray-800 mb-4">Manage Parties (Buyers & Sellers)</h2>
+        <div className="p-4 sm:p-6 bg-white rounded-lg shadow-md">
+            <h2 className="text-xl sm:text-2xl font-bold text-gray-800 mb-4">Manage Parties (Buyers & Sellers)</h2>
 
             {message && (
                 <div className={`p-3 mb-4 rounded-md ${message.includes('Error') ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
@@ -217,12 +217,12 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
                 </div>
             )}
 
-            <h3 className="text-xl font-bold text-gray-800 mb-4">{editingPartyId ? 'Edit Party' : 'Add New Party'}</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+            <h3 className="text-lg sm:text-xl font-bold text-gray-800 mb-4">{editingPartyId ? 'Edit Party' : 'Add New Party'}</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 mb-6">
                 <div>
                     <label htmlFor="firmName" className="block text-sm font-medium text-gray-700">Party Name</label>
                     <input type="text" id="firmName" value={firmName} onChange={(e) => setFirmName(e.target.value)}
-                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-3 sm:p-2 text-base focus:ring-blue-500 focus:border-blue-500"
                         placeholder="e.g., ABC Enterprises" required />
                 </div>
                 <div>
@@ -322,24 +322,24 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
                         min="0" />
                 </div>
             </div>
-            <div className="flex gap-4 mt-4">
+            <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-4">
                 <button onClick={handleSaveParty}
-                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-300 ease-in-out transform hover:scale-105">
+                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 sm:py-2 px-4 rounded-md shadow-md transition duration-300 ease-in-out transform hover:scale-105 min-h-[44px]">
                     {editingPartyId ? 'Update Party' : 'Add Party'}
                 </button>
                 {editingPartyId && (
                     <button onClick={clearPartyForm}
-                        className="flex-1 bg-gray-400 hover:bg-gray-500 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-300 ease-in-out transform hover:scale-105">
+                        className="flex-1 bg-gray-400 hover:bg-gray-500 text-white font-bold py-3 sm:py-2 px-4 rounded-md shadow-md transition duration-300 ease-in-out transform hover:scale-105 min-h-[44px]">
                         Cancel Edit
                     </button>
                 )}
             </div>
 
-            <h3 className="text-xl font-bold text-gray-800 mt-8 mb-4">All Parties</h3>
+            <h3 className="text-lg sm:text-xl font-bold text-gray-800 mt-8 mb-4">All Parties</h3>
             {partiesList.length === 0 ? (
                 <p className="text-gray-600">No parties added yet. Add your first party above!</p>
             ) : (
-                <div className="overflow-x-auto rounded-lg shadow-md border border-gray-200">
+                <div className="overflow-x-auto rounded-lg shadow-md border border-gray-200 table-responsive">
                     <table className="min-w-full divide-y divide-gray-200">
                         <thead className="bg-gray-50">
                             <tr>
