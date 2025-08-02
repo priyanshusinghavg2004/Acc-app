@@ -68,7 +68,7 @@ function getComponentAnnualAmount(type, value, mode, basicSalary, ctc) {
 const Expenses = ({ db, userId, isAuthReady, appId }) => {
   // Component loaded successfully (only log once)
   useEffect(() => {
-    console.log('🔥 EXPENSES COMPONENT LOADED! 🔥');
+  
   }, []);
   
 
@@ -3193,7 +3193,7 @@ const Expenses = ({ db, userId, isAuthReady, appId }) => {
                     console.log('Salary payments count:', salaryPayments.length);
                     if (salaryPayments.length > 0) {
                       const firstPayment = salaryPayments[0];
-                      console.log('Testing delete with first payment:', firstPayment.id);
+                
                       handleDeleteSalaryPayment(firstPayment.id);
                     } else {
                       console.log('No salary payments to test with');

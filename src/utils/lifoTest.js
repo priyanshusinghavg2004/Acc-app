@@ -129,7 +129,7 @@ const sortData = (data, sortKey, sortDirection) => {
 
 // Test function to verify LIFO sorting using useTableSort approach
 export const testLifoSorting = () => {
-  console.log('Testing LIFO Sorting with useTableSort approach...');
+
   
   // Test default LIFO sorting (descending by bill number)
   const sortedData = sortData(testData, 'number', 'desc');
@@ -163,7 +163,7 @@ export const testLifoSorting = () => {
 
 // Test function to verify ascending sorting (user clicks on column)
 export const testAscendingSorting = () => {
-  console.log('Testing Ascending Sorting (user column click)...');
+
   
   // Test ascending sorting (user clicks on bill number column)
   const sortedData = sortData(testData, 'number', 'asc');
@@ -197,7 +197,7 @@ export const testAscendingSorting = () => {
 
 // Test function to verify date sorting
 export const testDateSorting = () => {
-  console.log('Testing Date Sorting...');
+
   
   // Test LIFO date sorting (descending by createdAt)
   const sortedData = sortData(testData, 'createdAt', 'desc');
@@ -223,7 +223,7 @@ export const testDateSorting = () => {
 
 // Test function to verify bill number extraction
 export const testBillNumberExtraction = () => {
-  console.log('Testing Bill Number Extraction...');
+
   
   const testCases = [
     { input: 'INV25-26/1', expected: 1 },
@@ -257,7 +257,7 @@ export const testBillNumberExtraction = () => {
 
 // Test function to verify Payments component sorting
 export const testPaymentsSorting = () => {
-  console.log('Testing Payments Component Sorting...');
+
 
   // Simulate bills data with different structures for different tabs
   const invoiceBills = [
@@ -312,7 +312,7 @@ export const testPaymentsSorting = () => {
 
   // Test sorting for each tab
   ['invoice', 'challan', 'purchase'].forEach(tab => {
-    console.log(`\n--- Testing ${tab.toUpperCase()} tab ---`);
+
     
     let bills;
     switch(tab) {
@@ -337,12 +337,12 @@ export const testPaymentsSorting = () => {
     console.log('Sorted by amount:', sortedByAmount.map(bill => bill.totalAmount));
   });
 
-  console.log('\n✅ Payments component sorting test completed');
+
 };
 
 // Run all tests
 export const runAllTests = () => {
-  console.log('🧪 Running all LIFO sorting tests...\n');
+
   
   testLifoSorting();
   testBillNumberExtraction();

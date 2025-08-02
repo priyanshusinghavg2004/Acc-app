@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
+import { db } from '../firebase.config';
 
-const QuickSearch = ({ onAdvancedSearch, placeholder = "Quick search..." }) => {
+const QuickSearch = ({ onAdvancedSearch, placeholder = "Quick search...", appId, userId }) => {
   const [query, setQuery] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [suggestions, setSuggestions] = useState([]);
@@ -22,6 +24,81 @@ const QuickSearch = ({ onAdvancedSearch, placeholder = "Quick search..." }) => {
     { type: 'expense', label: 'Search expenses', icon: '💸', action: () => navigate('/expenses') }
   ];
 
+  // Database search function
+  const searchDatabase = async (searchQuery) => {
+    if (!appId || !userId || !searchQuery.trim()) return [];
+    
+    const results = [];
+    const searchTerm = searchQuery.toLowerCase();
+    
+    try {
+      // Search in invoices
+      const invoicesRef = collection(db, `artifacts/${appId}/users/${userId}/invoices`);
+      const invoicesQuery = query(
+        invoicesRef,
+        where('invoiceNumber', '>=', searchTerm),
+        where('invoiceNumber', '<=', searchTerm + '\uf8ff'),
+        orderBy('invoiceNumber'),
+        limit(5)
+      );
+      const invoicesSnapshot = await getDocs(invoicesQuery);
+      invoicesSnapshot.forEach(doc => {
+        results.push({
+          type: 'invoice',
+          id: doc.id,
+          data: doc.data(),
+          label: `Invoice: ${doc.data().invoiceNumber}`,
+          icon: '💰'
+        });
+      });
+
+      // Search in parties
+      const partiesRef = collection(db, `artifacts/${appId}/users/${userId}/parties`);
+      const partiesQuery = query(
+        partiesRef,
+        where('name', '>=', searchTerm),
+        where('name', '<=', searchTerm + '\uf8ff'),
+        orderBy('name'),
+        limit(5)
+      );
+      const partiesSnapshot = await getDocs(partiesQuery);
+      partiesSnapshot.forEach(doc => {
+        results.push({
+          type: 'party',
+          id: doc.id,
+          data: doc.data(),
+          label: `Party: ${doc.data().name}`,
+          icon: '👥'
+        });
+      });
+
+      // Search in items
+      const itemsRef = collection(db, `artifacts/${appId}/users/${userId}/items`);
+      const itemsQuery = query(
+        itemsRef,
+        where('name', '>=', searchTerm),
+        where('name', '<=', searchTerm + '\uf8ff'),
+        orderBy('name'),
+        limit(5)
+      );
+      const itemsSnapshot = await getDocs(itemsQuery);
+      itemsSnapshot.forEach(doc => {
+        results.push({
+          type: 'item',
+          id: doc.id,
+          data: doc.data(),
+          label: `Item: ${doc.data().name}`,
+          icon: '📦'
+        });
+      });
+
+    } catch (error) {
+      console.error('Search error:', error);
+    }
+    
+    return results;
+  };
+
   // Handle input change
   const handleInputChange = (e) => {
     const value = e.target.value;
@@ -35,13 +112,20 @@ const QuickSearch = ({ onAdvancedSearch, placeholder = "Quick search..." }) => {
 
     if (value.trim()) {
       // Show suggestions after a short delay
-      timeoutRef.current = setTimeout(() => {
-        const filtered = quickSuggestions.filter(suggestion =>
+      timeoutRef.current = setTimeout(async () => {
+        // Get quick suggestions
+        const filteredQuick = quickSuggestions.filter(suggestion =>
           suggestion.label.toLowerCase().includes(value.toLowerCase())
         );
-        setSuggestions(filtered);
+        
+        // Get database results
+        const dbResults = await searchDatabase(value);
+        
+        // Combine results
+        const allSuggestions = [...filteredQuick, ...dbResults];
+        setSuggestions(allSuggestions);
         setShowSuggestions(true);
-      }, 200);
+      }, 300);
     } else {
       setSuggestions([]);
       setShowSuggestions(false);

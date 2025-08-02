@@ -1,22 +1,18 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { HashRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
-import BillTemplates from './components/BillTemplates';
 import Dashboard from './components/Dashboard';
 import Items from './components/Items';
 import Parties from './components/Parties';
 import Sales from './components/Sales';
 import Purchases from './components/Purchases';
+import Payments from './components/Payments';
 import Manufacturing from './components/ManufacturingNew';
 import Reports from './components/Reports';
 import Taxes from './components/Taxes';
+import BillTemplates from './components/BillTemplates';
 import CompanyDetails from './components/CompanyDetails';
-import Payments from './components/Payments';
-import Expenses from './components/Expenses';
-import Modal from './components/Modal';
 import CompanyDetailsWizard from './components/CompanyDetailsWizard';
-import MobileBottomNav from './components/MobileBottomNav';
-import OfflineIndicator from './components/OfflineIndicator';
+import Expenses from './components/Expenses';
 import UserOnboarding from './components/UserOnboarding';
 import HelpSupport from './components/HelpSupport';
 import NotificationSettings from './components/NotificationSettings';
@@ -24,12 +20,46 @@ import AdvancedSearch from './components/AdvancedSearch';
 import QuickSearch from './components/QuickSearch';
 import DataExport from './components/DataExport';
 import VoiceCommands from './components/VoiceCommands';
+import OfflineIndicator from './components/OfflineIndicator';
 import GestureControls from './components/GestureControls';
 import GestureIntegration from './components/GestureIntegration';
-import { auth, db } from './firebase.config';
-import { onAuthStateChanged } from 'firebase/auth';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendEmailVerification, updateProfile } from 'firebase/auth';
-import { setDoc, doc, getDoc, collection, query, where, getDocs, serverTimestamp } from 'firebase/firestore';
+import MobileBottomNav from './components/MobileBottomNav';
+import { db, auth } from './firebase.config';
+import { 
+  onAuthStateChanged, 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  signOut, 
+  updateProfile
+} from 'firebase/auth';
+import { 
+  setDoc, 
+  doc, 
+  getDoc, 
+  serverTimestamp, 
+  updateDoc,
+  collection,
+  query,
+  where,
+  getDocs
+} from 'firebase/firestore';
+import {
+  sendVerificationEmail,
+  checkEmailVerification,
+  updateUserEmailVerificationStatus,
+  generateVerificationCode,
+  storeVerificationCode,
+  verifyPhoneCode,
+  sendPasswordReset,
+  resetPassword,
+  trackLoginAttempt,
+  getLoginAttempts,
+  registerUser,
+  validateEmail,
+  validatePhone,
+  validatePassword,
+  formatPhoneNumber
+} from './utils/verification';
 
 function App() {
   const [user, setUser] = useState(null);
@@ -38,16 +68,38 @@ function App() {
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [showRegister, setShowRegister] = useState(false);
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [showPhoneVerification, setShowPhoneVerification] = useState(false);
+  const [showEmailVerification, setShowEmailVerification] = useState(false);
   const [registerEmail, setRegisterEmail] = useState('');
   const [registerPassword, setRegisterPassword] = useState('');
   const [registerCompany, setRegisterCompany] = useState('');
   const [registerError, setRegisterError] = useState('');
   const [registerContact, setRegisterContact] = useState('');
-  const [emailVerificationSent, setEmailVerificationSent] = useState(false);
   const [showCompanyDetailsWizard, setShowCompanyDetailsWizard] = useState(false);
   const [companyWizardStep, setCompanyWizardStep] = useState(1);
   const [showCompanyDetailsModal, setShowCompanyDetailsModal] = useState(false);
   const appId = 'acc-app-e5316'; // Use the Firebase project ID
+  
+  // Verification states
+  const [verificationCode, setVerificationCode] = useState('');
+  const [phoneVerificationId, setPhoneVerificationId] = useState('');
+  const [verificationError, setVerificationError] = useState('');
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [resendTimer, setResendTimer] = useState(0);
+  const [loginAttempts, setLoginAttempts] = useState(0);
+  const [isAccountLocked, setIsAccountLocked] = useState(false);
+  const [lockoutTimer, setLockoutTimer] = useState(0);
+  
+  // Password reset states
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetError, setResetError] = useState('');
+  const [resetSuccess, setResetSuccess] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [resetCode, setResetCode] = useState('');
+  const [showResetPasswordForm, setShowResetPasswordForm] = useState(false);
+  
   // Dropdown state for desktop/mobile
   const [openDropdown, setOpenDropdown] = useState(null);
   const [dropdownFocusIdx, setDropdownFocusIdx] = useState(-1);
@@ -103,17 +155,72 @@ function App() {
   // Add state to store the newly created user's UID during registration:
   const [newUserId, setNewUserId] = useState(null);
 
+  // Load login attempts from localStorage
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      console.log('=== AUTH STATE CHANGED ===');
-      console.log('User:', user ? user.uid : 'NULL');
-      console.log('User email:', user ? user.email : 'NULL');
-      console.log('Is email verified:', user ? user.emailVerified : 'NULL');
+    const attempts = localStorage.getItem('loginAttempts') || 0;
+    const lockoutTime = localStorage.getItem('lockoutTime') || 0;
+    const currentTime = Date.now();
+    
+    if (lockoutTime && currentTime < parseInt(lockoutTime)) {
+      setIsAccountLocked(true);
+      const remainingTime = Math.ceil((parseInt(lockoutTime) - currentTime) / 1000);
+      setLockoutTimer(remainingTime);
+    } else {
+      setLoginAttempts(parseInt(attempts));
+      setIsAccountLocked(false);
+    }
+  }, []);
+
+  // Handle lockout timer
+  useEffect(() => {
+    if (lockoutTimer > 0) {
+      const timer = setInterval(() => {
+        setLockoutTimer(prev => {
+          if (prev <= 1) {
+            setIsAccountLocked(false);
+            setLoginAttempts(0);
+            localStorage.removeItem('loginAttempts');
+            localStorage.removeItem('lockoutTime');
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      return () => clearInterval(timer);
+    }
+  }, [lockoutTimer]);
+
+  // Handle resend timer
+  useEffect(() => {
+    if (resendTimer > 0) {
+      const timer = setInterval(() => {
+        setResendTimer(prev => prev - 1);
+      }, 1000);
+      return () => clearInterval(timer);
+    }
+  }, [resendTimer]);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setUser(user);
       setIsAuthReady(true);
+      
       // Clear newUserId when user logs out
       if (!user) {
         setNewUserId(null);
+        setShowEmailVerification(false);
+        setShowPhoneVerification(false);
+      } else {
+        // Check if email is verified
+        if (user && !user.emailVerified) {
+          setShowEmailVerification(true);
+        }
+        
+        // Check if phone is verified
+        const userDoc = await getDoc(doc(db, 'users', user.uid));
+        if (userDoc.exists() && !userDoc.data().phoneVerified) {
+          setShowPhoneVerification(true);
+        }
       }
     });
     return () => unsubscribe();
@@ -179,8 +286,7 @@ function App() {
       } else {
         // If no company details exist, show the wizard for first-time users
         // Only show if user is not in the middle of registration process and we haven't shown it yet
-        if (!emailVerificationSent && !wizardShownRef.current) {
-          console.log('No company details found, showing wizard for first-time user');
+        if (!wizardShownRef.current) {
           setShowCompanyDetailsWizard(true);
           wizardShownRef.current = true;
         }
@@ -188,30 +294,13 @@ function App() {
     }).catch(error => {
       console.error('Error fetching company details:', error);
     });
-  }, [db, user, isAuthReady, appId, emailVerificationSent]);
+  }, [db, user, isAuthReady, appId]);
 
   useEffect(() => {
     if (user && localStorage.getItem('hasSeenTour') !== 'true') {
       window.startShepherdTour = true;
     }
   }, [user]);
-
-  // Separate effect to handle wizard state changes (only log when it actually changes)
-  useEffect(() => {
-    if (showCompanyDetailsWizard) {
-      console.log('Company wizard is now active');
-    }
-  }, [showCompanyDetailsWizard]);
-
-  // Monitor user's email verification status
-  useEffect(() => {
-    if (user && emailVerificationSent && user.emailVerified) {
-      setEmailVerificationSent(false);
-      setShowCompanyDetailsWizard(true);
-      setCompanyWizardStep(1);
-    }
-  }, [user, emailVerificationSent]);
-
 
   const [avatarDropdownOpen, setAvatarDropdownOpen] = useState(false);
   const avatarRef = useRef(null);
@@ -227,31 +316,68 @@ function App() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [avatarDropdownOpen]);
 
+  // Enhanced login with rate limiting
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoginError('');
+    
+    if (isAccountLocked) {
+      setLoginError(`Account temporarily locked. Please try again in ${lockoutTimer} seconds.`);
+      return;
+    }
+
     try {
       await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
+      // Reset login attempts on successful login
+      setLoginAttempts(0);
+      localStorage.removeItem('loginAttempts');
+      localStorage.removeItem('lockoutTime');
     } catch (err) {
-      setLoginError(err.message);
+      const newAttempts = loginAttempts + 1;
+      setLoginAttempts(newAttempts);
+      localStorage.setItem('loginAttempts', newAttempts.toString());
+      
+      if (newAttempts >= 5) {
+        // Lock account for 15 minutes
+        const lockoutTime = Date.now() + (15 * 60 * 1000);
+        localStorage.setItem('lockoutTime', lockoutTime.toString());
+        setIsAccountLocked(true);
+        setLockoutTimer(15 * 60);
+        setLoginError('Too many failed attempts. Account locked for 15 minutes.');
+      } else {
+        setLoginError(`Invalid credentials. ${5 - newAttempts} attempts remaining.`);
+      }
     }
   };
 
+  // Enhanced registration with email verification
   const handleRegister = async (e) => {
     e.preventDefault();
     setRegisterError('');
     
-    // Validation (removed User ID validation)
+    // Enhanced validation
     if (!registerEmail.trim()) {
       setRegisterError('Email is required.');
+      return;
+    }
+    if (!validateEmail(registerEmail)) {
+      setRegisterError('Please enter a valid email address.');
       return;
     }
     if (!registerContact.trim()) {
       setRegisterError('Contact Number is required.');
       return;
     }
+    if (!validatePhone(registerContact)) {
+      setRegisterError('Please enter a valid phone number.');
+      return;
+    }
     if (!registerPassword.trim()) {
       setRegisterError('Password is required.');
+      return;
+    }
+    if (!validatePassword(registerPassword)) {
+      setRegisterError('Password must be at least 6 characters with uppercase, lowercase, and number.');
       return;
     }
     if (!registerCompany.trim()) {
@@ -266,34 +392,25 @@ function App() {
       // Store the new user's UID for later use
       setNewUserId(newUser.user.uid);
       
-      // Send email verification with better error handling
-      try {
-        await sendEmailVerification(newUser.user, {
-          // Configure the action code settings for better user experience
-          handleCodeInApp: true, // This must be true for email verification to complete in your app
-          url: 'https://acc-app-e5316.web.app/complete-verification', // Your Firebase hosting URL
-        });
-        setEmailVerificationSent(true);
-        console.log('Email verification sent successfully to:', registerEmail);
-      } catch (emailError) {
-        console.error('Email verification error:', emailError);
-        if (emailError.code === 'auth/too-many-requests') {
-          setRegisterError('Too many verification emails sent. Please wait before trying again.');
-        } else if (emailError.code === 'auth/invalid-email') {
-          setRegisterError('Invalid email address. Please check your email format.');
-        } else {
-          setRegisterError('Failed to send verification email. Please try again later.');
-        }
+      // Register user with verification utilities
+      const registrationResult = await registerUser({
+        email: registerEmail,
+        contact: formatPhoneNumber(registerContact),
+        companyName: registerCompany,
+        uid: newUser.user.uid
+      });
+      
+      if (!registrationResult.success) {
+        setRegisterError(registrationResult.message);
         return;
       }
       
-      // Store user details (removed userId field)
-      await setDoc(doc(db, 'users', newUser.user.uid), {
-        email: registerEmail,
-        contact: registerContact,
-        companyName: registerCompany,
-        createdAt: serverTimestamp()
-      });
+      // Send email verification
+      const emailResult = await sendVerificationEmail(newUser.user);
+      if (!emailResult.success) {
+        setRegisterError(emailResult.message);
+        return;
+      }
       
       // Store registration data in localStorage for later use
       localStorage.setItem('registrationData', JSON.stringify({
@@ -302,12 +419,8 @@ function App() {
         companyName: registerCompany
       }));
       
-      // Also update the user's profile with contact information
-      await updateProfile(newUser.user, {
-        displayName: registerCompany,
-        // Note: Firebase Auth doesn't store custom fields like contact
-        // So we'll rely on the Firestore document
-      });
+      setRegisterError('✅ Registration successful! Please check your email for verification link.');
+      setShowEmailVerification(true);
       
     } catch (err) {
       console.error('Registration error:', err);
@@ -323,57 +436,159 @@ function App() {
     }
   };
 
-  const handleEmailVerification = async () => {
+  // Email verification functions
+  const handleResendEmailVerification = async () => {
+    if (resendTimer > 0) return;
+    
     try {
-      // Check if user is authenticated
-      if (!auth.currentUser) {
-        setRegisterError('Please login again to verify your email.');
-        return;
-      }
-      
-      // Reload user data to get latest verification status
-      await auth.currentUser.reload();
-      
-      if (auth.currentUser.emailVerified) {
-        setEmailVerificationSent(false);
-        setShowCompanyDetailsWizard(true);
-        setCompanyWizardStep(1);
+      const result = await sendVerificationEmail(auth.currentUser);
+      if (result.success) {
+        setResendTimer(60);
+        setVerificationError('✅ Verification email sent! Please check your inbox.');
       } else {
-        setRegisterError('Please check your email and click the verification link before proceeding.');
+        setVerificationError(result.message);
       }
-    } catch (err) {
-      console.error('Error checking email verification:', err);
-      if (err.code === 'auth/requires-recent-login') {
-        setRegisterError('Please login again to verify your email.');
-      } else {
-        setRegisterError('Error checking email verification. Please try again.');
-      }
+    } catch (error) {
+      setVerificationError('Failed to send verification email. Please try again.');
     }
   };
 
-  const handleResendEmailVerification = async () => {
+  const handleEmailVerificationCheck = async () => {
+    setIsVerifying(true);
     try {
-      if (!auth.currentUser) {
-        setRegisterError('Please login again to resend verification email.');
-        return;
-      }
-      
-      await sendEmailVerification(auth.currentUser, {
-        // Configure the action code settings for better user experience
-        handleCodeInApp: true, // This must be true for email verification to complete in your app
-        url: 'https://acc-app-e5316.web.app/complete-verification', // Your Firebase hosting URL
-      });
-      console.log('Verification email resent successfully to:', auth.currentUser.email);
-      setRegisterError('Verification email resent successfully. Please check your inbox.');
-    } catch (err) {
-      console.error('Error resending verification email:', err);
-      if (err.code === 'auth/too-many-requests') {
-        setRegisterError('Too many verification emails sent. Please wait before trying again.');
+      const isVerified = await checkEmailVerification(auth.currentUser);
+      if (isVerified) {
+        const result = await updateUserEmailVerificationStatus(auth.currentUser.uid, true);
+        if (result.success) {
+          setShowEmailVerification(false);
+          setVerificationError('');
+        } else {
+          setVerificationError(result.message);
+        }
       } else {
-        setRegisterError('Failed to resend verification email. Please try again later.');
+        setVerificationError('Email not verified yet. Please check your inbox and click the verification link.');
       }
+    } catch (error) {
+      setVerificationError('Error checking verification status. Please try again.');
+    } finally {
+      setIsVerifying(false);
     }
   };
+
+  // Phone verification functions (using SMS)
+  const handleSendPhoneVerification = async () => {
+    if (resendTimer > 0) return;
+    
+    try {
+      const code = generateVerificationCode();
+      const userDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
+      const phoneNumber = userDoc.data()?.contact || '';
+      
+      const result = await storeVerificationCode(auth.currentUser.uid, phoneNumber, code);
+      if (result.success) {
+        setPhoneVerificationId(code);
+        setResendTimer(60);
+        setVerificationError(`✅ Verification code sent! Demo code: ${code}`);
+      } else {
+        setVerificationError(result.message);
+      }
+    } catch (error) {
+      setVerificationError('Failed to send verification code. Please try again.');
+    }
+  };
+
+  const handleVerifyPhone = async () => {
+    if (!verificationCode.trim()) {
+      setVerificationError('Please enter the verification code.');
+      return;
+    }
+
+    try {
+      const userDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
+      const phoneNumber = userDoc.data()?.contact || '';
+      
+      const result = await verifyPhoneCode(auth.currentUser.uid, phoneNumber, verificationCode);
+      if (result.success) {
+        setShowPhoneVerification(false);
+        setVerificationError('');
+        setVerificationCode('');
+      } else {
+        setVerificationError(result.message);
+      }
+    } catch (error) {
+      setVerificationError('Error verifying phone number. Please try again.');
+    }
+  };
+
+  // Password reset functions
+  const handleForgotPassword = async (e) => {
+    e.preventDefault();
+    setResetError('');
+    
+    if (!resetEmail.trim()) {
+      setResetError('Please enter your email address.');
+      return;
+    }
+
+    if (!validateEmail(resetEmail)) {
+      setResetError('Please enter a valid email address.');
+      return;
+    }
+
+    try {
+      const result = await sendPasswordReset(resetEmail);
+      if (result.success) {
+        setResetSuccess(true);
+        setResetError('');
+      } else {
+        setResetError(result.message);
+      }
+    } catch (error) {
+      setResetError('Failed to send reset email. Please try again.');
+    }
+  };
+
+  const handleResetPassword = async (e) => {
+    e.preventDefault();
+    setResetError('');
+    
+    if (!resetCode.trim()) {
+      setResetError('Please enter the reset code.');
+      return;
+    }
+    if (!newPassword.trim()) {
+      setResetError('Please enter a new password.');
+      return;
+    }
+    if (!validatePassword(newPassword)) {
+      setResetError('Password must be at least 6 characters with uppercase, lowercase, and number.');
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setResetError('Passwords do not match.');
+      return;
+    }
+
+    try {
+      const result = await resetPassword(resetCode, newPassword);
+      if (result.success) {
+        setResetSuccess(true);
+        setShowResetPasswordForm(false);
+        setResetError('');
+        setResetCode('');
+        setNewPassword('');
+        setConfirmNewPassword('');
+      } else {
+        setResetError(result.message);
+      }
+    } catch (error) {
+      setResetError('Failed to reset password. Please try again.');
+    }
+  };
+
+
+
+
 
   const handleTourNext = () => {
     if (currentTourStep < tourSteps.length - 1) {
@@ -404,120 +619,172 @@ function App() {
       case 'settings':
         setShowNotificationSettings(true);
         break;
-      case 'voiceCommands':
+      case 'voice':
         setShowVoiceCommands(true);
         break;
-      case 'zoomIn':
-        // Handle zoom in action
-        document.body.style.zoom = Math.min(parseFloat(document.body.style.zoom || 1) * 1.1, 2);
+      case 'zoom-in':
+        document.body.style.zoom = '1.2';
         break;
-      case 'zoomOut':
-        // Handle zoom out action
-        document.body.style.zoom = Math.max(parseFloat(document.body.style.zoom || 1) / 1.1, 0.5);
+      case 'zoom-out':
+        document.body.style.zoom = '1';
         break;
-      case 'contextMenu':
-        // Handle context menu action
-        console.log('Context menu triggered');
+      case 'context-menu':
+        // Handle context menu gesture
         break;
       default:
-        console.log('Gesture action:', action);
+        console.log('Unknown gesture action:', action);
     }
   };
+
+
+
+
+
+
+
+
+
+
+
+
 
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-100">
         <div className="bg-white p-8 rounded shadow-md w-full max-w-sm">
-          {showRegister ? (
+          {showForgotPassword ? (
+            <form onSubmit={handleForgotPassword}>
+              <h2 className="text-2xl font-bold mb-4 text-center">Forgot Password</h2>
+              {resetError && <div className="mb-2 text-red-600 text-sm">{resetError}</div>}
+              {resetSuccess && <div className="mb-2 text-green-600 text-sm">Password reset email sent! Please check your inbox.</div>}
+              <div className="mb-4">
+                <label className="block text-sm font-medium mb-1">Email</label>
+                <input 
+                  type="email" 
+                  value={resetEmail} 
+                  onChange={e => setResetEmail(e.target.value)} 
+                  required 
+                  className="w-full border rounded p-2" 
+                  placeholder="Enter your email address"
+                />
+              </div>
+              <button type="submit" className="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded hover:bg-blue-700">
+                Send Reset Email
+              </button>
+              <div className="mt-4 text-center space-y-2">
+                <button type="button" className="text-blue-600 underline block" onClick={() => setShowForgotPassword(false)}>
+                  Back to Login
+                </button>
+                <button type="button" className="text-blue-600 underline block" onClick={() => setShowRegister(true)}>
+                  New user? Register
+                </button>
+              </div>
+            </form>
+          ) : showRegister ? (
             <form onSubmit={handleRegister}>
               <h2 className="text-2xl font-bold mb-4 text-center">Register</h2>
               {registerError && <div className="mb-2 text-red-600 text-sm">{registerError}</div>}
               <div className="mb-4">
                 <label className="block text-sm font-medium mb-1">Company Name</label>
-                <input type="text" value={registerCompany} onChange={e => setRegisterCompany(e.target.value)} required className="w-full border rounded p-2" />
+                <input 
+                  type="text" 
+                  value={registerCompany} 
+                  onChange={e => setRegisterCompany(e.target.value)} 
+                  required 
+                  className="w-full border rounded p-2" 
+                  placeholder="Enter your company name"
+                />
               </div>
               <div className="mb-4">
                 <label className="block text-sm font-medium mb-1">Email</label>
-                <input type="email" value={registerEmail} onChange={e => setRegisterEmail(e.target.value)} required className="w-full border rounded p-2" />
+                <input 
+                  type="email" 
+                  value={registerEmail} 
+                  onChange={e => setRegisterEmail(e.target.value)} 
+                  required 
+                  className="w-full border rounded p-2" 
+                  placeholder="Enter your email address"
+                />
               </div>
               <div className="mb-4">
                 <label className="block text-sm font-medium mb-1">Contact Number</label>
-                <input type="tel" value={registerContact} onChange={e => setRegisterContact(e.target.value)} required className="w-full border rounded p-2" />
+                <input 
+                  type="tel" 
+                  value={registerContact} 
+                  onChange={e => setRegisterContact(e.target.value)} 
+                  required 
+                  className="w-full border rounded p-2" 
+                  placeholder="Enter your phone number"
+                />
               </div>
               <div className="mb-4">
                 <label className="block text-sm font-medium mb-1">Password</label>
-                <input type="password" value={registerPassword} onChange={e => setRegisterPassword(e.target.value)} required className="w-full border rounded p-2" />
+                <input 
+                  type="password" 
+                  value={registerPassword} 
+                  onChange={e => setRegisterPassword(e.target.value)} 
+                  required 
+                  className="w-full border rounded p-2" 
+                  placeholder="Minimum 6 characters"
+                  minLength={6}
+                />
               </div>
-              <button type="submit" className="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded hover:bg-blue-700">Register</button>
-              {emailVerificationSent && (
-                <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded">
-                  <h3 className="text-lg font-semibold text-blue-800 mb-2">Email Verification Required</h3>
-                  <p className="text-blue-700 mb-3">
-                    We've sent a verification email to <strong>{registerEmail}</strong>. 
-                    Please check your inbox (and spam folder) and click the verification link.
-                  </p>
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <button 
-                      onClick={handleEmailVerification} 
-                      className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-                    >
-                      I've Verified My Email
-                    </button>
-                    <button 
-                      onClick={handleResendEmailVerification} 
-                      className="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700"
-                    >
-                      Resend Verification Email
-                    </button>
-                  </div>
-                  <p className="text-xs text-gray-600 mt-2">
-                    Didn't receive the email? Check your spam folder or click "Resend Verification Email".
-                  </p>
-                  
-                  {/* Temporary bypass for development/testing */}
-                  {process.env.NODE_ENV === 'development' && (
-                    <div className="mt-3 pt-3 border-t border-gray-300">
-                      <button 
-                        onClick={() => {
-                          setEmailVerificationSent(false);
-                          setShowCompanyDetailsWizard(true);
-                          setCompanyWizardStep(1);
-                        }} 
-                        className="text-xs text-orange-600 underline hover:text-orange-800"
-                      >
-                        🧪 Skip Email Verification (Development Only)
-                      </button>
-                      <button 
-                        onClick={() => {
-                          setShowCompanyDetailsWizard(true);
-                        }} 
-                        className="block text-xs text-blue-600 underline hover:text-blue-800 mt-1"
-                      >
-                        🧪 Open Company Wizard (Development Only)
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
+              <button type="submit" className="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded hover:bg-blue-700">
+                Register
+              </button>
               <div className="mt-4 text-center">
-                <button type="button" className="text-blue-600 underline" onClick={() => setShowRegister(false)}>Already have an account? Login</button>
+                <button type="button" className="text-blue-600 underline" onClick={() => setShowRegister(false)}>
+                  Already have an account? Login
+                </button>
               </div>
             </form>
           ) : (
             <form onSubmit={handleLogin}>
               <h2 className="text-2xl font-bold mb-4 text-center">Login</h2>
               {loginError && <div className="mb-2 text-red-600 text-sm">{loginError}</div>}
+              {isAccountLocked && (
+                <div className="mb-2 text-red-600 text-sm">
+                  Account locked. Please try again in {lockoutTimer} seconds.
+                </div>
+              )}
               <div className="mb-4">
                 <label className="block text-sm font-medium mb-1">Email</label>
-                <input type="email" value={loginEmail} onChange={e => setLoginEmail(e.target.value)} required className="w-full border rounded p-2" />
+                <input 
+                  type="email" 
+                  value={loginEmail} 
+                  onChange={e => setLoginEmail(e.target.value)} 
+                  required 
+                  className="w-full border rounded p-2" 
+                  placeholder="Enter your email"
+                  disabled={isAccountLocked}
+                />
               </div>
               <div className="mb-4">
                 <label className="block text-sm font-medium mb-1">Password</label>
-                <input type="password" value={loginPassword} onChange={e => setLoginPassword(e.target.value)} required className="w-full border rounded p-2" />
+                <input 
+                  type="password" 
+                  value={loginPassword} 
+                  onChange={e => setLoginPassword(e.target.value)} 
+                  required 
+                  className="w-full border rounded p-2" 
+                  placeholder="Enter your password"
+                  disabled={isAccountLocked}
+                />
               </div>
-              <button type="submit" className="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded hover:bg-blue-700">Login</button>
-              <div className="mt-4 text-center">
-                <button type="button" className="text-blue-600 underline" onClick={() => setShowRegister(true)}>New user? Register</button>
+              <button 
+                type="submit" 
+                className="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded hover:bg-blue-700 disabled:bg-gray-400"
+                disabled={isAccountLocked}
+              >
+                Login
+              </button>
+              <div className="mt-4 text-center space-y-2">
+                <button type="button" className="text-blue-600 underline block" onClick={() => setShowForgotPassword(true)}>
+                  Forgot Password?
+                </button>
+                <button type="button" className="text-blue-600 underline block" onClick={() => setShowRegister(true)}>
+                  New user? Register
+                </button>
               </div>
             </form>
           )}
@@ -525,6 +792,8 @@ function App() {
       </div>
     );
   }
+
+
 
   // Navigation groups for dropdowns
   const navGroups = [
@@ -579,7 +848,6 @@ function App() {
         registerContact={registerContact}
         registerEmail={registerEmail}
         newUserId={newUserId}
-        emailVerificationSent={emailVerificationSent}
         showHelp={showHelp}
         setShowHelp={setShowHelp}
         showOnboarding={showOnboarding}
@@ -595,6 +863,40 @@ function App() {
         showGestureControls={showGestureControls}
         setShowGestureControls={setShowGestureControls}
         handleGestureAction={handleGestureAction}
+        showEmailVerification={showEmailVerification}
+        setShowEmailVerification={setShowEmailVerification}
+        handleEmailVerificationCheck={handleEmailVerificationCheck}
+        handleResendEmailVerification={handleResendEmailVerification}
+        showPhoneVerification={showPhoneVerification}
+        setShowPhoneVerification={setShowPhoneVerification}
+        handleSendPhoneVerification={handleSendPhoneVerification}
+        handleVerifyPhone={handleVerifyPhone}
+        verificationCode={verificationCode}
+        setVerificationCode={setVerificationCode}
+        verificationError={verificationError}
+        isVerifying={isVerifying}
+        resendTimer={resendTimer}
+        loginAttempts={loginAttempts}
+        isAccountLocked={isAccountLocked}
+        lockoutTimer={lockoutTimer}
+        showForgotPassword={showForgotPassword}
+        setShowForgotPassword={setShowForgotPassword}
+        resetEmail={resetEmail}
+        setResetEmail={setResetEmail}
+        resetError={resetError}
+        setResetError={setResetError}
+        resetSuccess={resetSuccess}
+        setResetSuccess={setResetSuccess}
+        newPassword={newPassword}
+        setNewPassword={setNewPassword}
+        confirmNewPassword={confirmNewPassword}
+        setConfirmNewPassword={setConfirmNewPassword}
+        resetCode={resetCode}
+        setResetCode={setResetCode}
+        showResetPasswordForm={showResetPasswordForm}
+        setShowResetPasswordForm={setShowResetPasswordForm}
+        handleForgotPassword={handleForgotPassword}
+        handleResetPassword={handleResetPassword}
       />
     </Router>
   );
@@ -618,7 +920,6 @@ function AppContent({
   registerContact,
   registerEmail,
   newUserId,
-  emailVerificationSent,
   showHelp,
   setShowHelp,
   showOnboarding,
@@ -633,7 +934,41 @@ function AppContent({
   setShowVoiceCommands,
   showGestureControls,
   setShowGestureControls,
-  handleGestureAction
+  handleGestureAction,
+  showEmailVerification,
+  setShowEmailVerification,
+  handleEmailVerificationCheck,
+  handleResendEmailVerification,
+  showPhoneVerification,
+  setShowPhoneVerification,
+  handleSendPhoneVerification,
+  handleVerifyPhone,
+  verificationCode,
+  setVerificationCode,
+  verificationError,
+  isVerifying,
+  resendTimer,
+  loginAttempts,
+  isAccountLocked,
+  lockoutTimer,
+  showForgotPassword,
+  setShowForgotPassword,
+  resetEmail,
+  setResetEmail,
+  resetError,
+  setResetError,
+  resetSuccess,
+  setResetSuccess,
+  newPassword,
+  setNewPassword,
+  confirmNewPassword,
+  setConfirmNewPassword,
+  resetCode,
+  setResetCode,
+  showResetPasswordForm,
+  setShowResetPasswordForm,
+  handleForgotPassword,
+  handleResetPassword
 }) {
   const currentLocation = useLocation();
   
@@ -834,8 +1169,10 @@ function AppContent({
         </div>
       )}
 
-      <div className={`min-h-screen bg-gray-100 ${showCompanyDetailsWizard ? 'hidden' : ''} pb-16 lg:pb-0`}>
+      <div className={`min-h-screen bg-gray-100 ${showCompanyDetailsWizard ? 'hidden' : ''} pb-16 lg:pb-0`} style={{ paddingTop: '70px' }}>
         {/* Navigation */}
+        
+                {/* Global Search Bar - Removed from below navbar */}
         <nav ref={navBarRef} className="fixed top-0 left-0 w-full z-50 bg-white shadow"
           onMouseEnter={() => {
             setIsMouseOverNavOrDropdown(true);
@@ -848,39 +1185,88 @@ function AppContent({
             }, 120);
           }}
         >
-          <div className="max-w-7xl mx-auto px-4">
-            <div className="flex justify-between h-16 items-center">
-              <div className="flex items-center flex-1 min-w-0">
-                <div className="flex-shrink-0 flex items-center mr-4">
-                  <Link to="/" className="flex items-center gap-2">
-                    <img src={process.env.PUBLIC_URL + '/logolekhajokha.png'} alt="LekhaJokha Logo" style={{ height: 40 }} />
-                    <span className="text-2xl font-bold" style={{ color: '#003399' }}>
-                      LEKHA<span style={{ color: '#ff8800' }}>JOKHA</span>
-                    </span>
-                  </Link>
-                </div>
-                
-                {/* Desktop menu */}
-                <div className="hidden lg:flex lg:space-x-6 items-center flex-1">
-                  {navGroups.map((group, idx) => (
-                    group.links.length === 1 ? (
-                      <Link
-                        key={group.label}
-                        to={group.links[0].to}
-                        className="text-gray-900 inline-flex items-center px-2 py-1 border-b-2 border-transparent hover:border-gray-300 text-sm whitespace-nowrap"
-                        onClick={() => {
-                          setOpenDropdown(null);
-                          setDropdownOpenedByClick(false);
+                    <div className="max-w-7xl mx-auto px-4 lg:px-6">
+            {/* Desktop Layout */}
+            <div className="hidden lg:grid lg:grid-cols-12 items-center h-16 gap-4">
+              {/* Logo and Brand */}
+              <div className="col-span-3 flex items-center justify-start">
+                <Link to="/" className="flex items-center" style={{ gap: '30px' }}>
+                  <img src={process.env.PUBLIC_URL + '/logolekhajokha.png'} alt="LekhaJokha Logo" style={{ height: 40 }} />
+                  <span className="text-2xl font-bold" style={{ color: '#003399' }}>
+                    LEKHA<span style={{ color: '#ff8800' }}>JOKHA</span>
+                  </span>
+                </Link>
+              </div>
+              
+              {/* Desktop menu */}
+              <div className="hidden lg:flex items-center space-x-6 col-span-7 justify-center">
+                {navGroups.map((group, idx) => (
+                  group.links.length === 1 ? (
+                    <Link
+                      key={group.label}
+                      to={group.links[0].to}
+                      className="text-gray-900 inline-flex items-center px-2 py-1 border-b-2 border-transparent hover:border-gray-300 text-sm font-medium whitespace-nowrap"
+                      onClick={() => {
+                        setOpenDropdown(null);
+                        setDropdownOpenedByClick(false);
+                      }}
+                    >
+                      {group.links[0].label}
+                    </Link>
+                  ) : (
+                    <div
+                      key={group.label}
+                      className="relative"
+                      onMouseEnter={() => {
+                        setOpenDropdown(idx);
+                        setIsMouseOverNavOrDropdown(true);
+                        if (mouseLeaveTimeout.current) clearTimeout(mouseLeaveTimeout.current);
+                      }}
+                      onMouseLeave={() => {
+                        setIsMouseOverNavOrDropdown(false);
+                        mouseLeaveTimeout.current = setTimeout(() => {
+                          if (!isMouseOverNavOrDropdown) setOpenDropdown(null);
+                        }, 120);
+                      }}
+                    >
+                      <button
+                        className="text-gray-900 inline-flex items-center px-2 py-1 border-b-2 border-transparent hover:border-gray-300 text-sm font-medium whitespace-nowrap focus:outline-none"
+                        onClick={e => {
+                          e.stopPropagation();
+                          if (openDropdown === idx) {
+                            setOpenDropdown(null);
+                            setDropdownOpenedByClick(false);
+                          } else {
+                            setOpenDropdown(idx);
+                            setDropdownOpenedByClick(true);
+                          }
+                        }}
+                        aria-haspopup="true"
+                        aria-expanded={openDropdown === idx}
+                        type="button"
+                        onKeyDown={e => {
+                          if (openDropdown === idx) {
+                            if (e.key === 'ArrowDown') {
+                              e.preventDefault();
+                              setDropdownFocusIdx(i => (i + 1) % group.links.length);
+                            } else if (e.key === 'ArrowUp') {
+                              e.preventDefault();
+                              setDropdownFocusIdx(i => (i - 1 + group.links.length) % group.links.length);
+                            } else if (e.key === 'Escape') {
+                              setOpenDropdown(null);
+                              setDropdownOpenedByClick(false);
+                            }
+                          } else if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+                            setOpenDropdown(idx);
+                            setDropdownOpenedByClick(true);
+                          }
                         }}
                       >
-                        {group.links[0].label}
-                      </Link>
-                    ) : (
+                        {group.label}
+                      </button>
+                      {/* Dropdown with animation */}
                       <div
-                        key={group.label}
-                        className="relative"
                         onMouseEnter={() => {
-                          setOpenDropdown(idx);
                           setIsMouseOverNavOrDropdown(true);
                           if (mouseLeaveTimeout.current) clearTimeout(mouseLeaveTimeout.current);
                         }}
@@ -890,120 +1276,89 @@ function AppContent({
                             if (!isMouseOverNavOrDropdown) setOpenDropdown(null);
                           }, 120);
                         }}
+                        className={`absolute left-0 mt-2 min-w-[180px] border border-gray-300 rounded-lg shadow-lg z-50 transition-all duration-200 ease-in-out backdrop-blur-sm bg-gray-100 bg-opacity-95
+                          ${openDropdown === idx ? 'opacity-100 translate-y-0 pointer-events-auto' : 'opacity-0 -translate-y-2 pointer-events-none'}`}
+                        style={{
+                          visibility: openDropdown === idx ? 'visible' : 'hidden',
+                        }}
                       >
-                        <button
-                          className="text-gray-900 inline-flex items-center px-2 py-1 border-b-2 border-transparent hover:border-gray-300 text-sm whitespace-nowrap focus:outline-none"
-                          onClick={e => {
-                            e.stopPropagation();
-                            if (openDropdown === idx) {
-                              setOpenDropdown(null);
-                              setDropdownOpenedByClick(false);
-                            } else {
-                              setOpenDropdown(idx);
-                              setDropdownOpenedByClick(true);
-                            }
-                          }}
-                          aria-haspopup="true"
-                          aria-expanded={openDropdown === idx}
-                          type="button"
-                          onKeyDown={e => {
-                            if (openDropdown === idx) {
-                              if (e.key === 'ArrowDown') {
-                                e.preventDefault();
-                                setDropdownFocusIdx(i => (i + 1) % group.links.length);
-                              } else if (e.key === 'ArrowUp') {
-                                e.preventDefault();
-                                setDropdownFocusIdx(i => (i - 1 + group.links.length) % group.links.length);
-                              } else if (e.key === 'Escape') {
+                          {group.links.map((link, linkIdx) => (
+                            <Link
+                              key={link.to}
+                              to={link.to}
+                            className="block px-4 py-2 text-gray-800 hover:bg-gray-200 text-sm whitespace-nowrap transition-colors duration-150"
+                              tabIndex={0}
+                              ref={el => dropdownRefs.current[linkIdx] = el}
+                              onClick={() => {
                                 setOpenDropdown(null);
                                 setDropdownOpenedByClick(false);
-                              }
-                            } else if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
-                              setOpenDropdown(idx);
-                              setDropdownOpenedByClick(true);
-                            }
-                          }}
-                        >
-                          {group.label}
-                        </button>
-                        {/* Dropdown with animation */}
-                        <div
-                          onMouseEnter={() => {
-                            setIsMouseOverNavOrDropdown(true);
-                            if (mouseLeaveTimeout.current) clearTimeout(mouseLeaveTimeout.current);
-                          }}
-                          onMouseLeave={() => {
-                            setIsMouseOverNavOrDropdown(false);
-                            mouseLeaveTimeout.current = setTimeout(() => {
-                              if (!isMouseOverNavOrDropdown) setOpenDropdown(null);
-                            }, 120);
-                          }}
-                          className={`absolute left-0 mt-2 min-w-[180px] border border-gray-300 rounded-lg shadow-lg z-50 transition-all duration-200 ease-in-out backdrop-blur-sm bg-gray-100 bg-opacity-95
-                            ${openDropdown === idx ? 'opacity-100 translate-y-0 pointer-events-auto' : 'opacity-0 -translate-y-2 pointer-events-none'}`}
-                          style={{
-                            visibility: openDropdown === idx ? 'visible' : 'hidden',
-                          }}
-                        >
-                            {group.links.map((link, linkIdx) => (
-                              <Link
-                                key={link.to}
-                                to={link.to}
-                              className="block px-4 py-2 text-gray-800 hover:bg-gray-200 text-sm whitespace-nowrap transition-colors duration-150"
-                                tabIndex={0}
-                                ref={el => dropdownRefs.current[linkIdx] = el}
-                                onClick={() => {
+                              }}
+                              onKeyDown={e => {
+                                if (e.key === 'ArrowDown') {
+                                  e.preventDefault();
+                                  setDropdownFocusIdx(i => (i + 1) % group.links.length);
+                                } else if (e.key === 'ArrowUp') {
+                                  e.preventDefault();
+                                  setDropdownFocusIdx(i => (i - 1 + group.links.length) % group.links.length);
+                                } else if (e.key === 'Escape') {
                                   setOpenDropdown(null);
                                   setDropdownOpenedByClick(false);
-                                }}
-                                onKeyDown={e => {
-                                  if (e.key === 'ArrowDown') {
-                                    e.preventDefault();
-                                    setDropdownFocusIdx(i => (i + 1) % group.links.length);
-                                  } else if (e.key === 'ArrowUp') {
-                                    e.preventDefault();
-                                    setDropdownFocusIdx(i => (i - 1 + group.links.length) % group.links.length);
-                                  } else if (e.key === 'Escape') {
-                                    setOpenDropdown(null);
-                                    setDropdownOpenedByClick(false);
-                                  } else if (e.key === 'Enter' || e.key === ' ') {
-                                    e.currentTarget.click();
-                                  }
-                                }}
-                              >
-                                {link.label}
-                              </Link>
-                            ))}
-                          </div>
-                      </div>
-                    )
-                  ))}
-                  {/* Expenses as a single link */}
-                  <Link
-                    to="/expenses"
-                    className="text-gray-900 inline-flex items-center px-2 py-1 border-b-2 border-transparent hover:border-gray-300 text-sm whitespace-nowrap"
-                    onClick={() => {
-                      setOpenDropdown(null);
-                      setDropdownOpenedByClick(false);
-                    }}
+                                } else if (e.key === 'Enter' || e.key === ' ') {
+                                  e.currentTarget.click();
+                                }
+                              }}
+                            >
+                              {link.label}
+                            </Link>
+                          ))}
+                        </div>
+                    </div>
+                  )
+                ))}
+                {/* Expenses as a single link */}
+                <Link
+                  to="/expenses"
+                  className="text-gray-900 inline-flex items-center px-2 py-1 border-b-2 border-transparent hover:border-gray-300 text-sm font-medium whitespace-nowrap"
+                  onClick={() => {
+                    setOpenDropdown(null);
+                    setDropdownOpenedByClick(false);
+                  }}
+                >
+                  Expenses
+                </Link>
+              </div>
+              
+                            {/* Desktop: Search Button */}
+              <div className="hidden lg:flex items-center justify-end col-span-1 relative">
+                <div className="relative group">
+                  <button
+                    className="flex items-center justify-center w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 border border-gray-300 transition-colors duration-200"
+                    aria-label="Search"
                   >
-                    Expenses
-                  </Link>
+                    <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                  </button>
+                  
+                  {/* Search Dropdown */}
+                  <div className="absolute right-0 top-full mt-2 w-80 bg-white border border-gray-200 rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
+                    <div className="p-4">
+                      <QuickSearch 
+                        onAdvancedSearch={(query) => {
+                          setShowAdvancedSearch(true);
+                          // The AdvancedSearch component will handle the query
+                        }}
+                        placeholder="Search invoices, bills, parties..."
+                        appId={appId}
+                        userId={user?.uid}
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
               
-              {/* Desktop: Quick Search */}
-              <div className="hidden lg:flex items-center mx-4">
-                <QuickSearch 
-                  onAdvancedSearch={(query) => {
-                    setShowAdvancedSearch(true);
-                    // The AdvancedSearch component will handle the query
-                  }}
-                  placeholder="Search invoices, bills, parties..."
-                />
-              </div>
-              
               {/* Desktop: User avatar/profile dropdown */}
-              <div className="hidden lg:flex items-center ml-4 relative" ref={avatarRef}>
+              <div className="hidden lg:flex items-center justify-end col-span-1 relative" ref={avatarRef}>
                 <button
                   className="flex items-center justify-center w-12 h-12 rounded-full bg-gray-100 border-2 border-white shadow focus:outline-none z-50"
                   onClick={() => setAvatarDropdownOpen(!avatarDropdownOpen)}
@@ -1122,27 +1477,70 @@ function AppContent({
                 )}
               </div>
               
-              {/* Mobile Menu Button */}
-              <div className="lg:hidden">
+
+
+            </div>
+            
+            {/* Mobile Layout */}
+            <div className="lg:hidden flex items-center justify-between h-16 px-4">
+              {/* Mobile Logo and Brand */}
+              <div className="flex items-center">
+                <Link to="/" className="flex items-center">
+                  <img src={process.env.PUBLIC_URL + '/logolekhajokha.png'} alt="LekhaJokha Logo" style={{ height: 32 }} />
+                  <span className="text-lg font-bold ml-2" style={{ color: '#003399' }}>
+                    LEKHA<span style={{ color: '#ff8800' }}>JOKHA</span>
+                  </span>
+                </Link>
+              </div>
+              
+              {/* Mobile Right Side - Search and Menu */}
+              <div className="flex items-center space-x-3">
+                {/* Mobile Search Button */}
+                <div className="relative group">
+                  <button
+                    className="p-2 rounded-full bg-white shadow-lg border border-gray-200 hover:bg-gray-50 transition-colors duration-200 min-w-[40px] min-h-[40px] flex items-center justify-center"
+                    aria-label="Search"
+                  >
+                    <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                  </button>
+                  
+                  {/* Mobile Search Dropdown */}
+                  <div className="absolute right-0 top-full mt-2 w-72 bg-white border border-gray-200 rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
+                    <div className="p-4">
+                      <QuickSearch 
+                        onAdvancedSearch={(query) => {
+                          setShowAdvancedSearch(true);
+                          // The AdvancedSearch component will handle the query
+                        }}
+                        placeholder="Search invoices, bills, parties..."
+                        appId={appId}
+                        userId={user?.uid}
+                      />
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Mobile Menu Button */}
                 <button
                   ref={mobileMenuButtonRef}
-                  className="p-3 rounded-full bg-white shadow-lg border border-gray-200 hover:bg-gray-50 transition-colors duration-200 min-w-[44px] min-h-[44px] flex items-center justify-center"
+                  className="p-2 rounded-full bg-white shadow-lg border border-gray-200 hover:bg-gray-50 transition-colors duration-200 min-w-[40px] min-h-[40px] flex items-center justify-center"
                   onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
                   aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
                   aria-expanded={mobileMenuOpen}
                 >
                   {mobileMenuOpen ? (
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-orange-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-orange-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                     </svg>
                   ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-orange-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-orange-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
                     </svg>
                   )}
                 </button>
               </div>
-
             </div>
           </div>
         </nav>
@@ -1551,6 +1949,139 @@ function AppContent({
         onClose={() => setShowGestureControls(false)}
         onGestureAction={handleGestureAction}
       />
+
+
+
+      {/* Email Verification Modal */}
+      {showEmailVerification && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 relative">
+            <h3 className="text-xl font-bold text-gray-900 mb-4 text-center">Email Verification Required</h3>
+                          <p className="text-gray-600 mb-6 text-center">
+                Please check your email ({auth.currentUser?.email || 'your email'}) and click the verification link to complete your registration.
+              </p>
+            <div className="flex justify-center space-x-2 mb-4">
+              <button
+                onClick={handleEmailVerificationCheck}
+                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                disabled={isVerifying}
+              >
+                {isVerifying ? 'Verifying...' : 'Check Verification Status'}
+              </button>
+              <button
+                onClick={handleResendEmailVerification}
+                className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                disabled={resendTimer > 0}
+              >
+                {resendTimer > 0 ? `Resend in ${resendTimer}s` : 'Resend Verification Email'}
+              </button>
+            </div>
+            <div className="text-center">
+              <button
+                onClick={() => setShowEmailVerification(false)}
+                className="text-gray-500 text-sm underline hover:text-gray-700"
+              >
+                Skip for now (Testing only)
+              </button>
+            </div>
+            {verificationError && <div className="mt-4 text-red-600 text-sm text-center">{verificationError}</div>}
+          </div>
+        </div>
+      )}
+
+      {/* Phone Verification Modal */}
+      {showPhoneVerification && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 relative">
+            <h3 className="text-xl font-bold text-gray-900 mb-4 text-center">Phone Verification Required</h3>
+                          <p className="text-gray-600 mb-6 text-center">
+                Please enter the verification code sent to your phone number ({auth.currentUser?.phoneNumber || 'your phone'}).
+              </p>
+            <div className="flex flex-col items-center mb-4">
+              <input
+                type="text"
+                placeholder="Enter verification code"
+                value={verificationCode}
+                onChange={(e) => setVerificationCode(e.target.value)}
+                className="w-full border rounded p-2 mb-4"
+                maxLength={6}
+              />
+              <div className="flex space-x-2">
+                <button
+                  onClick={handleSendPhoneVerification}
+                  className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                  disabled={resendTimer > 0}
+                >
+                  {resendTimer > 0 ? `Send in ${resendTimer}s` : 'Send Code'}
+                </button>
+                <button
+                  onClick={handleVerifyPhone}
+                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                  disabled={isVerifying}
+                >
+                  {isVerifying ? 'Verifying...' : 'Verify Phone Number'}
+                </button>
+              </div>
+            </div>
+            <div className="text-center">
+              <button
+                onClick={() => setShowPhoneVerification(false)}
+                className="text-gray-500 text-sm underline hover:text-gray-700"
+              >
+                Skip for now (Testing only)
+              </button>
+            </div>
+            {verificationError && <div className="mt-4 text-red-600 text-sm text-center">{verificationError}</div>}
+          </div>
+        </div>
+      )}
+
+      {/* Password Reset Modal */}
+      {showResetPasswordForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 relative">
+            <h3 className="text-xl font-bold text-gray-900 mb-4 text-center">Reset Password</h3>
+            <p className="text-gray-600 mb-6 text-center">
+              Enter the reset code sent to your email ({resetEmail}) to reset your password.
+            </p>
+            <div className="flex flex-col items-center">
+              <input
+                type="text"
+                placeholder="Enter reset code"
+                value={resetCode}
+                onChange={(e) => setResetCode(e.target.value)}
+                className="w-full border rounded p-2 mb-4"
+                maxLength={6}
+              />
+              <input
+                type="password"
+                placeholder="Enter new password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="w-full border rounded p-2 mb-4"
+                minLength={6}
+              />
+              <input
+                type="password"
+                placeholder="Confirm new password"
+                value={confirmNewPassword}
+                onChange={(e) => setConfirmNewPassword(e.target.value)}
+                className="w-full border rounded p-2 mb-4"
+                minLength={6}
+              />
+              <button
+                onClick={handleResetPassword}
+                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+                disabled={isVerifying}
+              >
+                {isVerifying ? 'Resetting...' : 'Reset Password'}
+              </button>
+            </div>
+            {resetError && <div className="mt-4 text-red-600 text-sm text-center">{resetError}</div>}
+            {resetSuccess && <div className="mt-4 text-green-600 text-sm text-center">Password reset successful!</div>}
+          </div>
+        </div>
+      )}
     </>
   );
 }

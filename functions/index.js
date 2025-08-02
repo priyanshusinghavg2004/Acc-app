@@ -8,9 +8,10 @@
  */
 
 const {setGlobalOptions} = require("firebase-functions");
-const {onRequest} = require("firebase-functions/v2/https");
+const {onRequest, onCall} = require("firebase-functions/v2/https");
 const logger = require("firebase-functions/logger");
 const admin = require("firebase-admin");
+const axios = require("axios");
 
 // Initialize Firebase Admin SDK
 admin.initializeApp();
@@ -91,5 +92,110 @@ exports.health = onRequest({
   } catch (error) {
     logger.error("Health check error:", error);
     res.status(500).json({error: "Service unavailable"});
+  }
+});
+
+// reCAPTCHA verification function
+exports.verifyCaptcha = onCall({
+  maxInstances: 10,
+  cors: true,
+}, async (request) => {
+  try {
+    const { captchaToken } = request.data;
+    
+    if (!captchaToken) {
+      throw new Error("Captcha token is required");
+    }
+
+    // Verify with Google reCAPTCHA API
+    const response = await axios.post(
+      'https://www.google.com/recaptcha/api/siteverify',
+      null,
+      {
+        params: {
+          secret: process.env.RECAPTCHA_SECRET_KEY || 'YOUR_SECRET_KEY_HERE',
+          response: captchaToken
+        }
+      }
+    );
+
+    const { success, score, action } = response.data;
+
+    logger.info("reCAPTCHA verification result", {
+      success,
+      score,
+      action,
+      timestamp: new Date().toISOString()
+    });
+
+    if (!success) {
+      throw new Error("reCAPTCHA verification failed");
+    }
+
+    return {
+      success: true,
+      score: score || 0,
+      action: action || 'verify',
+      message: "reCAPTCHA verified successfully"
+    };
+
+  } catch (error) {
+    logger.error("reCAPTCHA verification error:", error);
+    throw new Error(`reCAPTCHA verification failed: ${error.message}`);
+  }
+});
+
+// Login with reCAPTCHA verification
+exports.loginWithCaptcha = onCall({
+  maxInstances: 10,
+  cors: true,
+}, async (request) => {
+  try {
+    const { email, password, captchaToken } = request.data;
+    
+    if (!email || !password || !captchaToken) {
+      throw new Error("Email, password, and captcha token are required");
+    }
+
+    // First verify reCAPTCHA
+    const captchaResponse = await axios.post(
+      'https://www.google.com/recaptcha/api/siteverify',
+      null,
+      {
+        params: {
+          secret: process.env.RECAPTCHA_SECRET_KEY || 'YOUR_SECRET_KEY_HERE',
+          response: captchaToken
+        }
+      }
+    );
+
+    const { success, score } = captchaResponse.data;
+
+    if (!success) {
+      throw new Error("reCAPTCHA verification failed");
+    }
+
+    // If score is too low (for v3), reject the request
+    if (score && score < 0.5) {
+      throw new Error("reCAPTCHA score too low");
+    }
+
+    // Here you would typically authenticate the user
+    // For demo purposes, we'll just return success
+    logger.info("Login attempt with reCAPTCHA", {
+      email,
+      captchaScore: score,
+      timestamp: new Date().toISOString()
+    });
+
+    return {
+      success: true,
+      message: "Login successful",
+      captchaScore: score || 0
+    };
+
+  } catch (error) {
+    logger.error("Login with captcha error:", error);
+    throw new Error(`Login failed: ${error.message}`);
   }
 });

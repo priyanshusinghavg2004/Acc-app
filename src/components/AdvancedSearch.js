@@ -85,7 +85,7 @@ const AdvancedSearch = ({ db, userId, appId, isVisible, onClose }) => {
 
   // Perform search with debouncing
   const performSearch = async (query, module = selectedModule, searchFilters) => {
-    console.log('🔍 Starting search with:', { query, module, searchFilters });
+
     
     // Use filters state if no searchFilters provided
     const filtersToUse = searchFilters || filters || {
@@ -99,7 +99,6 @@ const AdvancedSearch = ({ db, userId, appId, isVisible, onClose }) => {
     
     // Check if all required parameters are available
     if (!query.trim()) {
-      console.log('❌ Empty query');
       setSearchResults([]);
       return;
     }
@@ -122,7 +121,7 @@ const AdvancedSearch = ({ db, userId, appId, isVisible, onClose }) => {
       return;
     }
     
-    console.log('✅ All parameters valid:', { db: !!db, userId, appId });
+
 
     setIsSearching(true);
     setSearchResults([]);
@@ -152,7 +151,7 @@ const AdvancedSearch = ({ db, userId, appId, isVisible, onClose }) => {
         return new Date(b.date) - new Date(a.date);
       });
 
-      console.log(`🎯 Total results found: ${sortedResults.length}`);
+
       setSearchResults(sortedResults);
       saveToHistory(query, module);
     } catch (error) {
@@ -165,7 +164,7 @@ const AdvancedSearch = ({ db, userId, appId, isVisible, onClose }) => {
 
   // Search in specific module
   const searchInModule = async (moduleName, searchTerm, filtersToUse) => {
-    console.log(`🔍 Searching in module: ${moduleName}`);
+    
     const results = [];
     
     try {
@@ -198,12 +197,10 @@ const AdvancedSearch = ({ db, userId, appId, isVisible, onClose }) => {
           searchFields = ['description', 'category', 'paymentMode', 'remarks'];
           break;
         default:
-          console.log(`❌ Unknown module: ${moduleName}`);
           return results;
       }
       
-      console.log(`📁 Collection path: artifacts/${appId}/users/${userId}/${moduleName}`);
-      console.log(`🔍 Search fields:`, searchFields);
+
 
       // Build query with filters
       let q = query(collectionRef, orderBy('date', 'desc'), limit(50));
@@ -221,7 +218,7 @@ const AdvancedSearch = ({ db, userId, appId, isVisible, onClose }) => {
       }
 
              const querySnapshot = await getDocs(q);
-       console.log(`📊 Found ${querySnapshot.size} documents in ${moduleName}`);
+
        
        querySnapshot.forEach((doc) => {
         const data = doc.data();
@@ -272,7 +269,7 @@ const AdvancedSearch = ({ db, userId, appId, isVisible, onClose }) => {
        console.error(`❌ Error searching in ${moduleName}:`, error);
      }
 
-     console.log(`✅ Found ${results.length} matching results in ${moduleName}`);
+
      return results;
   };
 
