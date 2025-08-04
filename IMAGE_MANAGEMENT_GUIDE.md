@@ -62,7 +62,7 @@ The Image Management System allows users to store and manage their custom images
 ### Storage System
 ```javascript
 // IndexedDB Structure
-Database: LekhaJokhaImages
+Database: ACCTOOImages
 Store: userImages
 Indexes: category, name, userId
 

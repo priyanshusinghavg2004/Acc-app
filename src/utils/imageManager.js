@@ -1,7 +1,7 @@
 // Image Manager for Local Storage
 class ImageManager {
   constructor() {
-    this.dbName = 'LekhaJokhaImages';
+    this.dbName = 'ACCTOOImages';
     this.dbVersion = 1;
     this.storeName = 'userImages';
     this.db = null;

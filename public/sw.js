@@ -1,6 +1,6 @@
-const CACHE_NAME = 'lekhaJokha-v1';
-const STATIC_CACHE = 'lekhaJokha-static-v1';
-const DYNAMIC_CACHE = 'lekhaJokha-dynamic-v1';
+const CACHE_NAME = 'acctoo-v1';
+const STATIC_CACHE = 'acctoo-static-v1';
+const DYNAMIC_CACHE = 'acctoo-dynamic-v1';
 
 // Files to cache immediately
 const STATIC_FILES = [
@@ -113,8 +113,8 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     fetch(request)
       .then((response) => {
-        // Cache successful responses
-        if (response.status === 200) {
+        // Cache successful responses (skip chrome-extension URLs)
+        if (response.status === 200 && !request.url.startsWith('chrome-extension://')) {
           const responseClone = response.clone();
           caches.open(DYNAMIC_CACHE).then((cache) => {
             cache.put(request, responseClone);

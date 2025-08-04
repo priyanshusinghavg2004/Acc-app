@@ -109,11 +109,11 @@ exports.verifyCaptcha = onCall({
 
     // Verify with Google reCAPTCHA API
     const response = await axios.post(
-      'https://www.google.com/recaptcha/api/siteverify',
+      "https://www.google.com/recaptcha/api/siteverify",
       null,
       {
         params: {
-          secret: process.env.RECAPTCHA_SECRET_KEY || 'YOUR_SECRET_KEY_HERE',
+          secret: process.env.RECAPTCHA_SECRET_KEY || "YOUR_SECRET_KEY_HERE",
           response: captchaToken
         }
       }
@@ -135,7 +135,7 @@ exports.verifyCaptcha = onCall({
     return {
       success: true,
       score: score || 0,
-      action: action || 'verify',
+      action: action || "verify",
       message: "reCAPTCHA verified successfully"
     };
 
@@ -159,11 +159,11 @@ exports.loginWithCaptcha = onCall({
 
     // First verify reCAPTCHA
     const captchaResponse = await axios.post(
-      'https://www.google.com/recaptcha/api/siteverify',
+      "https://www.google.com/recaptcha/api/siteverify",
       null,
       {
         params: {
-          secret: process.env.RECAPTCHA_SECRET_KEY || 'YOUR_SECRET_KEY_HERE',
+          secret: process.env.RECAPTCHA_SECRET_KEY || "YOUR_SECRET_KEY_HERE",
           response: captchaToken
         }
       }
@@ -197,5 +197,73 @@ exports.loginWithCaptcha = onCall({
   } catch (error) {
     logger.error("Login with captcha error:", error);
     throw new Error(`Login failed: ${error.message}`);
+  }
+});
+
+// Get user statistics
+exports.getUserStats = onCall({
+  maxInstances: 5,
+  cors: true,
+}, async (request) => {
+  try {
+    // Check if user is authenticated
+    if (!request.auth) {
+      throw new Error("Authentication required");
+    }
+
+    const db = admin.firestore();
+    const usersRef = db.collection("users");
+    
+    // Get all users
+    const snapshot = await usersRef.get();
+    
+    const totalUsers = snapshot.size;
+    const userStats = {
+      total: totalUsers,
+      byStatus: {},
+      byMonth: {},
+      recentUsers: []
+    };
+
+    // Process user data
+    snapshot.forEach((doc) => {
+      const userData = doc.data();
+      const status = userData.status || "unknown";
+      const createdAt = userData.createdAt ? userData.createdAt.toDate() : new Date();
+      const monthKey = `${createdAt.getFullYear()}-${String(createdAt.getMonth() + 1).padStart(2, "0")}`;
+      
+      // Count by status
+      userStats.byStatus[status] = (userStats.byStatus[status] || 0) + 1;
+      
+      // Count by month
+      userStats.byMonth[monthKey] = (userStats.byMonth[monthKey] || 0) + 1;
+      
+      // Recent users (last 30 days)
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      if (createdAt >= thirtyDaysAgo) {
+        userStats.recentUsers.push({
+          id: doc.id,
+          email: userData.email || "N/A",
+          company: userData.companyName || userData.firmName || "N/A",
+          status: status,
+          createdAt: createdAt.toISOString()
+        });
+      }
+    });
+
+    logger.info("User statistics retrieved", {
+      totalUsers,
+      timestamp: new Date().toISOString()
+    });
+
+    return {
+      success: true,
+      stats: userStats
+    };
+
+  } catch (error) {
+    logger.error("Get user stats error:", error);
+    throw new Error(`Failed to get user statistics: ${error.message}`);
   }
 });

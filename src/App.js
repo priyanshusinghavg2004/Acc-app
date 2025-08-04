@@ -16,14 +16,14 @@ import Expenses from './components/Expenses';
 import UserOnboarding from './components/UserOnboarding';
 import HelpSupport from './components/HelpSupport';
 import NotificationSettings from './components/NotificationSettings';
-import AdvancedSearch from './components/AdvancedSearch';
-import QuickSearch from './components/QuickSearch';
+import EmailVerification from './components/EmailVerification';
+
 import DataExport from './components/DataExport';
-import VoiceCommands from './components/VoiceCommands';
 import OfflineIndicator from './components/OfflineIndicator';
-import GestureControls from './components/GestureControls';
-import GestureIntegration from './components/GestureIntegration';
 import MobileBottomNav from './components/MobileBottomNav';
+import Settings from './components/Settings';
+import AdminPanel from './components/AdminPanel';
+import JoinCompany from './components/JoinCompany';
 import { db, auth } from './firebase.config';
 import { 
   onAuthStateChanged, 
@@ -43,6 +43,8 @@ import {
   where,
   getDocs
 } from 'firebase/firestore';
+import { getCompanyInfo } from './utils/companyUtils';
+import './utils/runMigration';
 import {
   sendVerificationEmail,
   checkEmailVerification,
@@ -99,6 +101,9 @@ function App() {
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [resetCode, setResetCode] = useState('');
   const [showResetPasswordForm, setShowResetPasswordForm] = useState(false);
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [companyInfo, setCompanyInfo] = useState(null);
+  const [userInfo, setUserInfo] = useState(null);
   
   // Dropdown state for desktop/mobile
   const [openDropdown, setOpenDropdown] = useState(null);
@@ -122,7 +127,7 @@ function App() {
   // Update tour steps to be more relevant:
   const tourSteps = [
     {
-      title: 'Welcome to LekhaJokha!',
+      title: 'Welcome to ACCTOO!',
       content: 'Your complete accounting and business management solution. Let us show you around.',
       position: 'center'
     },
@@ -147,10 +152,10 @@ function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showNotificationSettings, setShowNotificationSettings] = useState(false);
-  const [showAdvancedSearch, setShowAdvancedSearch] = useState(false);
+
   const [showDataExport, setShowDataExport] = useState(false);
-  const [showVoiceCommands, setShowVoiceCommands] = useState(false);
-  const [showGestureControls, setShowGestureControls] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+
 
   // Add state to store the newly created user's UID during registration:
   const [newUserId, setNewUserId] = useState(null);
@@ -294,6 +299,32 @@ function App() {
     }).catch(error => {
       console.error('Error fetching company details:', error);
     });
+  }, [db, user, isAuthReady, appId]);
+
+  // Fetch user info and company info
+  useEffect(() => {
+    if (!db || !user?.uid || !isAuthReady) return;
+    
+    const fetchUserAndCompanyInfo = async () => {
+      try {
+        // Get user document
+        const userDoc = await getDoc(doc(db, 'users', user.uid));
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          setUserInfo(userData);
+          
+          // Load company info if user has company ID
+          if (userData.companyId) {
+            const companyData = await getCompanyInfo(userData.companyId, appId);
+            setCompanyInfo(companyData);
+          }
+        }
+      } catch (error) {
+        console.error('Error loading user/company info:', error);
+      }
+    };
+    
+    fetchUserAndCompanyInfo();
   }, [db, user, isAuthReady, appId]);
 
   useEffect(() => {
@@ -440,38 +471,74 @@ function App() {
   const handleResendEmailVerification = async () => {
     if (resendTimer > 0) return;
     
+    setVerificationError('');
+    
     try {
+      console.log('Resending verification email...');
       const result = await sendVerificationEmail(auth.currentUser);
+      
       if (result.success) {
         setResendTimer(60);
-        setVerificationError('✅ Verification email sent! Please check your inbox.');
+        setVerificationError('✅ Verification email sent! Please check your inbox (and spam folder).');
+        console.log('Verification email sent successfully');
       } else {
-        setVerificationError(result.message);
+        console.error('Failed to send verification email:', result.message);
+        setVerificationError(`Failed to send verification email: ${result.message}`);
       }
     } catch (error) {
-      setVerificationError('Failed to send verification email. Please try again.');
+      console.error('Error resending verification email:', error);
+      setVerificationError(`Failed to send verification email: ${error.message}. Please try again.`);
     }
   };
 
   const handleEmailVerificationCheck = async () => {
     setIsVerifying(true);
+    setVerificationError('');
+    
     try {
+      console.log('Checking email verification status...');
       const isVerified = await checkEmailVerification(auth.currentUser);
+      
+      console.log('Email verification result:', isVerified);
+      
       if (isVerified) {
+        console.log('Email is verified, updating user status...');
         const result = await updateUserEmailVerificationStatus(auth.currentUser.uid, true);
         if (result.success) {
           setShowEmailVerification(false);
           setVerificationError('');
+          console.log('Email verification completed successfully');
         } else {
-          setVerificationError(result.message);
+          console.error('Failed to update user status:', result.message);
+          setVerificationError(`Status update failed: ${result.message}`);
         }
       } else {
-        setVerificationError('Email not verified yet. Please check your inbox and click the verification link.');
+        console.log('Email not verified yet');
+        setVerificationError('Email not verified yet. Please check your inbox and click the verification link. If you don\'t see the email, check your spam folder.');
       }
     } catch (error) {
-      setVerificationError('Error checking verification status. Please try again.');
+      console.error('Error checking verification status:', error);
+      setVerificationError(`Error checking verification status: ${error.message}. Please try again.`);
     } finally {
       setIsVerifying(false);
+    }
+  };
+
+  // Skip email verification for testing
+  const handleSkipEmailVerification = async () => {
+    try {
+      console.log('Skipping email verification for testing...');
+      const result = await updateUserEmailVerificationStatus(auth.currentUser.uid, true);
+      if (result.success) {
+        setShowEmailVerification(false);
+        setVerificationError('');
+        console.log('Email verification skipped successfully');
+      } else {
+        setVerificationError(`Failed to skip verification: ${result.message}`);
+      }
+    } catch (error) {
+      console.error('Error skipping verification:', error);
+      setVerificationError(`Error skipping verification: ${error.message}`);
     }
   };
 
@@ -604,37 +671,7 @@ function App() {
     localStorage.setItem('hasSeenTour', 'true');
   };
 
-  // Handle gesture actions
-  const handleGestureAction = (action) => {
-    switch (action) {
-      case 'search':
-        setShowAdvancedSearch(true);
-        break;
-      case 'export':
-        setShowDataExport(true);
-        break;
-      case 'help':
-        setShowHelp(true);
-        break;
-      case 'settings':
-        setShowNotificationSettings(true);
-        break;
-      case 'voice':
-        setShowVoiceCommands(true);
-        break;
-      case 'zoom-in':
-        document.body.style.zoom = '1.2';
-        break;
-      case 'zoom-out':
-        document.body.style.zoom = '1';
-        break;
-      case 'context-menu':
-        // Handle context menu gesture
-        break;
-      default:
-        console.log('Unknown gesture action:', action);
-    }
-  };
+
 
 
 
@@ -836,6 +873,8 @@ function App() {
         isAuthReady={isAuthReady}
         appId={appId}
         companyDetails={companyDetails}
+        companyInfo={companyInfo}
+        userInfo={userInfo}
         showTour={showTour}
         currentTourStep={currentTourStep}
         tourSteps={tourSteps}
@@ -854,19 +893,19 @@ function App() {
         setShowOnboarding={setShowOnboarding}
         showNotificationSettings={showNotificationSettings}
         setShowNotificationSettings={setShowNotificationSettings}
-        showAdvancedSearch={showAdvancedSearch}
-        setShowAdvancedSearch={setShowAdvancedSearch}
+
         showDataExport={showDataExport}
         setShowDataExport={setShowDataExport}
-        showVoiceCommands={showVoiceCommands}
-        setShowVoiceCommands={setShowVoiceCommands}
-        showGestureControls={showGestureControls}
-        setShowGestureControls={setShowGestureControls}
-        handleGestureAction={handleGestureAction}
+        showSettings={showSettings}
+        setShowSettings={setShowSettings}
+        showAdminPanel={showAdminPanel}
+        setShowAdminPanel={setShowAdminPanel}
+
         showEmailVerification={showEmailVerification}
         setShowEmailVerification={setShowEmailVerification}
         handleEmailVerificationCheck={handleEmailVerificationCheck}
         handleResendEmailVerification={handleResendEmailVerification}
+        handleSkipEmailVerification={handleSkipEmailVerification}
         showPhoneVerification={showPhoneVerification}
         setShowPhoneVerification={setShowPhoneVerification}
         handleSendPhoneVerification={handleSendPhoneVerification}
@@ -908,6 +947,8 @@ function AppContent({
   isAuthReady, 
   appId, 
   companyDetails, 
+  companyInfo,
+  userInfo,
   showTour, 
   currentTourStep, 
   tourSteps, 
@@ -926,19 +967,19 @@ function AppContent({
   setShowOnboarding,
   showNotificationSettings,
   setShowNotificationSettings,
-  showAdvancedSearch,
-  setShowAdvancedSearch,
+
   showDataExport,
   setShowDataExport,
-  showVoiceCommands,
-  setShowVoiceCommands,
-  showGestureControls,
-  setShowGestureControls,
-  handleGestureAction,
+  showSettings,
+  setShowSettings,
+  showAdminPanel,
+  setShowAdminPanel,
+
   showEmailVerification,
   setShowEmailVerification,
   handleEmailVerificationCheck,
   handleResendEmailVerification,
+  handleSkipEmailVerification,
   showPhoneVerification,
   setShowPhoneVerification,
   handleSendPhoneVerification,
@@ -982,6 +1023,7 @@ function AppContent({
   const mouseLeaveTimeout = useRef(null);
   const [avatarDropdownOpen, setAvatarDropdownOpen] = useState(false);
   const avatarRef = useRef(null);
+  const avatarButtonRef = useRef(null);
   
   // Mobile menu state
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -1056,7 +1098,20 @@ function AppContent({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [openDropdown]);
 
-
+  // Click outside to close avatar dropdown
+  useEffect(() => {
+    if (!avatarDropdownOpen) return;
+    function handleAvatarClickOutside(event) {
+      if (
+        avatarRef.current &&
+        !avatarRef.current.contains(event.target)
+      ) {
+        setAvatarDropdownOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleAvatarClickOutside);
+    return () => document.removeEventListener('mousedown', handleAvatarClickOutside);
+  }, [avatarDropdownOpen]);
 
   return (
     <>
@@ -1151,7 +1206,7 @@ function AppContent({
       {showCompanyDetailsWizard && (
         <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-40">
           <div className="bg-white rounded-lg p-8 max-w-md mx-4 text-center">
-            <h2 className="text-2xl font-bold text-gray-900 mb-4">Welcome to LekhaJokha!</h2>
+            <h2 className="text-2xl font-bold text-gray-900 mb-4">Welcome to ACCTOO!</h2>
             <p className="text-gray-600 mb-6">
               Please complete your company profile setup to get started with your business management.
             </p>
@@ -1191,10 +1246,15 @@ function AppContent({
               {/* Logo and Brand */}
               <div className="col-span-3 flex items-center justify-start">
                 <Link to="/" className="flex items-center" style={{ gap: '30px' }}>
-                  <img src={process.env.PUBLIC_URL + '/logolekhajokha.png'} alt="LekhaJokha Logo" style={{ height: 40 }} />
-                  <span className="text-2xl font-bold" style={{ color: '#003399' }}>
-                    LEKHA<span style={{ color: '#ff8800' }}>JOKHA</span>
-                  </span>
+                  <img src={process.env.PUBLIC_URL + '/logoacctoo.png'} alt="ACCTOO Logo" style={{ height: 40 }} />
+                  <div className="flex flex-col">
+                    <span className="text-2xl font-bold" style={{ color: '#003399' }}>
+                      ACC<span style={{ color: '#ff8800' }}>TOO</span>
+                    </span>
+                    <span className="text-xs text-gray-600 font-medium" style={{ marginTop: '-2px' }}>
+                      Accounting Together
+                    </span>
+                  </div>
                 </Link>
               </div>
               
@@ -1328,38 +1388,12 @@ function AppContent({
                 </Link>
               </div>
               
-                            {/* Desktop: Search Button */}
-              <div className="hidden lg:flex items-center justify-end col-span-1 relative">
-                <div className="relative group">
-                  <button
-                    className="flex items-center justify-center w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 border border-gray-300 transition-colors duration-200"
-                    aria-label="Search"
-                  >
-                    <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                    </svg>
-                  </button>
-                  
-                  {/* Search Dropdown */}
-                  <div className="absolute right-0 top-full mt-2 w-80 bg-white border border-gray-200 rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
-                    <div className="p-4">
-                      <QuickSearch 
-                        onAdvancedSearch={(query) => {
-                          setShowAdvancedSearch(true);
-                          // The AdvancedSearch component will handle the query
-                        }}
-                        placeholder="Search invoices, bills, parties..."
-                        appId={appId}
-                        userId={user?.uid}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
+
               
               {/* Desktop: User avatar/profile dropdown */}
               <div className="hidden lg:flex items-center justify-end col-span-1 relative" ref={avatarRef}>
                 <button
+                  ref={avatarButtonRef}
                   className="flex items-center justify-center w-12 h-12 rounded-full bg-gray-100 border-2 border-white shadow focus:outline-none z-50"
                   onClick={() => setAvatarDropdownOpen(!avatarDropdownOpen)}
                   aria-label="User menu"
@@ -1372,20 +1406,20 @@ function AppContent({
                   )}
                 </button>
                 {avatarDropdownOpen && (
-                  <div className="absolute left-1/2 transform -translate-x-1/2 mt-0 pt-8 w-64 bg-white border border-gray-200 rounded shadow-lg z-40 flex flex-col items-center" style={{ minWidth: '16rem', top: '2.5rem' }}>
-                    {/* Overlapping avatar on top of card */}
-                    <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 w-16 h-16 rounded-full bg-white border-2 border-gray-200 flex items-center justify-center shadow z-50">
-                      {companyDetails.logoUrl ? (
-                        <img src={companyDetails.logoUrl} alt="Company Logo" className="w-14 h-14 rounded-full object-cover" />
-                      ) : (
-                        <span className="text-2xl font-bold text-gray-700">{companyDetails.firmName ? companyDetails.firmName[0] : 'U'}</span>
+                  <div className="absolute left-1/2 transform -translate-x-1/2 mt-2 w-64 bg-white border border-gray-200 rounded shadow-lg z-40 flex flex-col items-center" style={{ minWidth: '16rem', top: '100%' }}>
+                    <div className="pt-6 pb-3 px-4 w-full text-center">
+                      <div className="font-bold text-lg text-gray-900 mb-1">{companyDetails.firmName || 'Company Name'}</div>
+                      {companyDetails.email && <div className="text-sm text-gray-600 mb-3">{companyDetails.email}</div>}
+                    </div>
+                    <div className="text-xs text-gray-700 space-y-2 mb-4 px-4 w-full text-left">
+                      {companyInfo && (
+                        <div className="mb-2 p-2 bg-indigo-50 rounded border border-indigo-200">
+                          <div className="font-semibold text-indigo-800 mb-1">Company ID: {companyInfo.companyId}</div>
+                          <div className="text-indigo-600">
+                            Role: {userInfo?.companyRole === 'owner' ? 'Owner' : userInfo?.companyRole || 'Member'}
+                          </div>
+                        </div>
                       )}
-                    </div>
-                    <div className="pt-10 pb-2 px-4 w-full text-center">
-                      <div className="font-bold text-base text-gray-900">{companyDetails.firmName || 'Company Name'}</div>
-                      {companyDetails.email && <div className="text-xs text-gray-600">{companyDetails.email}</div>}
-                    </div>
-                    <div className="text-xs text-gray-700 space-y-1 mb-3 px-4 w-full text-left">
                       {companyDetails.gstin && <div><span className="font-semibold">GSTIN:</span> {companyDetails.gstin}</div>}
                       {companyDetails.address && <div><span className="font-semibold">Address:</span> {companyDetails.address}</div>}
                       {companyDetails.city && <div><span className="font-semibold">City:</span> {companyDetails.city}</div>}
@@ -1431,15 +1465,7 @@ function AppContent({
                     >
                       🔔 Notification Settings
                     </button>
-                    <button
-                      className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
-                      onClick={() => {
-                        setShowAdvancedSearch(true);
-                        setAvatarDropdownOpen(false);
-                      }}
-                    >
-                      🔍 Advanced Search
-                    </button>
+
                     <button
                       className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
                       onClick={() => {
@@ -1449,24 +1475,28 @@ function AppContent({
                     >
                       📊 Export Data
                     </button>
+
                     <button
                       className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
                       onClick={() => {
-                        setShowVoiceCommands(true);
+                        setShowSettings(true);
                         setAvatarDropdownOpen(false);
                       }}
                     >
-                      🎤 Voice Commands
+                      ⚙️ Settings
                     </button>
-                    <button
-                      className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
-                      onClick={() => {
-                        setShowGestureControls(true);
-                        setAvatarDropdownOpen(false);
-                      }}
-                    >
-                      👆 Gesture Controls
-                    </button>
+                    {userInfo?.companyRole === 'owner' || userInfo?.companyRole === 'admin' ? (
+                      <button
+                        className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
+                        onClick={() => {
+                          setShowAdminPanel(true);
+                          setAvatarDropdownOpen(false);
+                        }}
+                      >
+                        👑 Admin Panel
+                      </button>
+                    ) : null}
+
                     <button
                       className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
                       onClick={() => signOut(auth)}
@@ -1486,41 +1516,21 @@ function AppContent({
               {/* Mobile Logo and Brand */}
               <div className="flex items-center">
                 <Link to="/" className="flex items-center">
-                  <img src={process.env.PUBLIC_URL + '/logolekhajokha.png'} alt="LekhaJokha Logo" style={{ height: 32 }} />
-                  <span className="text-lg font-bold ml-2" style={{ color: '#003399' }}>
-                    LEKHA<span style={{ color: '#ff8800' }}>JOKHA</span>
-                  </span>
+                  <img src={process.env.PUBLIC_URL + '/logoacctoo.png'} alt="ACCTOO Logo" style={{ height: 32 }} />
+                  <div className="flex flex-col ml-2">
+                    <span className="text-lg font-bold" style={{ color: '#003399' }}>
+                      ACC<span style={{ color: '#ff8800' }}>TOO</span>
+                    </span>
+                    <span className="text-xs text-gray-600 font-medium" style={{ marginTop: '-1px' }}>
+                      Accounting Together
+                    </span>
+                  </div>
                 </Link>
               </div>
               
               {/* Mobile Right Side - Search and Menu */}
               <div className="flex items-center space-x-3">
-                {/* Mobile Search Button */}
-                <div className="relative group">
-                  <button
-                    className="p-2 rounded-full bg-white shadow-lg border border-gray-200 hover:bg-gray-50 transition-colors duration-200 min-w-[40px] min-h-[40px] flex items-center justify-center"
-                    aria-label="Search"
-                  >
-                    <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                    </svg>
-                  </button>
-                  
-                  {/* Mobile Search Dropdown */}
-                  <div className="absolute right-0 top-full mt-2 w-72 bg-white border border-gray-200 rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
-                    <div className="p-4">
-                      <QuickSearch 
-                        onAdvancedSearch={(query) => {
-                          setShowAdvancedSearch(true);
-                          // The AdvancedSearch component will handle the query
-                        }}
-                        placeholder="Search invoices, bills, parties..."
-                        appId={appId}
-                        userId={user?.uid}
-                      />
-                    </div>
-                  </div>
-                </div>
+
                 
                 {/* Mobile Menu Button */}
                 <button
@@ -1573,7 +1583,7 @@ function AppContent({
                         <span className="text-sm font-bold text-gray-700">{companyDetails.firmName ? companyDetails.firmName[0] : 'A'}</span>
                       )}
                     </div>
-                    <h2 className="text-lg font-semibold text-gray-800">LekhaJokha</h2>
+                    <h2 className="text-lg font-semibold text-gray-800">ACCTOO</h2>
                   </div>
                   <button
                     onClick={() => setMobileMenuOpen(false)}
@@ -1718,15 +1728,7 @@ function AppContent({
                   >
                     🔔 Notification Settings
                   </button>
-                  <button
-                    className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded transition-colors duration-150"
-                    onClick={() => {
-                      setShowAdvancedSearch(true);
-                      setMobileMenuOpen(false);
-                    }}
-                  >
-                    🔍 Advanced Search
-                  </button>
+
                   <button
                     className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded transition-colors duration-150"
                     onClick={() => {
@@ -1736,15 +1738,17 @@ function AppContent({
                   >
                     📊 Export Data
                   </button>
+
                   <button
                     className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded transition-colors duration-150"
                     onClick={() => {
-                      setShowVoiceCommands(true);
+                      setShowSettings(true);
                       setMobileMenuOpen(false);
                     }}
                   >
-                    🎤 Voice Commands
+                    ⚙️ Settings
                   </button>
+
                   <button
                     className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded transition-colors duration-150"
                     onClick={() => {
@@ -1761,18 +1765,7 @@ function AppContent({
         )}
         
         {/* Add top padding to main content so it's not hidden behind navbar */}
-        <GestureIntegration 
-          gestureSettings={{
-            swipeEnabled: true,
-            pinchEnabled: true,
-            longPressEnabled: true,
-            doubleTapEnabled: true,
-            hapticFeedback: true
-          }}
-          onGestureAction={handleGestureAction}
-          enableGlobalGestures={true}
-        >
-          <div className="pt-24 md:pt-20 max-w-6xl mx-auto px-4">
+        <div className="pt-24 md:pt-20 max-w-6xl mx-auto px-4">
             <Routes>
             <Route path="/" element={
               <Dashboard 
@@ -1869,11 +1862,13 @@ function AppContent({
                 userId={user?.uid}
                 isAuthReady={isAuthReady}
                 appId={appId}
+                setShowSettings={setShowSettings}
               />
             } />
+            <Route path="/complete-verification" element={<EmailVerification />} />
+            <Route path="/join/:companyId/:linkId" element={<JoinCompany />} />
           </Routes>
         </div>
-        </GestureIntegration>
       </div>
       
       {/* Offline Indicator */}
@@ -1901,16 +1896,9 @@ function AppContent({
         onClose={() => setShowNotificationSettings(false)}
       />
       
-      {/* Advanced Search */}
-      <AdvancedSearch 
-        db={db}
-        userId={user?.uid}
-        appId={appId}
-        isVisible={showAdvancedSearch}
-        onClose={() => setShowAdvancedSearch(false)}
-      />
+
       
-      {/* Data Export */}
+            {/* Data Export */}
       <DataExport 
         db={db}
         userId={user?.uid}
@@ -1919,38 +1907,36 @@ function AppContent({
         onClose={() => setShowDataExport(false)}
       />
       
-      {/* Voice Commands */}
-      <VoiceCommands 
-        isVisible={showVoiceCommands}
-        onClose={() => setShowVoiceCommands(false)}
-        onVoiceAction={(action) => {
-          switch (action) {
-            case 'search':
-              setShowAdvancedSearch(true);
-              break;
-            case 'export':
-              setShowDataExport(true);
-              break;
-            case 'help':
-              setShowHelp(true);
-              break;
-            case 'settings':
-              setShowNotificationSettings(true);
-              break;
-            default:
-              console.log('Voice action:', action);
-          }
-        }}
-      />
+                    {/* Settings */}
+              {showSettings && (
+                <Settings onClose={() => setShowSettings(false)} />
+              )}
+
+              {/* Admin Panel */}
+              {showAdminPanel && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                  <div className="bg-white rounded-lg shadow-xl max-w-6xl w-full max-h-[90vh] overflow-y-auto">
+                    <div className="flex justify-between items-center p-6 border-b">
+                      <h2 className="text-xl font-bold text-gray-800">Admin Panel</h2>
+                      <button
+                        onClick={() => setShowAdminPanel(false)}
+                        className="text-gray-500 hover:text-gray-700 text-2xl"
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <AdminPanel
+                      db={db}
+                      userId={user?.uid}
+                      isAuthReady={isAuthReady}
+                      appId={appId}
+                    />
+                  </div>
+                </div>
+              )}
       
-      {/* Gesture Controls */}
-      <GestureControls 
-        isVisible={showGestureControls}
-        onClose={() => setShowGestureControls(false)}
-        onGestureAction={handleGestureAction}
-      />
-
-
+      
+      
 
       {/* Email Verification Modal */}
       {showEmailVerification && (
@@ -1978,7 +1964,7 @@ function AppContent({
             </div>
             <div className="text-center">
               <button
-                onClick={() => setShowEmailVerification(false)}
+                onClick={handleSkipEmailVerification}
                 className="text-gray-500 text-sm underline hover:text-gray-700"
               >
                 Skip for now (Testing only)

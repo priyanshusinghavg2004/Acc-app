@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
 import { saveAs } from 'file-saver';
 import * as XLSX from 'xlsx';
+import MPINVerification from './MPINVerification';
 
 const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
   const [selectedModule, setSelectedModule] = useState('sales');
@@ -20,6 +21,7 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
   const [activeTab, setActiveTab] = useState('export');
   const [recentExports, setRecentExports] = useState([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showMpinVerification, setShowMpinVerification] = useState(false);
   
   const exportFormats = [
     { id: 'excel', label: 'Excel (.xlsx)', icon: '📊', description: 'Best for data analysis' },
@@ -128,16 +130,43 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
   // Fetch data for export
   const fetchDataForExport = async () => {
     const dateRangeObj = getDateRange();
-    const collectionRef = collection(db, `artifacts/${appId}/users/${userId}/${selectedModule}`);
     
-    let q = query(collectionRef, orderBy('date', 'desc'));
+    // Map module names to actual collection names
+    const collectionMap = {
+      'sales': 'salesBills',
+      'purchases': 'purchaseBills', 
+      'payments': 'payments',
+      'parties': 'parties',
+      'items': 'items',
+      'expenses': 'expenses'
+    };
     
-    // Apply date filters
-    if (dateRangeObj.from) {
-      q = query(q, where('date', '>=', dateRangeObj.from));
+    const collectionName = collectionMap[selectedModule];
+    if (!collectionName) {
+      throw new Error(`Unknown module: ${selectedModule}`);
     }
-    if (dateRangeObj.to) {
-      q = query(q, where('date', '<=', dateRangeObj.to));
+    
+    const collectionRef = collection(db, `artifacts/${appId}/users/${userId}/${collectionName}`);
+    
+    let q = query(collectionRef);
+    
+    // Apply date filters based on the actual date field names
+    const dateField = selectedModule === 'sales' ? 'invoiceDate' : 
+                     selectedModule === 'purchases' ? 'billDate' : 
+                     selectedModule === 'payments' ? 'paymentDate' : 
+                     selectedModule === 'expenses' ? 'date' : 'createdAt';
+    
+    // Since dates are stored as strings in YYYY-MM-DD format, we can filter them directly
+    if (dateRangeObj.from && dateRangeObj.to) {
+      const fromDate = dateRangeObj.from.toISOString().split('T')[0];
+      const toDate = dateRangeObj.to.toISOString().split('T')[0];
+      q = query(q, where(dateField, '>=', fromDate), where(dateField, '<=', toDate));
+    } else if (dateRangeObj.from) {
+      const fromDate = dateRangeObj.from.toISOString().split('T')[0];
+      q = query(q, where(dateField, '>=', fromDate));
+    } else if (dateRangeObj.to) {
+      const toDate = dateRangeObj.to.toISOString().split('T')[0];
+      q = query(q, where(dateField, '<=', toDate));
     }
     
     const querySnapshot = await getDocs(q);
@@ -159,8 +188,7 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
       
       data.push({
         id: doc.id,
-        ...docData,
-        date: docData.date?.toDate?.() || docData.date
+        ...docData
       });
     });
     
@@ -172,38 +200,40 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
     switch (selectedModule) {
       case 'sales':
         return data.map(item => ({
-          'Invoice Number': item.invoiceNumber || '',
-          'Customer Name': item.customerName || '',
-          'Customer GSTIN': item.customerGstin || '',
-          'Date': item.date ? new Date(item.date).toLocaleDateString() : '',
+          'Invoice Number': item.number || '',
+          'Date': item.invoiceDate ? new Date(item.invoiceDate).toLocaleDateString() : '',
+          'Party': item.party || '',
           'Amount': item.amount || 0,
-          'Status': item.status || '',
-          'Items': item.items ? item.items.map(i => i.name).join(', ') : '',
-          'Remarks': item.remarks || ''
+          'Payment Status': item.paymentStatus || 'Pending',
+          'Notes': item.notes || '',
+          'Items Count': item.rows ? item.rows.length : 0,
+          'Created At': item.createdAt ? new Date(item.createdAt.seconds * 1000).toLocaleDateString() : ''
         }));
       case 'purchases':
         return data.map(item => ({
-          'Bill Number': item.billNumber || '',
-          'Supplier Name': item.supplierName || '',
-          'Supplier GSTIN': item.supplierGstin || '',
-          'Date': item.date ? new Date(item.date).toLocaleDateString() : '',
+          'Bill Number': item.number || '',
+          'Date': item.billDate ? new Date(item.billDate).toLocaleDateString() : '',
+          'Supplier': item.supplier || '',
           'Amount': item.amount || 0,
-          'Status': item.status || '',
-          'Items': item.items ? item.items.map(i => i.name).join(', ') : '',
-          'Remarks': item.remarks || ''
+          'Payment Status': item.paymentStatus || 'Pending',
+          'Notes': item.notes || '',
+          'Items Count': item.rows ? item.rows.length : 0,
+          'Created At': item.createdAt ? new Date(item.createdAt.seconds * 1000).toLocaleDateString() : ''
         }));
       case 'payments':
         return data.map(item => ({
           'Receipt Number': item.receiptNumber || '',
+          'Date': item.paymentDate ? new Date(item.paymentDate).toLocaleDateString() : '',
           'Party Name': item.partyName || '',
-          'Date': item.date ? new Date(item.date).toLocaleDateString() : '',
-          'Amount': item.amount || 0,
+          'Amount': item.totalAmount || item.amount || 0,
           'Payment Mode': item.paymentMode || '',
-          'Status': item.status || '',
-          'Remarks': item.remarks || ''
+          'Reference': item.reference || '',
+          'Notes': item.notes || '',
+          'Created At': item.createdAt ? new Date(item.createdAt.seconds * 1000).toLocaleDateString() : ''
         }));
       case 'parties':
         return data.map(item => ({
+          'Firm Name': item.firmName || '',
           'Name': item.name || '',
           'GSTIN': item.gstin || '',
           'Contact Number': item.contactNumber || '',
@@ -212,17 +242,21 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
           'City': item.city || '',
           'State': item.state || '',
           'Pincode': item.pincode || '',
-          'Type': item.type || ''
+          'Type': item.type || 'Customer',
+          'Created At': item.createdAt ? new Date(item.createdAt.seconds * 1000).toLocaleDateString() : ''
         }));
       case 'items':
         return data.map(item => ({
-          'Name': item.name || '',
+          'Item Name': item.itemName || '',
           'Description': item.description || '',
           'HSN Code': item.hsnCode || '',
-          'Category': item.category || '',
-          'Rate': item.rate || 0,
-          'Unit': item.unit || '',
-          'GST Rate': item.gstRate || 0
+          'Item Type': item.itemType || '',
+          'Default Rate': item.defaultRate || 0,
+          'GST Percentage': item.gstPercentage || 0,
+          'Quantity Measurement': item.quantityMeasurement || '',
+          'Current Stock': item.currentStock || 0,
+          'Is Active': item.isActive ? 'Yes' : 'No',
+          'Created At': item.createdAt ? new Date(item.createdAt.seconds * 1000).toLocaleDateString() : ''
         }));
       case 'expenses':
         return data.map(item => ({
@@ -232,7 +266,8 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
           'Amount': item.amount || 0,
           'Payment Mode': item.paymentMode || '',
           'Status': item.status || '',
-          'Remarks': item.remarks || ''
+          'Notes': item.notes || '',
+          'Created At': item.createdAt ? new Date(item.createdAt.seconds * 1000).toLocaleDateString() : ''
         }));
       default:
         return data;
@@ -241,9 +276,14 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
 
   // Export to Excel
   const exportToExcel = (data, filename) => {
+    if (data.length === 0) {
+      throw new Error('No data to export');
+    }
+    
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, selectedModule);
+    const moduleLabel = modules.find(m => m.id === selectedModule)?.label || selectedModule;
+    XLSX.utils.book_append_sheet(wb, ws, moduleLabel);
     
     // Auto-size columns
     const colWidths = Object.keys(data[0] || {}).map(key => ({ wch: Math.max(key.length, 15) }));
@@ -256,7 +296,9 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
 
   // Export to CSV
   const exportToCSV = (data, filename) => {
-    if (data.length === 0) return;
+    if (data.length === 0) {
+      throw new Error('No data to export');
+    }
     
     const headers = Object.keys(data[0]);
     const csvContent = [
@@ -286,8 +328,19 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
     saveAs(blob, `${filename}.json`);
   };
 
-  // Handle export
+  // Handle export with MPIN verification
   const handleExport = async () => {
+    if (!selectedModule || !exportFormat) {
+      alert('Please select a module and export format');
+      return;
+    }
+
+    // Require MPIN verification for data export
+    setShowMpinVerification(true);
+  };
+
+  // Handle export after MPIN verification
+  const handleExportWithMpin = async () => {
     setIsExporting(true);
     setExportProgress(0);
     
@@ -295,12 +348,20 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
       setExportProgress(25);
       const data = await fetchDataForExport();
       
+      if (data.length === 0) {
+        alert('No data found for the selected criteria. Please try different filters.');
+        setIsExporting(false);
+        setExportProgress(0);
+        return;
+      }
+      
       setExportProgress(50);
       const transformedData = transformDataForExport(data);
       
       setExportProgress(75);
       const timestamp = new Date().toISOString().split('T')[0];
-      const filename = `${selectedModule}_export_${timestamp}`;
+      const moduleLabel = modules.find(m => m.id === selectedModule)?.label || selectedModule;
+      const filename = `${moduleLabel}_export_${timestamp}`;
       
       switch (exportFormat) {
         case 'excel':
@@ -315,12 +376,16 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
         case 'json':
           exportToJSON(transformedData, filename);
           break;
+        default:
+          throw new Error(`Unsupported export format: ${exportFormat}`);
       }
       
       setExportProgress(100);
       saveToHistory(selectedModule, exportFormat, dateRange, data.length);
       
       // Show success message
+      alert(`Successfully exported ${data.length} records to ${filename}.${exportFormat === 'excel' ? 'xlsx' : exportFormat === 'csv' ? 'csv' : exportFormat === 'json' ? 'json' : 'txt'}`);
+      
       setTimeout(() => {
         setIsExporting(false);
         setExportProgress(0);
@@ -328,6 +393,7 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
       
     } catch (error) {
       console.error('Export error:', error);
+      alert(`Export failed: ${error.message}`);
       setIsExporting(false);
       setExportProgress(0);
     }
@@ -669,7 +735,15 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
         {/* Footer */}
         <div className="flex items-center justify-between p-6 border-t border-gray-200">
           <div className="text-sm text-gray-600">
-            {activeTab === 'export' && `Ready to export ${selectedModule} data`}
+            {activeTab === 'export' && (
+              <div>
+                <div>Ready to export {modules.find(m => m.id === selectedModule)?.label} data</div>
+                <div className="text-xs text-gray-500">
+                  Format: {exportFormats.find(f => f.id === exportFormat)?.label} • 
+                  Date Range: {dateRanges.find(d => d.id === dateRange)?.label}
+                </div>
+              </div>
+            )}
           </div>
           <div className="flex space-x-3">
             <button
@@ -681,6 +755,19 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
           </div>
         </div>
       </div>
+
+      {/* MPIN Verification Modal */}
+      {showMpinVerification && (
+        <MPINVerification
+          onSuccess={() => {
+            setShowMpinVerification(false);
+            handleExportWithMpin();
+          }}
+          onCancel={() => setShowMpinVerification(false)}
+          title="Verify MPIN for Data Export"
+          message="Please enter your 4-digit MPIN to export sensitive data"
+        />
+      )}
     </div>
   );
 };

@@ -1,13 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { collection, onSnapshot, doc, getDocs, setDoc, deleteDoc } from 'firebase/firestore';
 import { Link } from 'react-router-dom';
-import { 
-    BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-    LineChart, Line, PieChart, Pie, Cell, AreaChart, Area
-} from 'recharts';
+import { getCompanyInfo, getCompanyTypeLabel } from '../utils/companyUtils';
+
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import MobileResponsiveChart from './MobileResponsiveChart';
+
 dayjs.extend(relativeTime);
 
 const Dashboard = ({ db, userId, isAuthReady, appId }) => {
@@ -20,118 +18,24 @@ const Dashboard = ({ db, userId, isAuthReady, appId }) => {
     const [totalOutstandingReceivables, setTotalOutstandingReceivables] = useState(0);
     const [totalOutstandingPayables, setTotalOutstandingPayables] = useState(0);
     const [companyDetails, setCompanyDetails] = useState({ firmName: '', gstin: '', contactNumber: '', address: '', gstinType: '' });
+    const [companyInfo, setCompanyInfo] = useState(null);
+    const [userInfo, setUserInfo] = useState(null);
     const [message, setMessage] = useState('');
     const [payments, setPayments] = useState([]);
     
-    // Chart data states
-    const [monthlyData, setMonthlyData] = useState([]);
-    const [recentTransactions, setRecentTransactions] = useState([]);
-    const [paymentStatusData, setPaymentStatusData] = useState([]);
-    const [chartsLoading, setChartsLoading] = useState(true);
+
 
     // Todo list state
     const [todos, setTodos] = useState([
-        // Core Business Modules
-        { id: 1, text: "Taxes Management Page - GST, TDS, TCS calculations", completed: false, priority: "high", category: "core" },
-        { id: 2, text: "Manufacturing/Production Management Module", completed: true, priority: "high", category: "core" },
-        { id: 3, text: "Expenses Management with categories and approvals", completed: false, priority: "high", category: "core" },
-        { id: 4, text: "Inventory/Stock Management with real-time tracking", completed: false, priority: "high", category: "core" },
-        { id: 5, text: "Employee/Staff Management with payroll", completed: false, priority: "medium", category: "core" },
-        { id: 6, text: "Asset Management for equipment and machinery", completed: false, priority: "medium", category: "core" },
-        
-        // WMS (Warehouse Management System) Features
-        { id: 7, text: "Warehouse Management System (WMS) - Location tracking", completed: false, priority: "high", category: "wms" },
-        { id: 8, text: "WMS - Bin management and optimization", completed: false, priority: "high", category: "wms" },
-        { id: 9, text: "WMS - Picking and packing workflows", completed: false, priority: "high", category: "wms" },
-        { id: 10, text: "WMS - Receiving and putaway processes", completed: false, priority: "high", category: "wms" },
-        { id: 11, text: "WMS - Cycle counting and inventory accuracy", completed: false, priority: "medium", category: "wms" },
-        { id: 12, text: "WMS - Wave planning and order fulfillment", completed: false, priority: "medium", category: "wms" },
-        { id: 13, text: "WMS - Cross-docking operations", completed: false, priority: "low", category: "wms" },
-        { id: 14, text: "WMS - Labor management and productivity tracking", completed: false, priority: "medium", category: "wms" },
-        
-        // Advanced Features
-        { id: 15, text: "Multi-currency support for international transactions", completed: false, priority: "medium", category: "advanced" },
-        { id: 16, text: "Barcode/QR code scanning for inventory", completed: false, priority: "medium", category: "advanced" },
-        { id: 17, text: "Email/SMS notifications for payments and reminders", completed: false, priority: "high", category: "advanced" },
-        { id: 18, text: "Customer/Supplier portal for self-service", completed: false, priority: "low", category: "advanced" },
-        { id: 19, text: "Advanced reporting with custom filters and exports", completed: false, priority: "medium", category: "advanced" },
-        { id: 20, text: "Backup and restore functionality", completed: false, priority: "high", category: "advanced" },
-        
-        // Integration & Automation
-        { id: 21, text: "Bank integration for automatic payment reconciliation", completed: false, priority: "medium", category: "integration" },
-        { id: 22, text: "GST portal integration for return filing", completed: false, priority: "high", category: "integration" },
-        { id: 23, text: "Tally/QuickBooks data import/export", completed: false, priority: "medium", category: "integration" },
-        { id: 24, text: "Automated invoice generation and sending", completed: false, priority: "medium", category: "integration" },
-        { id: 25, text: "E-commerce platform integration (Amazon, Flipkart)", completed: false, priority: "medium", category: "integration" },
-        { id: 26, text: "Logistics and courier integration", completed: false, priority: "medium", category: "integration" },
-        
-        // Mobile & Field Operations
-        { id: 27, text: "Mobile app for field operations and sales", completed: false, priority: "low", category: "mobile" },
-        { id: 28, text: "Offline mode for mobile app", completed: false, priority: "low", category: "mobile" },
-        { id: 29, text: "GPS tracking for delivery and field staff", completed: false, priority: "low", category: "mobile" },
-        { id: 30, text: "Mobile barcode scanning app", completed: false, priority: "medium", category: "mobile" },
-        
-        // Mobile Optimizations (Completed)
-        { id: 56, text: "Mobile bottom navigation bar with touch-friendly icons", completed: true, priority: "high", category: "mobile" },
-        { id: 57, text: "Touch gesture controls (swipe, pinch, long press)", completed: true, priority: "high", category: "mobile" },
-        { id: 58, text: "Mobile responsive charts with touch interactions", completed: true, priority: "high", category: "mobile" },
-        { id: 59, text: "Offline indicator with sync status and pending actions", completed: true, priority: "high", category: "mobile" },
-        { id: 60, text: "Voice commands for hands-free navigation and actions", completed: true, priority: "medium", category: "mobile" },
-        { id: 61, text: "Mobile-optimized viewport and PWA manifest", completed: true, priority: "high", category: "mobile" },
-        { id: 62, text: "Touch gesture utilities for charts and tables", completed: true, priority: "medium", category: "mobile" },
-        { id: 63, text: "Pull-to-refresh functionality for mobile", completed: true, priority: "medium", category: "mobile" },
-        { id: 64, text: "Haptic feedback for mobile interactions", completed: true, priority: "low", category: "mobile" },
-        { id: 65, text: "Mobile-responsive table components", completed: true, priority: "high", category: "mobile" },
-        
-        // Mobile Testing Required
-        { id: 66, text: "Test mobile gesture controls on different devices", completed: false, priority: "high", category: "testing" },
-        { id: 67, text: "Test voice commands accuracy and response time", completed: false, priority: "high", category: "testing" },
-        { id: 68, text: "Test offline functionality and data sync", completed: false, priority: "high", category: "testing" },
-        { id: 69, text: "Test mobile responsive design on various screen sizes", completed: false, priority: "high", category: "testing" },
-        { id: 70, text: "Test touch interactions on charts and tables", completed: false, priority: "medium", category: "testing" },
-        { id: 71, text: "Test mobile navigation and bottom nav functionality", completed: false, priority: "medium", category: "testing" },
-        { id: 72, text: "Test PWA installation and offline capabilities", completed: false, priority: "medium", category: "testing" },
-        { id: 73, text: "Test haptic feedback on supported devices", completed: false, priority: "low", category: "testing" },
-        { id: 74, text: "Performance testing on mobile devices", completed: false, priority: "high", category: "testing" },
-        { id: 75, text: "Cross-browser testing on mobile browsers", completed: false, priority: "medium", category: "testing" },
-        
-        // Analytics & Insights
-        { id: 31, text: "Business analytics dashboard with KPIs", completed: false, priority: "medium", category: "analytics" },
-        { id: 32, text: "Cash flow forecasting and projections", completed: false, priority: "medium", category: "analytics" },
-        { id: 33, text: "Profitability analysis by product/customer", completed: false, priority: "medium", category: "analytics" },
-        { id: 34, text: "Sales forecasting and demand planning", completed: false, priority: "medium", category: "analytics" },
-        { id: 35, text: "Real-time dashboard with live data feeds", completed: false, priority: "medium", category: "analytics" },
-        
-        // Security & Compliance
-        { id: 36, text: "Role-based access control and permissions", completed: false, priority: "high", category: "security" },
-        { id: 37, text: "Audit trail for all transactions", completed: false, priority: "medium", category: "security" },
-        { id: 38, text: "Data encryption and security compliance", completed: false, priority: "high", category: "security" },
-        { id: 39, text: "Two-factor authentication (2FA)", completed: false, priority: "high", category: "security" },
-        { id: 40, text: "Data backup and disaster recovery", completed: false, priority: "high", category: "security" },
-        
-        // User Experience
-        { id: 41, text: "Dark mode theme option", completed: false, priority: "low", category: "ux" },
-        { id: 42, text: "Multi-language support (Hindi, English)", completed: false, priority: "low", category: "ux" },
-        { id: 43, text: "Keyboard shortcuts for power users", completed: false, priority: "low", category: "ux" },
-        { id: 44, text: "Bulk operations for data entry", completed: false, priority: "medium", category: "ux" },
-        { id: 45, text: "Template management for invoices and reports", completed: false, priority: "medium", category: "ux" },
-        { id: 46, text: "Drag and drop file uploads", completed: false, priority: "low", category: "ux" },
-        { id: 47, text: "Advanced search and filtering", completed: false, priority: "medium", category: "ux" },
-        
-        // Empty Pages & Missing Features
-        { id: 48, text: "Reports page - Partywise sales/purchase reports", completed: false, priority: "high", category: "missing" },
-        { id: 49, text: "Reports page - GST reports and summaries", completed: false, priority: "high", category: "missing" },
-        { id: 50, text: "Reports page - Profit and loss statements", completed: false, priority: "high", category: "missing" },
-        { id: 51, text: "Reports page - Balance sheet", completed: false, priority: "medium", category: "missing" },
-        { id: 52, text: "Reports page - Cash flow statements", completed: false, priority: "medium", category: "missing" },
-        { id: 53, text: "Settings page - User preferences and configurations", completed: false, priority: "medium", category: "missing" },
-        { id: 54, text: "Help and documentation page", completed: false, priority: "low", category: "missing" },
-        { id: 55, text: "About page with version information", completed: false, priority: "low", category: "missing" }
+        // Personal Tasks
+        { id: 1, text: "kal collectorate me meating hai 10 baje", completed: true, priority: "medium", category: "personal" },
+        { id: 2, text: "Welcome ka 5x3 aur 6x4 ka banner bhejna hai 11 baje tak", completed: true, priority: "medium", category: "urgent" },
+        { id: 3, text: "RB ko payment ke liye bolna hai", completed: true, priority: "medium", category: "followup" },
     ]);
 
     const [newTodoText, setNewTodoText] = useState('');
     const [newTodoPriority, setNewTodoPriority] = useState('medium');
-    const [newTodoCategory, setNewTodoCategory] = useState('core');
+    const [newTodoCategory, setNewTodoCategory] = useState('personal');
     const [showAddTodo, setShowAddTodo] = useState(false);
     const [filterCategory, setFilterCategory] = useState('all');
 
@@ -169,7 +73,25 @@ const Dashboard = ({ db, userId, isAuthReady, appId }) => {
     useEffect(() => {
         if (!db || !userId || !isAuthReady) return;
         const fetchDashboardData = async () => {
-            setChartsLoading(true);
+            // Load user info and company info
+            try {
+                const userDoc = await getDocs(collection(db, 'users'));
+                userDoc.forEach(doc => {
+                    if (doc.id === userId) {
+                        const userData = doc.data();
+                        setUserInfo(userData);
+                        
+                        // Load company info if user has company ID
+                        if (userData.companyId) {
+                            getCompanyInfo(userData.companyId, appId).then(companyData => {
+                                setCompanyInfo(companyData);
+                            });
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error('Error loading user/company info:', error);
+            }
             // Fetch parties
             const partiesSnap = await getDocs(collection(db, `artifacts/${appId}/users/${userId}/parties`));
             const parties = [];
@@ -524,137 +446,10 @@ const Dashboard = ({ db, userId, isAuthReady, appId }) => {
                 setCompanyDetails({ firmName: '', gstin: '', contactNumber: '', address: '', gstinType: '' });
             }
 
-            // Prepare chart data
-            prepareChartData(salesBills, purchaseBills, paymentsData);
-            setChartsLoading(false);
+
         };
 
-        const prepareChartData = (salesBills, purchaseBills, paymentsData) => {
-            // Monthly data for bar chart
-            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-            const currentYear = new Date().getFullYear();
-            const monthlyData = months.map((month, index) => {
-                const monthStart = new Date(currentYear, index, 1);
-                const monthEnd = new Date(currentYear, index + 1, 0);
-                
-                const monthSales = salesBills.reduce((sum, bill) => {
-                    const billDate = new Date(bill.invoiceDate || bill.date);
-                    if (billDate >= monthStart && billDate <= monthEnd) {
-                        return sum + parseFloat(bill.amount || bill.totalAmount || 0);
-                    }
-                    return sum;
-                }, 0);
 
-                const monthPurchases = purchaseBills.reduce((sum, bill) => {
-                    const billDate = new Date(bill.billDate || bill.date);
-                    if (billDate >= monthStart && billDate <= monthEnd) {
-                        return sum + parseFloat(bill.amount || bill.totalAmount || 0);
-                    }
-                    return sum;
-                }, 0);
-
-                return {
-                    month,
-                    sales: monthSales,
-                    purchases: monthPurchases
-                };
-            });
-            setMonthlyData(monthlyData);
-
-            // Payment status data for pie chart
-            let paid = 0, partial = 0, overdue = 0, pending = 0;
-            
-            // Check sales bills payment status
-            salesBills.forEach(bill => {
-                const totalAmount = parseFloat(bill.amount || bill.totalAmount || 0);
-                const billPayments = paymentsData.filter(p =>
-                    p.allocations && p.allocations.some(a => a.billId === bill.id && a.billType === 'invoice')
-                );
-                const totalPaid = billPayments.reduce((sum, payment) => {
-                    const allocation = payment.allocations.find(a => a.billId === bill.id && a.billType === 'invoice');
-                    return sum + (allocation ? allocation.allocatedAmount : 0);
-                }, 0);
-                
-                if (totalPaid >= totalAmount) {
-                    paid += totalAmount;
-                } else if (totalPaid > 0) {
-                    partial += totalAmount;
-                } else {
-                    const billDate = new Date(bill.invoiceDate || bill.date);
-                    const daysSince = dayjs().diff(dayjs(billDate), 'day');
-                    if (daysSince > 30) {
-                        overdue += totalAmount;
-                    } else {
-                        pending += totalAmount;
-                    }
-                }
-            });
-
-            // Check purchase bills payment status
-            purchaseBills.forEach(bill => {
-                const totalAmount = parseFloat(bill.amount || bill.totalAmount || 0);
-                const billPayments = paymentsData.filter(p =>
-                    p.allocations && p.allocations.some(a => a.billId === bill.id && a.billType === 'purchase')
-                );
-                const totalPaid = billPayments.reduce((sum, payment) => {
-                    const allocation = payment.allocations.find(a => a.billId === bill.id && a.billType === 'purchase');
-                    return sum + (allocation ? allocation.allocatedAmount : 0);
-                }, 0);
-                
-                if (totalPaid >= totalAmount) {
-                    paid += totalAmount;
-                } else if (totalPaid > 0) {
-                    partial += totalAmount;
-                } else {
-                    const billDate = new Date(bill.billDate || bill.date);
-                    const daysSince = dayjs().diff(dayjs(billDate), 'day');
-                    if (daysSince > 30) {
-                        overdue += totalAmount;
-                    } else {
-                        pending += totalAmount;
-                    }
-                }
-            });
-
-            const paymentStatusData = [
-                { name: 'Paid', value: paid },
-                { name: 'Partial', value: partial },
-                { name: 'Overdue', value: overdue },
-                { name: 'Pending', value: pending }
-            ].filter(item => item.value > 0);
-            
-            setPaymentStatusData(paymentStatusData);
-
-            // Recent transactions data for area chart
-            const last7Days = [];
-            for (let i = 6; i >= 0; i--) {
-                const date = dayjs().subtract(i, 'day');
-                const dayStart = date.startOf('day').toDate();
-                const dayEnd = date.endOf('day').toDate();
-                
-                const daySales = salesBills.filter(bill => {
-                    const billDate = new Date(bill.invoiceDate || bill.date);
-                    return billDate >= dayStart && billDate <= dayEnd;
-                });
-                
-                const dayPurchases = purchaseBills.filter(bill => {
-                    const billDate = new Date(bill.billDate || bill.date);
-                    return billDate >= dayStart && billDate <= dayEnd;
-                });
-
-                const totalAmount = daySales.reduce((sum, bill) => sum + parseFloat(bill.amount || bill.totalAmount || 0), 0) +
-                                  dayPurchases.reduce((sum, bill) => sum + parseFloat(bill.amount || bill.totalAmount || 0), 0);
-                
-                const totalCount = daySales.length + dayPurchases.length;
-
-                last7Days.push({
-                    date: date.format('MMM DD'),
-                    amount: totalAmount,
-                    count: totalCount
-                });
-            }
-            setRecentTransactions(last7Days);
-        };
         
         fetchDashboardData();
     }, [db, userId, isAuthReady, appId]);
@@ -802,32 +597,28 @@ useEffect(() => {
 
     const getCategoryColor = (category) => {
         switch(category) {
-            case 'core': return 'bg-blue-100 text-blue-800';
-            case 'wms': return 'bg-purple-100 text-purple-800';
-            case 'advanced': return 'bg-green-100 text-green-800';
-            case 'integration': return 'bg-orange-100 text-orange-800';
-            case 'mobile': return 'bg-pink-100 text-pink-800';
-            case 'analytics': return 'bg-indigo-100 text-indigo-800';
-            case 'security': return 'bg-red-100 text-red-800';
-            case 'ux': return 'bg-yellow-100 text-yellow-800';
-            case 'missing': return 'bg-gray-100 text-gray-800';
-            case 'testing': return 'bg-teal-100 text-teal-800';
+            case 'personal': return 'bg-blue-100 text-blue-800';
+            case 'meeting': return 'bg-green-100 text-green-800';
+            case 'urgent': return 'bg-red-100 text-red-800';
+            case 'followup': return 'bg-yellow-100 text-yellow-800';
+            case 'business': return 'bg-purple-100 text-purple-800';
+            case 'reminder': return 'bg-orange-100 text-orange-800';
+            case 'project': return 'bg-indigo-100 text-indigo-800';
+            case 'other': return 'bg-gray-100 text-gray-800';
             default: return 'bg-gray-100 text-gray-800';
         }
     };
 
     const getCategoryLabel = (category) => {
         switch(category) {
-            case 'core': return 'Core';
-            case 'wms': return 'WMS';
-            case 'advanced': return 'Advanced';
-            case 'integration': return 'Integration';
-            case 'mobile': return 'Mobile';
-            case 'analytics': return 'Analytics';
-            case 'security': return 'Security';
-            case 'ux': return 'UX';
-            case 'missing': return 'Missing';
-            case 'testing': return 'Testing';
+            case 'personal': return 'Personal';
+            case 'meeting': return 'Meeting';
+            case 'urgent': return 'Urgent';
+            case 'followup': return 'Follow Up';
+            case 'business': return 'Business';
+            case 'reminder': return 'Reminder';
+            case 'project': return 'Project';
+            case 'other': return 'Other';
             default: return 'Other';
         }
     };
@@ -1047,150 +838,7 @@ useEffect(() => {
                     </div>
                 </div>
 
-                {/* Mobile-Optimized Charts Section */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-6 sm:mb-8">
-                    {/* Monthly Sales vs Purchases Chart */}
-                    <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 border border-gray-100">
-                        <h3 className="text-lg sm:text-xl font-semibold text-gray-800 mb-4">Monthly Overview</h3>
-                        <MobileResponsiveChart height={320} loading={chartsLoading}>
-                            <BarChart data={monthlyData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
-                                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                                <XAxis 
-                                    dataKey="month" 
-                                    tick={{ fontSize: 12 }}
-                                    tickLine={false}
-                                    axisLine={false}
-                                />
-                                <YAxis 
-                                    tick={{ fontSize: 12 }}
-                                    tickLine={false}
-                                    axisLine={false}
-                                    tickFormatter={(value) => `${(value / 1000).toFixed(0)}K`}
-                                />
-                                <Tooltip 
-                                    contentStyle={{ 
-                                        backgroundColor: 'white', 
-                                        border: '1px solid #e5e7eb',
-                                        borderRadius: '8px',
-                                        fontSize: '12px'
-                                    }}
-                                    formatter={(value, name) => [
-                                        formatCurrency(value), 
-                                        name === 'sales' ? 'Sales' : 'Purchases'
-                                    ]}
-                                />
-                                <Legend 
-                                    wrapperStyle={{ fontSize: '12px' }}
-                                    iconType="circle"
-                                />
-                                <Bar 
-                                    dataKey="sales" 
-                                    fill="#10b981" 
-                                    radius={[4, 4, 0, 0]}
-                                    name="Sales"
-                                />
-                                <Bar 
-                                    dataKey="purchases" 
-                                    fill="#3b82f6" 
-                                    radius={[4, 4, 0, 0]}
-                                    name="Purchases"
-                                />
-                            </BarChart>
-                        </MobileResponsiveChart>
-                    </div>
 
-                    {/* Payment Status Distribution */}
-                    <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 border border-gray-100">
-                        <h3 className="text-lg sm:text-xl font-semibold text-gray-800 mb-4">Payment Status</h3>
-                        <MobileResponsiveChart height={320} loading={chartsLoading}>
-                            <PieChart>
-                                <Pie
-                                    data={paymentStatusData}
-                                    cx="50%"
-                                    cy="50%"
-                                    innerRadius={40}
-                                    outerRadius={80}
-                                    paddingAngle={5}
-                                    dataKey="value"
-                                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                                    labelLine={false}
-                                >
-                                    {paymentStatusData.map((entry, index) => (
-                                        <Cell 
-                                            key={`cell-${index}`} 
-                                            fill={['#10b981', '#f59e0b', '#ef4444', '#8b5cf6'][index % 4]} 
-                                        />
-                                    ))}
-                                </Pie>
-                                <Tooltip 
-                                    contentStyle={{ 
-                                        backgroundColor: 'white', 
-                                        border: '1px solid #e5e7eb',
-                                        borderRadius: '8px',
-                                        fontSize: '12px'
-                                    }}
-                                    formatter={(value, name) => [formatCurrency(value), name]}
-                                />
-                            </PieChart>
-                        </MobileResponsiveChart>
-                    </div>
-                </div>
-
-                {/* Recent Transactions Chart */}
-                <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 border border-gray-100 mb-6 sm:mb-8">
-                    <h3 className="text-lg sm:text-xl font-semibold text-gray-800 mb-4">Recent Transaction Trends</h3>
-                    <MobileResponsiveChart height={320} loading={chartsLoading}>
-                        <AreaChart data={recentTransactions} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                            <XAxis 
-                                dataKey="date" 
-                                tick={{ fontSize: 12 }}
-                                tickLine={false}
-                                axisLine={false}
-                            />
-                            <YAxis 
-                                tick={{ fontSize: 12 }}
-                                tickLine={false}
-                                axisLine={false}
-                                tickFormatter={(value) => `${(value / 1000).toFixed(0)}K`}
-                            />
-                            <Tooltip 
-                                contentStyle={{ 
-                                    backgroundColor: 'white', 
-                                    border: '1px solid #e5e7eb',
-                                    borderRadius: '8px',
-                                    fontSize: '12px'
-                                }}
-                                formatter={(value, name) => [
-                                    formatCurrency(value), 
-                                    name === 'amount' ? 'Amount' : 'Count'
-                                ]}
-                            />
-                            <Legend 
-                                wrapperStyle={{ fontSize: '12px' }}
-                                iconType="circle"
-                            />
-                            <Area 
-                                type="monotone" 
-                                dataKey="amount" 
-                                stackId="1"
-                                stroke="#10b981" 
-                                fill="#10b981" 
-                                fillOpacity={0.6}
-                                name="Amount"
-                            />
-                            <Area 
-                                type="monotone" 
-                                dataKey="count" 
-                                stackId="2"
-                                stroke="#3b82f6" 
-                                fill="#3b82f6" 
-                                fillOpacity={0.6}
-                                name="Count"
-                            />
-                        </AreaChart>
-                    </MobileResponsiveChart>
-                </div>
 
                 {/* Charts Section */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
@@ -1297,6 +945,24 @@ useEffect(() => {
 
                         {/* Company Details Grid */}
                         <div className="space-y-4 mb-6">
+                            {/* Company ID Row */}
+                            {companyInfo && (
+                                <div className="flex flex-col space-y-2 p-3 bg-indigo-50 rounded-lg">
+                                    <span className="text-xs font-medium text-indigo-600 uppercase tracking-wide">Company ID</span>
+                                    <div className="flex items-center space-x-2">
+                                        <span className="text-sm font-semibold text-gray-800 font-mono">
+                                            {companyInfo.companyId}
+                                        </span>
+                                        <span className="px-2 py-1 text-xs font-medium bg-indigo-100 text-indigo-800 rounded-full">
+                                            {userInfo?.companyRole === 'owner' ? 'Owner' : userInfo?.companyRole || 'Member'}
+                                        </span>
+                                    </div>
+                                    <span className="text-xs text-gray-500">
+                                        {getCompanyTypeLabel(companyInfo.companyType, companyInfo.companyTypeOther)}
+                                    </span>
+                                </div>
+                            )}
+                            
                             {/* First Row - GSTIN and Contact */}
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div className="flex flex-col space-y-2 p-3 bg-blue-50 rounded-lg">
@@ -1399,15 +1065,14 @@ useEffect(() => {
                                             onChange={(e) => setNewTodoCategory(e.target.value)}
                                             className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                                         >
-                                            <option value="core">Core Business</option>
-                                            <option value="wms">WMS Features</option>
-                                            <option value="advanced">Advanced Features</option>
-                                            <option value="integration">Integration</option>
-                                            <option value="mobile">Mobile</option>
-                                            <option value="analytics">Analytics</option>
-                                            <option value="security">Security</option>
-                                            <option value="ux">User Experience</option>
-                                            <option value="missing">Missing Pages</option>
+                                            <option value="personal">Personal</option>
+                                            <option value="meeting">Meeting</option>
+                                            <option value="urgent">Urgent Work</option>
+                                            <option value="followup">Follow Up</option>
+                                            <option value="business">Business</option>
+                                            <option value="reminder">Reminder</option>
+                                            <option value="project">Project</option>
+                                            <option value="other">Other</option>
                                         </select>
                                         <button
                                             onClick={addTodo}
@@ -1428,15 +1093,14 @@ useEffect(() => {
                                 className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                             >
                                 <option value="all">All Categories</option>
-                                <option value="core">Core Business</option>
-                                <option value="wms">WMS Features</option>
-                                <option value="advanced">Advanced Features</option>
-                                <option value="integration">Integration</option>
-                                <option value="mobile">Mobile</option>
-                                <option value="analytics">Analytics</option>
-                                <option value="security">Security</option>
-                                <option value="ux">User Experience</option>
-                                <option value="missing">Missing Pages</option>
+                                <option value="personal">Personal</option>
+                                <option value="meeting">Meeting</option>
+                                <option value="urgent">Urgent Work</option>
+                                <option value="followup">Follow Up</option>
+                                <option value="business">Business</option>
+                                <option value="reminder">Reminder</option>
+                                <option value="project">Project</option>
+                                <option value="other">Other</option>
                             </select>
                         </div>
 
@@ -1501,6 +1165,8 @@ useEffect(() => {
                         </p>
                     </div>
                 </div>
+
+
 
                 {/* User ID Info */}
                 {userId && (

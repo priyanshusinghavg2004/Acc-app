@@ -322,7 +322,7 @@ const HelpSupport = ({ isVisible, onClose }) => {
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
         <h3 className="text-lg font-semibold text-blue-900 mb-2">Need More Help?</h3>
         <p className="text-blue-800 text-sm mb-4">
-          Our support team is here to help you get the most out of LekhaJokha.
+          Our support team is here to help you get the most out of ACCTOO.
         </p>
       </div>
 
@@ -335,8 +335,8 @@ const HelpSupport = ({ isVisible, onClose }) => {
           <p className="text-gray-600 text-sm mb-3">
             Send us an email and we'll get back to you within 24 hours.
           </p>
-          <a href="mailto:support@lekhajokha.com" className="text-blue-600 text-sm font-medium hover:text-blue-700">
-            support@lekhajokha.com
+                      <a href="mailto:support@acctoo.com" className="text-blue-600 text-sm font-medium hover:text-blue-700">
+              support@acctoo.com
           </a>
         </div>
 
@@ -394,7 +394,7 @@ const HelpSupport = ({ isVisible, onClose }) => {
               <span className="text-2xl">❓</span>
               <div>
                 <h2 className="text-xl font-bold text-gray-900">Help & Support</h2>
-                <p className="text-sm text-gray-500">Get help with using LekhaJokha</p>
+                <p className="text-sm text-gray-500">Get help with using ACCTOO</p>
               </div>
             </div>
             <button

@@ -22,11 +22,14 @@ const jsPDF = window.jspdf.jsPDF;
 console.log('autoTable on jsPDF:', typeof jsPDF.prototype.autoTable);
 
 // Import jspdf-autotable dynamically
+// Initialize autoTable if available
 let autoTable = null;
 try {
-  autoTable = require('jspdf-autotable');
-  if (autoTable && autoTable.default) {
-    autoTable.default(jsPDF);
+  // Try to get jsPDF from global scope
+  const jsPDF = window.jsPDF || (window.jspdf && window.jspdf.jsPDF);
+  if (jsPDF && typeof jsPDF.prototype.autoTable === 'undefined') {
+    // AutoTable should be automatically attached when loaded via CDN
+    console.log('AutoTable plugin status:', typeof jsPDF.prototype.autoTable);
   }
 } catch (error) {
   console.warn('jspdf-autotable not available, using fallback PDF generation');
@@ -334,6 +337,13 @@ const exportToPDF = (data, filename, title, companyData = {}) => {
   if (!data || data.length === 0) return;
   
   try {
+    // Get jsPDF instance with fallback
+    const jsPDF = window.jsPDF || (window.jspdf && window.jspdf.jsPDF);
+    if (!jsPDF) {
+      console.error('jsPDF not available');
+      return;
+    }
+    
     const doc = new jsPDF();
     const headers = Object.keys(data[0]);
     const tableData = data.map(row => headers.map(header => row[header] || ''));
@@ -346,7 +356,7 @@ const exportToPDF = (data, filename, title, companyData = {}) => {
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(18);
     doc.setFont(undefined, 'bold');
-    const companyName = companyData?.firmName || 'LekhaJokha';
+    const companyName = companyData?.firmName || 'ACCTOO';
     doc.text(companyName, 14, 15);
     
     // Company details
@@ -371,8 +381,8 @@ const exportToPDF = (data, filename, title, companyData = {}) => {
         doc.text(contactLine2, 14, 28);
       }
     } else {
-      doc.text('www.lekhajokha.com | info@lekhajokha.com', 14, 22);
-      doc.text('www.lekhajokha.com | info@lekhajokha.com', 14, 28);
+      doc.text('www.acctoo.com | info@acctoo.com', 14, 22);
+      doc.text('www.acctoo.com | info@acctoo.com', 14, 28);
     }
     
     // Reset text color for content
@@ -1831,6 +1841,13 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
   // Generate PDF receipt using direct jsPDF (no HTML rendering issues)
   const generatePDFReceipt = () => {
     if (!selectedReceipt) return;
+    
+    // Get jsPDF instance with fallback
+    const jsPDF = window.jsPDF || (window.jspdf && window.jspdf.jsPDF);
+    if (!jsPDF) {
+      console.error('jsPDF not available');
+      return;
+    }
     
     const doc = new jsPDF();
     

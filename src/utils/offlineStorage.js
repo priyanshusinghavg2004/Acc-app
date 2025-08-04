@@ -1,7 +1,7 @@
 // IndexedDB utility for offline storage
 class OfflineStorage {
   constructor() {
-    this.dbName = 'LekhaJokhaDB';
+    this.dbName = 'ACCTOODB';
     this.version = 1;
     this.db = null;
   }

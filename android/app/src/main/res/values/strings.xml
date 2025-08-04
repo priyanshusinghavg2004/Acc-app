@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">LekhaJokha</string>
-    <string name="title_activity_main">LekhaJokha</string>
-    <string name="package_name">com.lekhajokha.app</string>
-    <string name="custom_url_scheme">com.lekhajokha.app</string>
+    <string name="app_name">ACCTOO</string>
+    <string name="title_activity_main">ACCTOO</string>
+    <string name="package_name">com.acctoo.app</string>
+    <string name="custom_url_scheme">com.acctoo.app</string>
 </resources>

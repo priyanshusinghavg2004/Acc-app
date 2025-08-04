@@ -3,6 +3,7 @@ import { doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { getAuth } from 'firebase/auth';
 import imageCompression from 'browser-image-compression';
+import { companyTypes, getCompanyTypeLabel, createCompanyIfNeeded } from '../utils/companyUtils';
 
 const indianStates = [
     'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal', 'Andaman and Nicobar Islands', 'Chandigarh', 'Dadra and Nagar Haveli and Daman and Diu', 'Delhi', 'Jammu and Kashmir', 'Ladakh', 'Lakshadweep', 'Puducherry'
@@ -64,6 +65,10 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId, onOpe
     const [purchaseTerms, setPurchaseTerms] = useState('');
     const [footer, setFooter] = useState('');
     const [quotationTerms, setQuotationTerms] = useState('');
+    const [companyType, setCompanyType] = useState('proprietorship');
+    const [companyTypeOther, setCompanyTypeOther] = useState('');
+    const [companyId, setCompanyId] = useState('');
+    const [companyRole, setCompanyRole] = useState('');
 
     useEffect(() => {
         const auth = getAuth();
@@ -96,8 +101,12 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId, onOpe
                     setPurchaseTerms(data.purchaseTerms || '');
                     setFooter(data.footer || '');
                     setQuotationTerms(data.quotationTerms || '');
+                    setCompanyType(data.companyType || 'proprietorship');
+                    setCompanyTypeOther(data.companyTypeOther || '');
+                    setCompanyId(data.companyId || '');
+                    setCompanyRole(data.companyRole || '');
                 } else {
-                    setFirmName(''); setGstin(''); setAddress(''); setCity(''); setState(''); setPincode(''); setContactNumber(''); setEmail(''); setPan(''); setGstinType(''); setBankName(''); setBankAccount(''); setBankIfsc(''); setLogoUrl(''); setSignUrl(''); setSealUrl(''); setUpiId(''); setUpiQrUrl(''); setPaymentGatewayLink(''); setSalesTerms(''); setPurchaseTerms(''); setFooter(''); setQuotationTerms('');
+                    setFirmName(''); setGstin(''); setAddress(''); setCity(''); setState(''); setPincode(''); setContactNumber(''); setEmail(''); setPan(''); setGstinType(''); setBankName(''); setBankAccount(''); setBankIfsc(''); setLogoUrl(''); setSignUrl(''); setSealUrl(''); setUpiId(''); setUpiQrUrl(''); setPaymentGatewayLink(''); setSalesTerms(''); setPurchaseTerms(''); setFooter(''); setQuotationTerms(''); setCompanyType('proprietorship'); setCompanyTypeOther(''); setCompanyId(''); setCompanyRole('');
                 }
             }, (error) => {
                 console.error("Error fetching company details:", error);
@@ -217,8 +226,8 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId, onOpe
             return;
         }
         try {
-            const companyDocRef = doc(db, `artifacts/${appId}/users/${userId}/companyDetails`, 'myCompany');
-            await setDoc(companyDocRef, {
+            // Prepare company data
+            const companyData = {
                 firmName,
                 gstin: (gstinType === 'Regular' || gstinType === 'Composition') ? gstin : '',
                 address,
@@ -242,9 +251,36 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId, onOpe
                 purchaseTerms,
                 footer,
                 quotationTerms,
+                companyType,
+                companyTypeOther,
                 timestamp: serverTimestamp()
-            }, { merge: true });
-            setMessage("Company details saved successfully!");
+            };
+
+            // Save to local company details
+            const companyDocRef = doc(db, `artifacts/${appId}/users/${userId}/companyDetails`, 'myCompany');
+            await setDoc(companyDocRef, companyData, { merge: true });
+
+            // Create company ID if user has company information
+            if (firmName || gstin) {
+                try {
+                    const result = await createCompanyIfNeeded(companyData, userId, appId);
+                    if (result.isNew) {
+                        setCompanyId(result.companyId);
+                        setCompanyRole('owner');
+                        setMessage(`Company details saved successfully! Company ID: ${result.companyId}`);
+                    } else if (result.companyId) {
+                        setCompanyId(result.companyId);
+                        setMessage("Company details saved successfully!");
+                    } else {
+                        setMessage("Company details saved successfully!");
+                    }
+                } catch (companyError) {
+                    console.error("Error creating company ID:", companyError);
+                    setMessage("Company details saved, but there was an issue with company ID generation.");
+                }
+            } else {
+                setMessage("Company details saved successfully!");
+            }
         } catch (error) {
             console.error("Error saving company details:", error);
             setMessage("Error saving company details. Please try again.");
@@ -278,6 +314,34 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId, onOpe
                         className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
                         placeholder="e.g., Your Printing Business Name" required />
                 </div>
+                <div>
+                    <label htmlFor="companyId" className="block text-sm font-medium text-gray-700">Company ID</label>
+                    <input type="text" id="companyId" value={companyId} readOnly
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 bg-gray-50 text-gray-600"
+                        placeholder="System generated (will appear after saving)" />
+                    {companyId && (
+                        <div className="text-xs text-gray-500 mt-1">
+                            Role: {companyRole === 'owner' ? 'Owner' : companyRole || 'Not assigned'}
+                        </div>
+                    )}
+                </div>
+                <div>
+                    <label htmlFor="companyType" className="block text-sm font-medium text-gray-700">Company Type</label>
+                    <select id="companyType" value={companyType} onChange={(e) => setCompanyType(e.target.value)}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500">
+                        {companyTypes.map(type => (
+                            <option key={type.value} value={type.value}>{type.label}</option>
+                        ))}
+                    </select>
+                </div>
+                {companyType === 'other' && (
+                    <div>
+                        <label htmlFor="companyTypeOther" className="block text-sm font-medium text-gray-700">Specify Company Type</label>
+                        <input type="text" id="companyTypeOther" value={companyTypeOther} onChange={(e) => setCompanyTypeOther(e.target.value)}
+                            className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                            placeholder="e.g., Cooperative Society, LLP, etc." />
+                    </div>
+                )}
                 <div>
                     <label htmlFor="companyGstinType" className="block text-sm font-medium text-gray-700">GST Type<span className="text-red-500">*</span></label>
                     <select id="companyGstinType" value={gstinType} onChange={handleGstinTypeChange}

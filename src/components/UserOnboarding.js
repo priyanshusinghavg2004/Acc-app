@@ -14,7 +14,7 @@ const UserOnboarding = ({ user, onComplete }) => {
   const steps = [
     {
       id: 'welcome',
-      title: 'Welcome to LekhaJokha!',
+      title: 'Welcome to ACCTOO!',
       description: 'Your complete business management solution. Let\'s get you started with a quick tour.',
       icon: '🎉',
       position: 'center',

@@ -75,13 +75,25 @@ class PushNotificationManager {
   }
 
   async getToken() {
-    if (!this.messaging || this.permission !== 'granted') {
+    if (!this.messaging) {
+      console.warn('Messaging not initialized');
       return null;
     }
 
     try {
+      // Check if VAPID key is available
+      const vapidKey = process.env.REACT_APP_FCM_VAPID_KEY;
+      if (!vapidKey) {
+        console.warn('FCM VAPID key not configured. Push notifications may not work properly.');
+        // Try to get token without VAPID key (may work in some cases)
+        const token = await getToken(this.messaging);
+        this.token = token;
+        console.log('FCM Token (without VAPID):', token);
+        return token;
+      }
+
       const token = await getToken(this.messaging, {
-        vapidKey: process.env.REACT_APP_FCM_VAPID_KEY
+        vapidKey: vapidKey
       });
 
       this.token = token;
@@ -89,6 +101,14 @@ class PushNotificationManager {
       return token;
     } catch (error) {
       console.error('Error getting FCM token:', error);
+      
+      // Handle specific error cases
+      if (error.code === 'messaging/failed-service-worker-registration') {
+        console.warn('Service worker registration failed. This is normal in development or when HTTPS is not available.');
+      } else if (error.code === 'installations/request-failed') {
+        console.warn('Firebase installation request failed. This may be due to network issues or configuration problems.');
+      }
+      
       return null;
     }
   }
@@ -287,7 +307,7 @@ class PushNotificationManager {
     const testNotification = {
       notification: {
         title: 'Test Notification',
-        body: 'This is a test notification from LekhaJokha'
+        body: 'This is a test notification from ACCTOO'
       },
       data: {
         tag: 'test',

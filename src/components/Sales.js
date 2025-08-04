@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { collection, onSnapshot, doc, addDoc, serverTimestamp, getDoc, setDoc, deleteDoc, getDocs, query } from 'firebase/firestore';
+
 import BillTemplates from './BillTemplates';
 import InvoiceTemplate from './BillTemplates/InvoiceTemplate';
 import ChallanTemplate from './BillTemplates/ChallanTemplate';
@@ -118,18 +119,21 @@ function Sales({ db, userId, isAuthReady, appId }) {
     return () => document.removeEventListener('keydown', handleGlobalEscape);
   }, [closeTopModal]);
 
+  // Live data states
+  const [parties, setParties] = useState([]);
+  const [items, setItems] = useState([]);
+  const [salesBills, setSalesBills] = useState([]);
+  const [purchases, setPurchases] = useState([]);
+  const [company, setCompany] = useState({});
+  const [bills, setBills] = useState([]);
+
+
+
   // Remove template selection, always use SunriseTemplate
   // Remove print-related state and function
   // Remove: const [showPrint, setShowPrint] = useState(false);
   // Remove: const handlePrint = () => { ... }
   // Remove print area and print button from the return JSX
-
-  // Live data states
-  const [parties, setParties] = useState([]);
-  const [items, setItems] = useState([]);
-    const [salesBills, setSalesBills] = useState([]);
-  const [purchases, setPurchases] = useState([]);
-  const [company, setCompany] = useState({});
   
   // ADD ITEM Modal states
   const [showAddItemModal, setShowAddItemModal] = useState(false);
@@ -192,8 +196,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
     { value: 'quotation', label: 'QUOTATION', collection: 'quotations', numberLabel: 'Quotation Number' },
   ];
 
-  // State for bills of the selected type
-  const [bills, setBills] = useState([]);
+
 
   // Add state to track GST type for each row (for UI feedback)
   const [gstTypes, setGstTypes] = useState(rows.map(() => ''));
@@ -1850,7 +1853,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
             )}
             
             <div className="overflow-x-auto rounded-lg border border-gray-200 mb-4">
-              <table className="min-w-full divide-y divide-gray-200 text-sm">
+              <table id="sales-table" className="min-w-full divide-y divide-gray-200 text-sm">
                             <thead className="bg-gray-50">
                                 <tr>
                     <SortableHeader columnKey="number" label={numberLabel.split(' ')[0] + ' No.'} onSort={handleSort} sortConfig={sortConfig} className="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:text-blue-600" />
@@ -1876,7 +1879,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
                       : bill.amount;
                     
                     return (
-                      <tr key={idx}>
+                      <tr key={idx} data-bill-id={bill.id}>
                         <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-center">{bill.number || bill.invoiceNumber}</td>
                         <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-center">{date}</td>
                         <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800 text-center">{bill.partyName}</td>

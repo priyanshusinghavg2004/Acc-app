@@ -67,6 +67,22 @@ service cloud.firestore {
       allow read, write: if request.auth != null;
     }
 
+    // Company management rules
+    match /artifacts/{appId}/companies/{companyId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && 
+        (resource == null || 
+         resource.data.admin.userId == request.auth.uid || 
+         resource.data.members[request.auth.uid] != null);
+    }
+
+    // Reference links rules
+    match /artifacts/{appId}/companies/{companyId}/referenceLinks/{linkId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && 
+        get(/databases/$(database)/documents/artifacts/$(appId)/companies/$(companyId)).data.admin.userId == request.auth.uid;
+    }
+
     // Allow authenticated users to access any collection (for development)
     // This is more permissive but allows the app to work properly
     match /{document=**} {

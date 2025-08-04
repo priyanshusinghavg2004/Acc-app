@@ -1,4 +1,4 @@
-package com.lekhajokha.app;
+package com.acctoo.app;
 
 import com.getcapacitor.BridgeActivity;
 

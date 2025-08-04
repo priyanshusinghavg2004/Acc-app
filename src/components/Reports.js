@@ -7,9 +7,25 @@ import JSZip from 'jszip';
 import { useTableSort } from '../utils/tableSort';
 import { useTablePagination } from '../utils/tablePagination';
 import PaginationControls from '../utils/PaginationControls';
-// Use jsPDF from the global window object
-const jsPDF = window.jspdf.jsPDF;
-console.log('autoTable on jsPDF:', typeof jsPDF.prototype.autoTable);
+// Use jsPDF from the global window object with fallback
+const getJsPDF = () => {
+  if (typeof window !== 'undefined') {
+    // Try different ways jsPDF might be available
+    if (window.jsPDF) {
+      return window.jsPDF;
+    }
+    if (window.jspdf && window.jspdf.jsPDF) {
+      return window.jspdf.jsPDF;
+    }
+    if (window.jspdf) {
+      return window.jspdf;
+    }
+  }
+  return null;
+};
+
+const jsPDF = getJsPDF();
+console.log('autoTable on jsPDF:', jsPDF ? typeof jsPDF.prototype.autoTable : 'jsPDF not available');
 
 // Replace REPORT_TYPES with grouped structure
 const REPORT_GROUPS = [
@@ -1112,7 +1128,14 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
 
   // Utility: Export to PDF with letterhead
   const arrayToPDF = async (arr, columns, filename, title = 'Report') => {
-    const doc = new jsPDF();
+    // Get jsPDF instance with fallback
+    const jsPDFInstance = getJsPDF();
+    if (!jsPDFInstance) {
+      console.error('jsPDF not available');
+      return;
+    }
+    
+    const doc = new jsPDFInstance();
     let y = 16;
     // Draw logo if available
     if (companyDetails.logoUrl) {
@@ -1163,33 +1186,80 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
     // Report title
     doc.setFontSize(12);
     doc.text(title, 14, detailsY + 6);
-    // Table
-    doc.autoTable({
-      head: [columns.map(col => col.label)],
-      body: arr.map(row => columns.map(col => row[col.key] ?? '')),
-      startY: detailsY + 12,
-      styles: { fontSize: 8 },
-      headStyles: { fillColor: [41, 128, 185] },
-      bodyStyles: { fontSize: 8 },
-      alternateRowStyles: { fillColor: [248, 249, 250] },
-      didParseCell: function(data) {
-        // Apply custom styling to total rows
-        if (data.row.index < arr.length) {
-          const row = arr[data.row.index];
-          const isTotalRow = row.partyName?.includes('TOTAL') || 
-                            row.itemName?.includes('TOTAL') || 
-                            row.invoiceNumber?.includes('TOTAL') ||
-                            row.number?.includes('TOTAL') ||
-                            row.date?.includes('TOTAL');
-          
-          if (isTotalRow) {
-            data.cell.styles.fontStyle = 'bold';
-            data.cell.styles.fillColor = [240, 240, 240];
-            data.cell.styles.textColor = [0, 0, 0];
+    
+    // Check if autoTable is available
+    if (typeof doc.autoTable === 'function') {
+      // Use autoTable for better table formatting
+      doc.autoTable({
+        head: [columns.map(col => col.label)],
+        body: arr.map(row => columns.map(col => row[col.key] ?? '')),
+        startY: detailsY + 12,
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: [41, 128, 185] },
+        bodyStyles: { fontSize: 8 },
+        alternateRowStyles: { fillColor: [248, 249, 250] },
+        didParseCell: function(data) {
+          // Apply custom styling to total rows
+          if (data.row.index < arr.length) {
+            const row = arr[data.row.index];
+            const isTotalRow = row.partyName?.includes('TOTAL') || 
+                              row.itemName?.includes('TOTAL') || 
+                              row.invoiceNumber?.includes('TOTAL') ||
+                              row.number?.includes('TOTAL') ||
+                              row.date?.includes('TOTAL');
+            
+            if (isTotalRow) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [240, 240, 240];
+              data.cell.styles.textColor = [0, 0, 0];
+            }
           }
         }
-      }
-    });
+      });
+    } else {
+      // Fallback to manual table drawing
+      console.warn('AutoTable not available, using fallback table generation');
+      // Simple table drawing without autoTable
+      const startY = detailsY + 12;
+      const colWidth = 180 / columns.length;
+      let currentY = startY;
+      
+      // Draw headers
+      doc.setFillColor(41, 128, 185);
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(8);
+      columns.forEach((col, index) => {
+        doc.rect(14 + (index * colWidth), currentY, colWidth, 8, 'F');
+        doc.text(col.label, 16 + (index * colWidth), currentY + 6);
+      });
+      currentY += 8;
+      
+      // Draw data rows
+      doc.setTextColor(0, 0, 0);
+      arr.forEach((row, rowIndex) => {
+        const isTotalRow = row.partyName?.includes('TOTAL') || 
+                          row.itemName?.includes('TOTAL') || 
+                          row.invoiceNumber?.includes('TOTAL') ||
+                          row.number?.includes('TOTAL') ||
+                          row.date?.includes('TOTAL');
+        
+        if (isTotalRow) {
+          doc.setFillColor(240, 240, 240);
+          doc.rect(14, currentY, 180, 8, 'F');
+          doc.setFontStyle('bold');
+        } else if (rowIndex % 2 === 1) {
+          doc.setFillColor(248, 249, 250);
+          doc.rect(14, currentY, 180, 8, 'F');
+        }
+        
+        columns.forEach((col, colIndex) => {
+          doc.text(String(row[col.key] ?? ''), 16 + (colIndex * colWidth), currentY + 6);
+        });
+        currentY += 8;
+        doc.setFontStyle('normal');
+      });
+    }
+    
     doc.save(filename);
   };
 
@@ -3167,7 +3237,14 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
 
   // Utility: Export multiple tables to PDF with letterhead, each on a new page
   const multiTablePDF = async (tables, filename, title = 'Report') => {
-    const doc = new jsPDF();
+    // Get jsPDF instance with fallback
+    const jsPDFInstance = getJsPDF();
+    if (!jsPDFInstance) {
+      console.error('jsPDF not available');
+      return;
+    }
+    
+    const doc = new jsPDFInstance();
     for (let i = 0; i < tables.length; i++) {
       const { arr, columns, tableTitle } = tables[i];
       // Letterhead (reuse your existing logic)

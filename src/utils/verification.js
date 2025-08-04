@@ -24,11 +24,14 @@ import { db, auth } from '../firebase.config';
 // Email Verification Functions
 export const sendVerificationEmail = async (user, continueUrl = null) => {
   try {
+    // Use the correct URL format - without .html extension
     const actionCodeSettings = {
-      url: continueUrl || `${window.location.origin}/complete-verification.html?continueUrl=${encodeURIComponent(window.location.href)}`,
-      handleCodeInApp: true
+      url: continueUrl || `${window.location.origin}/complete-verification`,
+      // Remove handleCodeInApp as it can cause issues with email verification
+      // handleCodeInApp: true
     };
     
+    console.log('Sending verification email with settings:', actionCodeSettings);
     await sendEmailVerification(user, actionCodeSettings);
     return { success: true, message: 'Verification email sent successfully!' };
   } catch (error) {
@@ -39,10 +42,28 @@ export const sendVerificationEmail = async (user, continueUrl = null) => {
 
 export const checkEmailVerification = async (user) => {
   try {
+    if (!user) {
+      console.error('No user provided to checkEmailVerification');
+      return false;
+    }
+    
+    console.log('Checking email verification for user:', user.email);
+    console.log('Current emailVerified status:', user.emailVerified);
+    
+    // Reload the user to get the latest verification status
     await user.reload();
+    
+    console.log('After reload - emailVerified status:', user.emailVerified);
     return user.emailVerified;
   } catch (error) {
     console.error('Error checking email verification:', error);
+    
+    // If reload fails, try to get the status from the current user object
+    if (user && typeof user.emailVerified === 'boolean') {
+      console.log('Using cached emailVerified status:', user.emailVerified);
+      return user.emailVerified;
+    }
+    
     return false;
   }
 };
@@ -155,7 +176,7 @@ export const verifyPhoneCode = async (userId, phoneNumber, code) => {
 export const sendPasswordReset = async (email, continueUrl = null) => {
   try {
     const actionCodeSettings = {
-      url: continueUrl || `${window.location.origin}/complete-verification.html?continueUrl=${encodeURIComponent(window.location.href)}`,
+      url: continueUrl || `${window.location.origin}/complete-verification?continueUrl=${encodeURIComponent(window.location.href)}`,
       handleCodeInApp: true
     };
     

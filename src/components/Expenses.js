@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { db } from '../firebase.config';
-import { collection, addDoc, deleteDoc, doc, onSnapshot, query, where, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { db, auth } from '../firebase.config';
+import { collection, addDoc, deleteDoc, doc, onSnapshot, query, where, serverTimestamp, updateDoc, getDoc } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 import { migrateExpenseData, checkMigrationNeeded } from '../utils/migrateExpenseData';
+import MPINVerification from './MPINVerification';
 
 const GROUPS = [
   { key: 'salaries', label: 'Salaries' },
@@ -65,7 +66,7 @@ function getComponentAnnualAmount(type, value, mode, basicSalary, ctc) {
   }
 }
 
-const Expenses = ({ db, userId, isAuthReady, appId }) => {
+const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
   // Component loaded successfully (only log once)
   useEffect(() => {
   
@@ -152,16 +153,12 @@ const Expenses = ({ db, userId, isAuthReady, appId }) => {
 
   // --- MPIN/Employee Tab Lock State ---
   const [employeeTabUnlocked, setEmployeeTabUnlocked] = useState(false);
-  const [mpinInput, setMpinInput] = useState('');
-  const [mpinError, setMpinError] = useState('');
   const [showMpinModal, setShowMpinModal] = useState(false);
-  const MPIN = '1234'; // Demo only
   
   // --- Delete MPIN State ---
   const [showDeleteMpinModal, setShowDeleteMpinModal] = useState(false);
-  const [deleteMpinInput, setDeleteMpinInput] = useState('');
-  const [deleteMpinError, setDeleteMpinError] = useState('');
   const [pendingDeletePaymentId, setPendingDeletePaymentId] = useState(null);
+  const [pendingDeleteEmployeeId, setPendingDeleteEmployeeId] = useState(null);
 
   // --- Salary Tab State ---
   const [fixedSalaryRows, setFixedSalaryRows] = useState([]);
@@ -248,18 +245,21 @@ const Expenses = ({ db, userId, isAuthReady, appId }) => {
           handleCancelEditExpense();
         } else if (showMpinModal) {
           console.log('ESC pressed - closing MPIN modal');
-          setMpinInput('');
-          setMpinError('');
           setShowMpinModal(false);
+        } else if (showDeleteMpinModal) {
+          console.log('ESC pressed - closing delete MPIN modal');
+          setShowDeleteMpinModal(false);
+          setPendingDeletePaymentId(null);
+          setPendingDeleteEmployeeId(null);
         }
       }
     };
 
-    if (showEditSalaryModal || editingExpenseId || showMpinModal) {
+    if (showEditSalaryModal || editingExpenseId || showMpinModal || showDeleteMpinModal) {
       document.addEventListener('keydown', handleEscKey);
       return () => document.removeEventListener('keydown', handleEscKey);
     }
-  }, [showEditSalaryModal, editingExpenseId, showMpinModal]);
+  }, [showEditSalaryModal, editingExpenseId, showMpinModal, showDeleteMpinModal]);
 
   // --- Employee handlers ---
   const handleEmployeeFormChange = e => {
@@ -956,15 +956,29 @@ const Expenses = ({ db, userId, isAuthReady, appId }) => {
   };
   const handleDeleteEmployee = async id => {
     const emp = employees.find(e => e.id === id);
-    if (emp && window.confirm(`Are you sure you want to delete employee "${emp.name}" (${emp.employeeId})? This action cannot be undone.`)) {
-      try {
-        await deleteDoc(doc(db, `artifacts/${appId}/users/${userId}/employees`, id));
-        alert('Employee deleted successfully!');
-      } catch (error) {
-        console.error('Error deleting employee:', error);
-        alert('Error deleting employee. Please try again.');
-      }
+    if (emp) {
+      setPendingDeleteEmployeeId(id);
+      setShowDeleteMpinModal(true);
     }
+  };
+
+  const handleConfirmDeleteEmployee = async () => {
+    try {
+      await deleteDoc(doc(db, `artifacts/${appId}/users/${userId}/employees`, pendingDeleteEmployeeId));
+      alert('Employee deleted successfully!');
+      setShowDeleteMpinModal(false);
+      setPendingDeleteEmployeeId(null);
+    } catch (error) {
+      console.error('Error deleting employee:', error);
+      alert('Error deleting employee. Please try again.');
+      setShowDeleteMpinModal(false);
+      setPendingDeleteEmployeeId(null);
+    }
+  };
+
+  const handleCancelDeleteEmployee = () => {
+    setShowDeleteMpinModal(false);
+    setPendingDeleteEmployeeId(null);
   };
   const handleEditEmployee = emp => {
     setEditingEmployeeId(emp.id);
@@ -1439,80 +1453,7 @@ const Expenses = ({ db, userId, isAuthReady, appId }) => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [exportDropdownOpen, showEmployeeDropdown]);
 
-  // --- MPIN Modal ---
-  const renderMpinModal = () => (
-    <div 
-      className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) {
-          console.log('Background clicked');
-          setMpinInput('');
-          setMpinError('');
-          setShowMpinModal(false);
-          console.log('showMpinModal set to false from background click');
-        }
-      }}
-    >
-      <div className="bg-white rounded-lg shadow-lg p-6 w-80 flex flex-col items-center relative">
-        <button
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            console.log('Close button clicked');
-            setMpinInput('');
-            setMpinError('');
-            setShowMpinModal(false);
-            console.log('showMpinModal set to false');
-          }}
-          className="absolute top-2 right-2 text-gray-500 hover:text-gray-700 text-xl z-10 cursor-pointer bg-white rounded-full w-6 h-6 flex items-center justify-center border border-gray-300"
-          type="button"
-          title="Close"
-        >
-          ✕
-        </button>
-        <h3 className="text-lg font-bold mb-2">Enter MPIN to Access Employee/KYC</h3>
-        <input
-          type="password"
-          value={mpinInput}
-          onChange={e => setMpinInput(e.target.value)}
-          onKeyDown={e => {
-            if (e.key === 'Enter') {
-              if (mpinInput === MPIN) {
-                setEmployeeTabUnlocked(true);
-                setMpinInput('');
-                setMpinError('');
-                setShowMpinModal(false);
-              } else {
-                setMpinError('Incorrect MPIN');
-              }
-            } else if (e.key === 'Escape') {
-              setMpinInput('');
-              setMpinError('');
-              setShowMpinModal(false);
-            }
-          }}
-          className="border rounded p-2 w-full mb-2 text-center"
-          placeholder="Enter MPIN"
-          maxLength={8}
-          autoFocus
-        />
-        {mpinError && <div className="text-red-600 text-sm mb-2">{mpinError}</div>}
-        <button
-          className="bg-blue-600 text-white px-4 py-2 rounded w-full"
-          onClick={() => {
-            if (mpinInput === MPIN) {
-              setEmployeeTabUnlocked(true);
-              setMpinInput('');
-              setMpinError('');
-              setShowMpinModal(false);
-            } else {
-              setMpinError('Incorrect MPIN');
-            }
-          }}
-        >Unlock</button>
-      </div>
-    </div>
-  );
+
 
   // --- Render group-specific form ---
   const renderGroupForm = () => {
@@ -3495,38 +3436,26 @@ const Expenses = ({ db, userId, isAuthReady, appId }) => {
     
     setPendingDeletePaymentId(paymentId);
     setShowDeleteMpinModal(true);
-    setDeleteMpinInput('');
-    setDeleteMpinError('');
   };
 
   const handleConfirmDeleteSalaryPayment = async () => {
-    if (deleteMpinInput === MPIN) {
-      try {
-        await deleteDoc(doc(db, `artifacts/${appId}/users/${userId}/salaryPayments`, pendingDeletePaymentId));
-        
-        alert('Salary payment deleted successfully!');
-        setShowDeleteMpinModal(false);
-        setPendingDeletePaymentId(null);
-        setDeleteMpinInput('');
-        setDeleteMpinError('');
-      } catch (error) {
-        console.error('Error deleting salary payment:', error);
-        alert(`Error deleting salary payment: ${error.message}. Please try again.`);
-        setShowDeleteMpinModal(false);
-        setPendingDeletePaymentId(null);
-        setDeleteMpinInput('');
-        setDeleteMpinError('');
-      }
-    } else {
-      setDeleteMpinError('Incorrect MPIN');
+    try {
+      await deleteDoc(doc(db, `artifacts/${appId}/users/${userId}/salaryPayments`, pendingDeletePaymentId));
+      
+      alert('Salary payment deleted successfully!');
+      setShowDeleteMpinModal(false);
+      setPendingDeletePaymentId(null);
+    } catch (error) {
+      console.error('Error deleting salary payment:', error);
+      alert(`Error deleting salary payment: ${error.message}. Please try again.`);
+      setShowDeleteMpinModal(false);
+      setPendingDeletePaymentId(null);
     }
   };
 
   const handleCancelDeleteSalaryPayment = () => {
     setShowDeleteMpinModal(false);
     setPendingDeletePaymentId(null);
-    setDeleteMpinInput('');
-    setDeleteMpinError('');
   };
 
   const handleSaveEditSalaryPayment = async () => {
@@ -3628,9 +3557,6 @@ const Expenses = ({ db, userId, isAuthReady, appId }) => {
     console.log('Salary Payments:', salaryPayments);
     console.log('Pending Delete ID:', pendingDeletePaymentId);
     console.log('Show Delete Modal:', showDeleteMpinModal);
-    console.log('Delete MPIN Input:', deleteMpinInput);
-    console.log('Delete MPIN Error:', deleteMpinError);
-    console.log('MPIN:', MPIN);
     console.log('=======================');
   };
 
@@ -3638,7 +3564,7 @@ const Expenses = ({ db, userId, isAuthReady, appId }) => {
   useEffect(() => {
     window.testEmployeeData = testEmployeeData;
     window.testSalaryDelete = testSalaryDelete;
-  }, [employees, salaryPayments, pendingDeletePaymentId, showDeleteMpinModal, deleteMpinInput, deleteMpinError]);
+  }, [employees, salaryPayments, pendingDeletePaymentId, showDeleteMpinModal]);
 
   // Reset MPIN modal when employee tab is unlocked or when not on employee tab
   useEffect(() => {
@@ -3833,46 +3759,41 @@ const Expenses = ({ db, userId, isAuthReady, appId }) => {
       {/* Group-specific form */}
       {renderGroupForm()}
 
-      {/* MPIN Modal */}
-      {showMpinModal && renderMpinModal()}
+      {/* Employee Tab MPIN Verification */}
+      {showMpinModal && (
+        <MPINVerification
+          onSuccess={() => {
+            setEmployeeTabUnlocked(true);
+            setShowMpinModal(false);
+          }}
+          onCancel={() => setShowMpinModal(false)}
+          onGoToSettings={() => setShowSettings(true)}
+          title="Enter MPIN to Access Employee/KYC"
+          message="Please enter your 4-digit MPIN to access the Employee Database & KYC section"
+        />
+      )}
 
-      {/* Delete MPIN Modal */}
+      {/* Delete MPIN Verification */}
       {showDeleteMpinModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-lg p-6 w-80 flex flex-col items-center">
-            <h3 className="text-lg font-bold mb-2">Enter MPIN to Delete Salary Payment</h3>
-            <p className="text-sm text-gray-600 mb-4 text-center">This action cannot be undone. Please enter your MPIN to confirm deletion.</p>
-            <input
-              type="password"
-              value={deleteMpinInput}
-              onChange={e => setDeleteMpinInput(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter') {
-                  handleConfirmDeleteSalaryPayment();
-                }
-              }}
-              className="border rounded p-2 w-full mb-2 text-center"
-              placeholder="Enter MPIN"
-              maxLength={8}
-              autoFocus
-            />
-            {deleteMpinError && <div className="text-red-600 text-sm mb-2">{deleteMpinError}</div>}
-            <div className="flex gap-2 w-full">
-              <button
-                className="bg-gray-500 text-white px-4 py-2 rounded flex-1"
-                onClick={handleCancelDeleteSalaryPayment}
-              >
-                Cancel
-              </button>
-              <button
-                className="bg-red-600 text-white px-4 py-2 rounded flex-1"
-                onClick={handleConfirmDeleteSalaryPayment}
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
+        <MPINVerification
+          onSuccess={() => {
+            if (pendingDeletePaymentId) {
+              handleConfirmDeleteSalaryPayment();
+            } else if (pendingDeleteEmployeeId) {
+              handleConfirmDeleteEmployee();
+            }
+          }}
+          onCancel={() => {
+            if (pendingDeletePaymentId) {
+              handleCancelDeleteSalaryPayment();
+            } else if (pendingDeleteEmployeeId) {
+              handleCancelDeleteEmployee();
+            }
+          }}
+          onGoToSettings={() => setShowSettings(true)}
+          title="Verify MPIN for Deletion"
+          message="This action cannot be undone. Please enter your 4-digit MPIN to confirm deletion."
+        />
       )}
 
       {/* Salary Payment Edit Modal */}
