@@ -1,7 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
-import { getMessaging } from 'firebase/messaging';
+import browserSupport from './utils/browserSupport';
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
@@ -18,6 +18,29 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
-const messaging = getMessaging(app);
 
-export { db, auth, messaging }; 
+// Conditionally initialize messaging only if browser supports it
+let messaging = null;
+
+// Use an async function to handle dynamic imports
+const initializeMessaging = async () => {
+  try {
+    // Check if the browser supports the required APIs for Firebase messaging
+    if (browserSupport.hasFirebaseMessaging()) {
+      const { getMessaging } = await import('firebase/messaging');
+      messaging = getMessaging(app);
+      console.log('Firebase messaging initialized successfully');
+    } else {
+      console.log('Firebase messaging not supported in this browser');
+      browserSupport.logSupportInfo();
+    }
+  } catch (error) {
+    console.log('Firebase messaging initialization failed:', error.message);
+    browserSupport.logSupportInfo();
+  }
+};
+
+// Initialize messaging
+initializeMessaging();
+
+export { db, auth, messaging, app }; 

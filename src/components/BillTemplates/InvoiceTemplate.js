@@ -65,8 +65,16 @@ function InvoiceTemplate({
   orientation = 'portrait',
   previewMode = false,
 }) {
-  // Discount logic (matching Sales page)
-  const subtotal = billData.items?.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0) || 0;
+  // Filter out empty placeholder rows (no item/zero values)
+  const visibleItems = (billData.items || []).filter(it => {
+    const hasDesc = !!(it.description && String(it.description).trim());
+    const hasItem = !!(it.item && String(it.item).trim());
+    const hasNumbers = (parseFloat(it.qty) || 0) > 0 || (parseFloat(it.rate) || 0) > 0 || (parseFloat(it.amount) || 0) > 0 || (parseFloat(it.total) || 0) > 0;
+    return hasDesc || hasItem || hasNumbers;
+  });
+
+  // Discount logic (matching Sales page) on visible items only
+  const subtotal = visibleItems.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0) || 0;
   let discount = 0;
   if (billData.discountType === 'percent') {
     discount = subtotal * (parseFloat(billData.discountValue) || 0) / 100;
@@ -75,14 +83,14 @@ function InvoiceTemplate({
   }
   const discountedSubtotal = Math.max(0, subtotal - discount);
   // GST calculations
-  const totalSGST = billData.items?.reduce((sum, item) => sum + ((parseFloat(item.amount) || 0) * ((parseFloat(item.sgst) || 0) / 100)), 0) || 0;
-  const totalCGST = billData.items?.reduce((sum, item) => sum + ((parseFloat(item.amount) || 0) * ((parseFloat(item.cgst) || 0) / 100)), 0) || 0;
-  const totalIGST = billData.items?.reduce((sum, item) => sum + ((parseFloat(item.amount) || 0) * ((parseFloat(item.gst) || 0) / 100)), 0) || 0;
+  const totalSGST = visibleItems.reduce((sum, item) => sum + ((parseFloat(item.amount) || 0) * ((parseFloat(item.sgst) || 0) / 100)), 0) || 0;
+  const totalCGST = visibleItems.reduce((sum, item) => sum + ((parseFloat(item.amount) || 0) * ((parseFloat(item.cgst) || 0) / 100)), 0) || 0;
+  const totalIGST = visibleItems.reduce((sum, item) => sum + ((parseFloat(item.amount) || 0) * ((parseFloat(item.gst) || 0) / 100)), 0) || 0;
   const grandTotal = discountedSubtotal + totalSGST + totalCGST + totalIGST;
 
   // GST summary table logic
   const gstSummary = {};
-  (billData.items || []).forEach(item => {
+  visibleItems.forEach(item => {
     const gstPercent = (parseFloat(item.sgst || 0) + parseFloat(item.cgst || 0) + parseFloat(item.igst || 0)) || parseFloat(item.gst) || 0;
     const key = gstPercent.toString();
     if (!gstSummary[key]) {
@@ -172,7 +180,7 @@ function InvoiceTemplate({
           </tr>
         </thead>
         <tbody>
-          {(billData.items || []).map((item, idx) => (
+          {visibleItems.map((item, idx) => (
             <tr key={idx}>
               <td className="border px-2 py-1 text-center">{idx + 1}</td>
               <td className="border px-2 py-1">

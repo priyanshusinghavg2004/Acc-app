@@ -17,11 +17,13 @@ export const useTablePagination = (data, defaultPageSize = 10) => {
 
   // Calculate pagination data
   const paginationData = useMemo(() => {
-    const totalItems = data.length;
+    // Ensure data is an array and handle undefined/null cases
+    const safeData = Array.isArray(data) ? data : [];
+    const totalItems = safeData.length;
     const totalPages = Math.ceil(totalItems / pageSize);
     const startIndex = (currentPage - 1) * pageSize;
     const endIndex = startIndex + pageSize;
-    const currentData = data.slice(startIndex, endIndex);
+    const currentData = safeData.slice(startIndex, endIndex);
 
     return {
       currentData,

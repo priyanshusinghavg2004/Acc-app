@@ -6,7 +6,7 @@ import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 import { migrateExpenseData, checkMigrationNeeded } from '../utils/migrateExpenseData';
-import MPINVerification from './MPINVerification';
+
 
 const GROUPS = [
   { key: 'salaries', label: 'Salaries' },
@@ -151,14 +151,7 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
   const [sortKey, setSortKey] = useState('date');
   const [sortDir, setSortDir] = useState('desc');
 
-  // --- MPIN/Employee Tab Lock State ---
-  const [employeeTabUnlocked, setEmployeeTabUnlocked] = useState(false);
-  const [showMpinModal, setShowMpinModal] = useState(false);
-  
-  // --- Delete MPIN State ---
-  const [showDeleteMpinModal, setShowDeleteMpinModal] = useState(false);
-  const [pendingDeletePaymentId, setPendingDeletePaymentId] = useState(null);
-  const [pendingDeleteEmployeeId, setPendingDeleteEmployeeId] = useState(null);
+
 
   // --- Salary Tab State ---
   const [fixedSalaryRows, setFixedSalaryRows] = useState([]);
@@ -243,23 +236,15 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
           handleCancelEditSalaryPayment();
         } else if (editingExpenseId) {
           handleCancelEditExpense();
-        } else if (showMpinModal) {
-          console.log('ESC pressed - closing MPIN modal');
-          setShowMpinModal(false);
-        } else if (showDeleteMpinModal) {
-          console.log('ESC pressed - closing delete MPIN modal');
-          setShowDeleteMpinModal(false);
-          setPendingDeletePaymentId(null);
-          setPendingDeleteEmployeeId(null);
         }
       }
     };
 
-    if (showEditSalaryModal || editingExpenseId || showMpinModal || showDeleteMpinModal) {
+    if (showEditSalaryModal || editingExpenseId) {
       document.addEventListener('keydown', handleEscKey);
       return () => document.removeEventListener('keydown', handleEscKey);
     }
-  }, [showEditSalaryModal, editingExpenseId, showMpinModal, showDeleteMpinModal]);
+  }, [showEditSalaryModal, editingExpenseId]);
 
   // --- Employee handlers ---
   const handleEmployeeFormChange = e => {
@@ -956,30 +941,18 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
   };
   const handleDeleteEmployee = async id => {
     const emp = employees.find(e => e.id === id);
-    if (emp) {
-      setPendingDeleteEmployeeId(id);
-      setShowDeleteMpinModal(true);
+    if (emp && window.confirm(`Are you sure you want to delete employee ${emp.name}? This action cannot be undone.`)) {
+      try {
+        await deleteDoc(doc(db, `artifacts/${appId}/users/${userId}/employees`, id));
+        alert('Employee deleted successfully!');
+      } catch (error) {
+        console.error('Error deleting employee:', error);
+        alert('Error deleting employee. Please try again.');
+      }
     }
   };
 
-  const handleConfirmDeleteEmployee = async () => {
-    try {
-      await deleteDoc(doc(db, `artifacts/${appId}/users/${userId}/employees`, pendingDeleteEmployeeId));
-      alert('Employee deleted successfully!');
-      setShowDeleteMpinModal(false);
-      setPendingDeleteEmployeeId(null);
-    } catch (error) {
-      console.error('Error deleting employee:', error);
-      alert('Error deleting employee. Please try again.');
-      setShowDeleteMpinModal(false);
-      setPendingDeleteEmployeeId(null);
-    }
-  };
 
-  const handleCancelDeleteEmployee = () => {
-    setShowDeleteMpinModal(false);
-    setPendingDeleteEmployeeId(null);
-  };
   const handleEditEmployee = emp => {
     setEditingEmployeeId(emp.id);
     setEditingEmployee({ 
@@ -1428,7 +1401,13 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
       exp.description || exp.remarks || '',
       exp.receiptUrl || ''
     ]);
-    docPDF.autoTable({ head: headers, body: rows });
+    import('jspdf-autotable')
+      .then(({ default: autoTable }) => {
+        autoTable(docPDF, { head: headers, body: rows });
+      })
+      .catch((e) => {
+        console.warn('jspdf-autotable not available in Expenses export:', e);
+      });
     docPDF.save(`expenses_export_${selectedGroup}_${new Date().toISOString().slice(0,10)}.pdf`);
     setExportDropdownOpen(false);
   };
@@ -1458,11 +1437,6 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
   // --- Render group-specific form ---
   const renderGroupForm = () => {
     if (selectedGroup === 'employee') {
-      if (!employeeTabUnlocked) {
-        // Don't render anything when MPIN modal should be shown
-        // The modal will be rendered separately in the main return
-        return null;
-      }
       // Employee/KYC UI (no salary form)
   return (
         <div className="mb-6">
@@ -2779,7 +2753,13 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
             rows.push([entry.date, entry.month, entry.employeeName + ' (' + entry.employeeId + ')', entry.post, row.type, row.amount, row.remark]);
           });
         });
-        docPDF.autoTable({ head: headers, body: rows });
+        import('jspdf-autotable')
+          .then(({ default: autoTable }) => {
+            autoTable(docPDF, { head: headers, body: rows });
+          })
+          .catch((e) => {
+            console.warn('jspdf-autotable not available in Expenses salary export:', e);
+          });
         docPDF.save(`salary_payments_export_${salaryMonth || 'all'}.pdf`);
       };
       // Salary payments total
@@ -3434,29 +3414,18 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
       return;
     }
     
-    setPendingDeletePaymentId(paymentId);
-    setShowDeleteMpinModal(true);
-  };
-
-  const handleConfirmDeleteSalaryPayment = async () => {
-    try {
-      await deleteDoc(doc(db, `artifacts/${appId}/users/${userId}/salaryPayments`, pendingDeletePaymentId));
-      
-      alert('Salary payment deleted successfully!');
-      setShowDeleteMpinModal(false);
-      setPendingDeletePaymentId(null);
-    } catch (error) {
-      console.error('Error deleting salary payment:', error);
-      alert(`Error deleting salary payment: ${error.message}. Please try again.`);
-      setShowDeleteMpinModal(false);
-      setPendingDeletePaymentId(null);
+    if (window.confirm('Are you sure you want to delete this salary payment? This action cannot be undone.')) {
+      try {
+        await deleteDoc(doc(db, `artifacts/${appId}/users/${userId}/salaryPayments`, paymentId));
+        alert('Salary payment deleted successfully!');
+      } catch (error) {
+        console.error('Error deleting salary payment:', error);
+        alert(`Error deleting salary payment: ${error.message}. Please try again.`);
+      }
     }
   };
 
-  const handleCancelDeleteSalaryPayment = () => {
-    setShowDeleteMpinModal(false);
-    setPendingDeletePaymentId(null);
-  };
+
 
   const handleSaveEditSalaryPayment = async () => {
     try {
@@ -3555,8 +3524,6 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
   const testSalaryDelete = () => {
     console.log('=== Salary Delete Test ===');
     console.log('Salary Payments:', salaryPayments);
-    console.log('Pending Delete ID:', pendingDeletePaymentId);
-    console.log('Show Delete Modal:', showDeleteMpinModal);
     console.log('=======================');
   };
 
@@ -3564,27 +3531,7 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
   useEffect(() => {
     window.testEmployeeData = testEmployeeData;
     window.testSalaryDelete = testSalaryDelete;
-  }, [employees, salaryPayments, pendingDeletePaymentId, showDeleteMpinModal]);
-
-  // Reset MPIN modal when employee tab is unlocked or when not on employee tab
-  useEffect(() => {
-    if (employeeTabUnlocked || selectedGroup !== 'employee') {
-      setShowMpinModal(false);
-    }
-  }, [employeeTabUnlocked, selectedGroup]);
-
-  // Debug showMpinModal state changes (only when it actually changes)
-  useEffect(() => {
-    // MPIN modal state changed
-  }, [showMpinModal]);
-
-  // Auto-show MPIN modal when employee tab is selected and not unlocked
-  useEffect(() => {
-    // Only show MPIN modal if user is properly authenticated and employee tab is selected
-    if (selectedGroup === 'employee' && !employeeTabUnlocked && isAuthReady && userId) {
-      setShowMpinModal(true);
-    }
-  }, [selectedGroup, employeeTabUnlocked, isAuthReady, userId]);
+  }, [employees, salaryPayments]);
 
   // Migration functionality
   const [migrationStatus, setMigrationStatus] = useState(null);
@@ -3759,42 +3706,7 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
       {/* Group-specific form */}
       {renderGroupForm()}
 
-      {/* Employee Tab MPIN Verification */}
-      {showMpinModal && (
-        <MPINVerification
-          onSuccess={() => {
-            setEmployeeTabUnlocked(true);
-            setShowMpinModal(false);
-          }}
-          onCancel={() => setShowMpinModal(false)}
-          onGoToSettings={() => setShowSettings(true)}
-          title="Enter MPIN to Access Employee/KYC"
-          message="Please enter your 4-digit MPIN to access the Employee Database & KYC section"
-        />
-      )}
 
-      {/* Delete MPIN Verification */}
-      {showDeleteMpinModal && (
-        <MPINVerification
-          onSuccess={() => {
-            if (pendingDeletePaymentId) {
-              handleConfirmDeleteSalaryPayment();
-            } else if (pendingDeleteEmployeeId) {
-              handleConfirmDeleteEmployee();
-            }
-          }}
-          onCancel={() => {
-            if (pendingDeletePaymentId) {
-              handleCancelDeleteSalaryPayment();
-            } else if (pendingDeleteEmployeeId) {
-              handleCancelDeleteEmployee();
-            }
-          }}
-          onGoToSettings={() => setShowSettings(true)}
-          title="Verify MPIN for Deletion"
-          message="This action cannot be undone. Please enter your 4-digit MPIN to confirm deletion."
-        />
-      )}
 
       {/* Salary Payment Edit Modal */}
       {showEditSalaryModal && editingSalaryPayment && (

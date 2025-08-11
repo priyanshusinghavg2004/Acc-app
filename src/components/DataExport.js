@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
 import { saveAs } from 'file-saver';
 import * as XLSX from 'xlsx';
-import MPINVerification from './MPINVerification';
+
 
 const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
   const [selectedModule, setSelectedModule] = useState('sales');
@@ -21,7 +21,7 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
   const [activeTab, setActiveTab] = useState('export');
   const [recentExports, setRecentExports] = useState([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [showMpinVerification, setShowMpinVerification] = useState(false);
+
   
   const exportFormats = [
     { id: 'excel', label: 'Excel (.xlsx)', icon: '📊', description: 'Best for data analysis' },
@@ -335,8 +335,8 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
       return;
     }
 
-    // Require MPIN verification for data export
-    setShowMpinVerification(true);
+    // Direct export without MPIN verification
+    handleExportWithMpin();
   };
 
   // Handle export after MPIN verification
@@ -756,18 +756,7 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
         </div>
       </div>
 
-      {/* MPIN Verification Modal */}
-      {showMpinVerification && (
-        <MPINVerification
-          onSuccess={() => {
-            setShowMpinVerification(false);
-            handleExportWithMpin();
-          }}
-          onCancel={() => setShowMpinVerification(false)}
-          title="Verify MPIN for Data Export"
-          message="Please enter your 4-digit MPIN to export sensitive data"
-        />
-      )}
+
     </div>
   );
 };

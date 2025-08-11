@@ -1,6 +1,31 @@
-import { getMessaging, getToken, onMessage } from 'firebase/messaging';
 import { doc, setDoc, updateDoc, getDoc } from 'firebase/firestore';
-import { db } from '../firebase.config';
+import { db, app } from '../firebase.config';
+import browserSupport from './browserSupport';
+
+// Conditionally import Firebase messaging only if browser supports it
+let getMessaging, getToken, onMessage;
+
+// Use an async function to handle dynamic imports
+const initializeMessagingImports = async () => {
+  try {
+    // Check if the browser supports the required APIs for Firebase messaging
+    if (browserSupport.hasFirebaseMessaging()) {
+      const messagingModule = await import('firebase/messaging');
+      getMessaging = messagingModule.getMessaging;
+      getToken = messagingModule.getToken;
+      onMessage = messagingModule.onMessage;
+    } else {
+      console.log('Firebase messaging not supported in this browser - missing required APIs');
+      browserSupport.logSupportInfo();
+    }
+  } catch (error) {
+    console.log('Firebase messaging import failed:', error.message);
+    browserSupport.logSupportInfo();
+  }
+};
+
+// Initialize messaging imports
+initializeMessagingImports();
 
 class PushNotificationManager {
   constructor() {
@@ -15,13 +40,27 @@ class PushNotificationManager {
   async initialize() {
     try {
       // Check if Firebase Messaging is supported
-      if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      if (!browserSupport.hasFirebaseMessaging()) {
         console.log('Push notifications not supported');
+        browserSupport.logSupportInfo();
+        return false;
+      }
+
+      // Wait for messaging imports to be available
+      let attempts = 0;
+      const maxAttempts = 10;
+      while (!getMessaging && attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attempts++;
+      }
+
+      if (!getMessaging) {
+        console.log('Firebase messaging imports not available');
         return false;
       }
 
       // Initialize Firebase Messaging
-      this.messaging = getMessaging();
+      this.messaging = getMessaging(app);
       this.isSupported = true;
 
       // Check permission
@@ -33,6 +72,7 @@ class PushNotificationManager {
       }
 
       this.isInitialized = true;
+      console.log('Push notification manager initialized successfully');
       return true;
     } catch (error) {
       console.error('Error initializing push notifications:', error);
@@ -75,8 +115,8 @@ class PushNotificationManager {
   }
 
   async getToken() {
-    if (!this.messaging) {
-      console.warn('Messaging not initialized');
+    if (!this.messaging || !getToken) {
+      console.warn('Messaging not initialized or getToken not available');
       return null;
     }
 
@@ -114,7 +154,7 @@ class PushNotificationManager {
   }
 
   setupMessageListener() {
-    if (!this.messaging) return;
+    if (!this.messaging || !onMessage) return;
 
     onMessage(this.messaging, (payload) => {
       console.log('Message received:', payload);

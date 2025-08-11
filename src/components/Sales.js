@@ -29,7 +29,6 @@ import {
   globalModalManager,
   useModalManager
 } from './Modal';
-import ImageManager from './ImageManager';
 import imageManager from '../utils/imageManager';
 
 const initialItemRow = {
@@ -97,27 +96,20 @@ function round2(val) {
 
 
 
+// ESC Key Functionality: Press ESC key to close modals in LIFO order (Last In, First Out)
+// Order: Receipt Modal → Payment Details Modal → Payment Modal → Invoice Modal → View Modal → Success Modal → Add Item Modal
 function Sales({ db, userId, isAuthReady, appId }) {
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);
   const [party, setParty] = useState('');
   const [paymentStatus, setPaymentStatus] = useState('Pending');
   const [notes, setNotes] = useState('');
-  const [rows, setRows] = useState([{ ...initialItemRow }]);
+  const [rows, setRows] = useState(Array.from({ length: 5 }, () => ({ ...initialItemRow })));
+  // Local text for item combobox per row (do NOT persist)
+  const [itemSearchTextByRow, setItemSearchTextByRow] = useState({});
 
   // Modal management
   const { modals, openModal, closeModal, closeTopModal } = useModalManager();
-
-  // Global ESC key handler for LIFO modal management
-  useEffect(() => {
-    const handleGlobalEscape = (e) => {
-      if (e.key === 'Escape') {
-        closeTopModal();
-      }
-    };
-    document.addEventListener('keydown', handleGlobalEscape);
-    return () => document.removeEventListener('keydown', handleGlobalEscape);
-  }, [closeTopModal]);
 
   // Live data states
   const [parties, setParties] = useState([]);
@@ -156,7 +148,6 @@ function Sales({ db, userId, isAuthReady, appId }) {
   const receiptRef = useRef();
   
   // Image management states
-  const [showImageManager, setShowImageManager] = useState(false);
   const [selectedImages, setSelectedImages] = useState({
     logo: null,
     seal: null,
@@ -426,8 +417,8 @@ function Sales({ db, userId, isAuthReady, appId }) {
 
   // Calculate area, amount, GST, and total for each row
   const handleRowChange = (idx, field, value) => {
-    setRows(rows => {
-      return rows.map((row, i) => {
+    setRows(currentRows => {
+      const updatedRows = currentRows.map((row, i) => {
         if (i !== idx) return row;
         let updated = { ...row, [field]: value };
 
@@ -467,6 +458,26 @@ function Sales({ db, userId, isAuthReady, appId }) {
         if (field === 'item') {
           let itemObj = items.find(it => it.id === value);
           updated.gstPercent = itemObj ? (itemObj.gstPercentage || 0) : 0;
+          // Default qty and rate on item select
+          if (!updated.nos) updated.nos = 1;
+          // Prefer last party-wise rate, else item sale price
+          const partyId = party;
+          let defaultRate = 0;
+          try {
+            // Search latest sales bill for this party and item
+            for (let bIndex = salesBills.length - 1; bIndex >= 0; bIndex -= 1) {
+              const bill = salesBills[bIndex];
+              if ((bill.partyId || bill.party) !== partyId) continue;
+              const foundRow = (bill.rows || []).find(r => r.item === value);
+              if (foundRow && foundRow.rate) { defaultRate = parseFloat(foundRow.rate) || 0; break; }
+            }
+          } catch (e) { /* no-op */ }
+          if (!defaultRate && itemObj) {
+            defaultRate = parseFloat(itemObj.salePrice || itemObj.rate || 0) || 0;
+          }
+          if (!updated.rate || updated.rate === 0) {
+            updated.rate = defaultRate;
+          }
           const sellerGstin = company.gstin || '';
           const partyObj = parties.find(p => p.id === party);
           const buyerGstin = partyObj ? (partyObj.gstin || '') : '';
@@ -504,6 +515,19 @@ function Sales({ db, userId, isAuthReady, appId }) {
         updated.total = (parseFloat(updated.amount) || 0) + sgstAmt + cgstAmt + igstAmt;
         return updated;
       });
+
+      // Auto-add trailing row when user fills the last visible row
+      const isRowNonEmpty = (r) => {
+        return !!(r.item || (parseFloat(r.rate) || 0) || (parseFloat(r.nos) || 0) > 1 || (parseFloat(r.length) || 0) || (parseFloat(r.height) || 0));
+      };
+      const last = updatedRows[updatedRows.length - 1];
+      if (isRowNonEmpty(last)) {
+        updatedRows.push({ ...initialItemRow });
+      }
+      // Ensure at least 5 rows visible
+      while (updatedRows.length < 5) updatedRows.push({ ...initialItemRow });
+
+      return updatedRows;
     });
   };
 
@@ -671,7 +695,13 @@ function Sales({ db, userId, isAuthReady, appId }) {
   // Update handleSaveInvoice function
   const handleSaveInvoice = async () => {
     if (!db || !userId || !appId) return;
-    if (!party || rows.length === 0) {
+    // Remove empty placeholder rows before validation/save
+    const cleanedRows = rows.filter((r) => {
+      const hasItem = !!(r.item && String(r.item).trim());
+      const hasNumbers = (parseFloat(r.qty) || 0) > 0 || (parseFloat(r.rate) || 0) > 0 || (parseFloat(r.amount) || 0) > 0 || (parseFloat(r.total) || 0) > 0 || (parseFloat(r.length) || 0) > 0 || (parseFloat(r.height) || 0) > 0 || ((parseFloat(r.nos) || 0) > 1);
+      return hasItem || hasNumbers;
+    });
+    if (!party || cleanedRows.length === 0) {
       alert("Please select a party and add at least one item.");
       return;
     }
@@ -752,7 +782,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
       invoiceDate,
       party,
       notes,
-      rows,
+      rows: cleanedRows,
       amount: grandTotal,
       createdAt: serverTimestamp(),
       customFields,
@@ -813,7 +843,8 @@ function Sales({ db, userId, isAuthReady, appId }) {
 
       // Update stock for each sold item
       if (docType === 'invoice') {
-        for (const row of rows) {
+        for (const row of cleanedRows) {
+          if (!row.item) continue;
           const stockDocRef = doc(stockCollectionRef, row.item);
           const stockDocSnap = await getDoc(stockDocRef);
           let currentStock = 0;
@@ -830,12 +861,12 @@ function Sales({ db, userId, isAuthReady, appId }) {
       // Show success modal
       setSavedBillId(savedBill.id);
       setShowSuccessModal(true);
-      // Reset form
+      // Reset form and show 5 fresh rows
       setInvoiceNumber('');
       setInvoiceDate(new Date().toISOString().split('T')[0]);
       setParty('');
       setNotes('');
-      setRows([{ ...initialItemRow }]);
+      setRows(Array.from({ length: 5 }, () => ({ ...initialItemRow })));
       setEditingBillId(null);
     } catch (err) {
       alert("Error saving invoice: " + err.message);
@@ -850,6 +881,40 @@ function Sales({ db, userId, isAuthReady, appId }) {
   // Add import for BillTemplates and modal state
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [invoiceBill, setInvoiceBill] = useState(null);
+
+  // ESC Key Functionality: Press ESC key to close modals in LIFO order (Last In, First Out)
+  // Order: Receipt Modal → Payment Details Modal → Payment Modal → Invoice Modal → View Modal → Success Modal → Add Item Modal
+  useEffect(() => {
+    const handleEscKey = (e) => {
+      if (e.key === 'Escape') {
+        if (showReceiptModal) {
+          setShowReceiptModal(false);
+        } else if (showPaymentDetailsModal) {
+          setShowPaymentDetailsModal(false);
+        } else if (showPaymentModal) {
+          setShowPaymentModal(false);
+        } else if (showInvoiceModal) {
+          setShowInvoiceModal(false);
+        } else if (showViewModal) {
+          setShowViewModal(false);
+        } else if (showSuccessModal) {
+          setShowSuccessModal(false);
+        } else if (showAddItemModal) {
+          setShowAddItemModal(false);
+          clearAddItemForm();
+        }
+      }
+    };
+    
+    // Add event listener if any modal is open
+    if (showReceiptModal || showPaymentDetailsModal || showPaymentModal || showInvoiceModal || showViewModal || showSuccessModal || showAddItemModal) {
+      document.addEventListener('keydown', handleEscKey);
+    }
+    
+    return () => {
+      document.removeEventListener('keydown', handleEscKey);
+    };
+  }, [showReceiptModal, showPaymentDetailsModal, showPaymentModal, showInvoiceModal, showViewModal, showSuccessModal, showAddItemModal]);
 
   // Handler to view bill details
   const handleViewBill = (bill) => {
@@ -917,9 +982,42 @@ function Sales({ db, userId, isAuthReady, appId }) {
 
   // Get bill payments for receipt preview
   const getBillPayments = (bill) => {
-    return payments.filter(p => 
-      p.allocations && p.allocations.some(a => a.billId === bill.id && a.billType === docType)
-    );
+    return payments.filter(payment => {
+      // Check if payment is for the same party
+      const paymentPartyId = payment.partyId || payment.party;
+      if (paymentPartyId !== bill.party) {
+        return false;
+      }
+      
+      // Special handling for advance receipts
+      if (payment.receiptNumber && payment.receiptNumber.startsWith('ADV-')) {
+        // Extract invoice number from advance receipt (e.g., ADV-INV25-26/12 -> INV25-26/12)
+        const targetInvoiceNo = payment.receiptNumber.replace('ADV-', '');
+        const currentInvoiceNo = bill.number || bill.invoiceNumber || bill.id;
+        return targetInvoiceNo === currentInvoiceNo;
+      }
+      
+      // Check if payment has allocations for this invoice
+      if (payment.allocations && Array.isArray(payment.allocations)) {
+        return payment.allocations.some(allocation => 
+          allocation.billId === bill.id && allocation.billType === docType
+        );
+      }
+      
+      // Check if payment has advance allocations for this invoice
+      if (payment.advanceAllocations && Array.isArray(payment.advanceAllocations)) {
+        return payment.advanceAllocations.some(allocation => 
+          allocation.billId === bill.id
+        );
+      }
+      
+      // Check direct billId match
+      if (payment.billId === bill.id) {
+        return true;
+      }
+      
+      return false;
+    });
   };
 
   // Handle payment receipt preview
@@ -943,7 +1041,6 @@ function Sales({ db, userId, isAuthReady, appId }) {
       ...prev,
       [image.category]: image.data
     }));
-    setShowImageManager(false);
   };
 
   const loadSavedImages = async () => {
@@ -1263,6 +1360,12 @@ function Sales({ db, userId, isAuthReady, appId }) {
       const paymentAmountNum = parseFloat(paymentAmount);
       const billOutstanding = getBillOutstanding(selectedBillForPayment);
       
+      // Check if payment amount exceeds bill outstanding
+      if (paymentAmountNum > billOutstanding) {
+        alert(`Payment amount (₹${paymentAmountNum.toLocaleString('en-IN')}) cannot exceed the bill's outstanding amount (₹${billOutstanding.toLocaleString('en-IN')}). Please use the Payments page for amounts greater than the bill outstanding.`);
+        return;
+      }
+      
       // First, try to allocate available advance
       const availableAdvance = getPartyAdvance(selectedBillForPayment.party, payments);
       let advanceAllocations = [];
@@ -1284,92 +1387,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
         }
       }
       
-      // Check if remaining payment amount exceeds bill outstanding (FIFO allocation)
-      if (remainingPaymentAmount > billOutstanding) {
-        // Allocate excess amount to other outstanding bills for the same party using FIFO
-        const excessAmount = remainingPaymentAmount - billOutstanding;
-        const partyBills = bills.filter(bill => 
-          (bill.party === selectedBillForPayment.party || bill.partyId === selectedBillForPayment.party) && 
-          bill.id !== selectedBillForPayment.id && 
-          getBillOutstanding(bill) > 0
-        );
-        
-        // Sort by date (FIFO - oldest first)
-        partyBills.sort((a, b) => new Date(a.date || a.invoiceDate) - new Date(b.date || b.invoiceDate));
-        
-        let remainingExcess = excessAmount;
-        const additionalAllocations = [];
-        
-        for (const bill of partyBills) {
-          if (remainingExcess <= 0) break;
-          
-          const billOutstanding = getBillOutstanding(bill);
-          const allocatedAmount = Math.min(remainingExcess, billOutstanding);
-          
-          additionalAllocations.push({
-            billType: docType,
-            billId: bill.id,
-            billNumber: bill.number,
-            allocatedAmount: allocatedAmount,
-            billOutstanding: billOutstanding,
-            isFullPayment: allocatedAmount >= billOutstanding
-          });
-          
-          remainingExcess -= allocatedAmount;
-        }
-        
-        // Create allocations array with primary bill and additional allocations
-        const allocations = [
-          {
-            billType: docType,
-            billId: selectedBillForPayment.id,
-            billNumber: selectedBillForPayment.number,
-            allocatedAmount: billOutstanding,
-            billOutstanding: billOutstanding,
-            isFullPayment: true
-          },
-          ...additionalAllocations
-        ];
-        
-        const paymentData = {
-          receiptNumber: receiptNumber,
-          paymentDate: paymentDate,
-          partyId: selectedBillForPayment.party,
-          partyName: getPartyName(selectedBillForPayment.party),
-          totalAmount: paymentAmountNum,
-          paymentMode: paymentMode,
-          reference: paymentReference,
-          notes: paymentNotes,
-          type: docType,
-          paymentType: 'bill',
-          billId: selectedBillForPayment.id,
-          billNumber: selectedBillForPayment.number,
-          allocations: allocations,
-          remainingAmount: remainingExcess,
-          fifoAllocationUsed: excessAmount - remainingExcess,
-          advanceAllocations: advanceAllocations,
-          advanceUsed: advanceUsed,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
-        };
-        
-        // Add to payments collection
-        const paymentsRef = collection(db, `artifacts/${appId}/users/${userId}/payments`);
-        await addDoc(paymentsRef, paymentData);
-        
-        // Reset payment form
-        setPaymentAmount('');
-        setPaymentDate(new Date().toISOString().split('T')[0]);
-        setPaymentMode('Cash');
-        setPaymentReference('');
-        setPaymentNotes('');
-        setReceiptNumber('');
-        setSelectedBillForPayment(null);
-        setShowPaymentModal(false);
-        
-        alert(`Payment added successfully! ₹${billOutstanding} allocated to this bill, ₹${excessAmount - remainingExcess} allocated to other bills using FIFO.`);
-      } else {
-        // Normal payment (amount <= bill outstanding)
+      // Simple bill payment - no excess amount handling since it's restricted above
       const paymentData = {
         receiptNumber: receiptNumber,
         paymentDate: paymentDate,
@@ -1387,14 +1405,14 @@ function Sales({ db, userId, isAuthReady, appId }) {
           billType: docType,
           billId: selectedBillForPayment.id,
           billNumber: selectedBillForPayment.number,
-            allocatedAmount: paymentAmountNum,
+          allocatedAmount: paymentAmountNum,
           billOutstanding: billOutstanding,
-            isFullPayment: paymentAmountNum >= billOutstanding
+          isFullPayment: paymentAmountNum >= billOutstanding
         }],
-          remainingAmount: 0,
-          fifoAllocationUsed: 0,
-          advanceAllocations: advanceAllocations,
-          advanceUsed: advanceUsed,
+        remainingAmount: 0, // No remaining amount since payment cannot exceed bill outstanding
+        fifoAllocationUsed: 0,
+        advanceAllocations: advanceAllocations,
+        advanceUsed: advanceUsed,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       };
@@ -1414,7 +1432,6 @@ function Sales({ db, userId, isAuthReady, appId }) {
       setShowPaymentModal(false);
       
       alert('Payment added successfully!');
-      }
     } catch (error) {
       console.error('Error saving payment:', error);
       alert('Error saving payment. Please try again.');
@@ -1502,25 +1519,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
     }
   };
 
-  // Add after showSuccessModal state:
-  useEffect(() => {
-    if (!showSuccessModal) return;
-    const handleEsc = (e) => {
-      if (e.key === 'Escape') setShowSuccessModal(false);
-    };
-    window.addEventListener('keydown', handleEsc);
-    return () => window.removeEventListener('keydown', handleEsc);
-  }, [showSuccessModal]);
 
-  // Close invoice preview modal on Escape key
-  useEffect(() => {
-    if (!showInvoiceModal) return;
-    const handleEsc = (e) => {
-      if (e.key === 'Escape') setShowInvoiceModal(false);
-    };
-    window.addEventListener('keydown', handleEsc);
-    return () => window.removeEventListener('keydown', handleEsc);
-  }, [showInvoiceModal]);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -1653,11 +1652,52 @@ function Sales({ db, userId, isAuthReady, appId }) {
   return (
     <tr key={idx}>
                     <td className="px-2 py-1">
-                      <select value={row.item} onChange={e => handleRowChange(idx, 'item', e.target.value)}
-                        className="border border-gray-300 rounded-md p-1 w-32">
-                        <option value="">Select Item</option>
-                        {items.map(it => <option key={it.id} value={it.id}>{it.itemName}</option>)}
-                      </select>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          list={`items-list-${idx}`}
+                          className="border border-gray-300 rounded-md p-1 w-48"
+                          placeholder="Select Item"
+                          value={
+                            itemSearchTextByRow[idx] !== undefined
+                              ? itemSearchTextByRow[idx]
+                              : (items.find(it => it.id === row.item)?.itemName || '')
+                          }
+                          onChange={(e) => {
+                            const text = e.target.value;
+                            setItemSearchTextByRow(prev => ({ ...prev, [idx]: text }));
+                            // Try to match exactly by name/code/hsn
+                            const lower = text.toLowerCase();
+                            const match = items.find(it =>
+                              (it.itemName || '').toLowerCase() === lower ||
+                              (it.code || '').toLowerCase() === lower ||
+                              (it.hsn || it.hsnCode || '').toLowerCase() === lower
+                            );
+                            if (match) {
+                              handleRowChange(idx, 'item', match.id);
+                              setItemSearchTextByRow(prev => ({ ...prev, [idx]: match.itemName }));
+                            }
+                          }}
+                          onBlur={(e) => {
+                            const text = e.target.value;
+                            const lower = text.toLowerCase();
+                            const match = items.find(it =>
+                              (it.itemName || '').toLowerCase().startsWith(lower) ||
+                              (it.code || '').toLowerCase().startsWith(lower) ||
+                              (it.hsn || it.hsnCode || '').toLowerCase().startsWith(lower)
+                            );
+                            if (match) {
+                              handleRowChange(idx, 'item', match.id);
+                              setItemSearchTextByRow(prev => ({ ...prev, [idx]: match.itemName }));
+                            }
+                          }}
+                        />
+                        <datalist id={`items-list-${idx}`}>
+                          {items.slice(0, 200).map(it => (
+                            <option key={it.id} value={it.itemName} />
+                          ))}
+                        </datalist>
+                      </div>
                     </td>
                     <td className="px-2 py-1">
                       <input type="number" value={row.nos} min={1} onChange={e => handleRowChange(idx, 'nos', e.target.value)}
@@ -1773,12 +1813,6 @@ function Sales({ db, userId, isAuthReady, appId }) {
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-xl font-bold text-gray-800">Sales Bill List</h3>
               <div className="flex gap-2">
-                <button
-                  onClick={() => setShowImageManager(true)}
-                  className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-md"
-                >
-                  Manage Images
-                </button>
                 <button
                   onClick={() => setShowFilters(!showFilters)}
                   className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md"
@@ -1935,7 +1969,10 @@ function Sales({ db, userId, isAuthReady, appId }) {
       {showViewModal && viewBill && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
           <div className="bg-white rounded-lg shadow-lg p-6 max-w-md w-full relative">
-            <button onClick={() => setShowViewModal(false)} className="absolute top-2 right-2 text-gray-500 hover:text-gray-800 text-xl">&times;</button>
+            <div className="absolute top-2 right-2 flex items-center space-x-2">
+              <span className="text-xs text-gray-500">Press ESC to close</span>
+              <button onClick={() => setShowViewModal(false)} className="text-gray-500 hover:text-gray-800 text-xl">&times;</button>
+            </div>
             <h3 className="text-xl font-bold mb-4 text-center">Sales Bill Summary</h3>
             <div className="mb-2 flex flex-col gap-1">
               <div><span className="font-semibold">{numberLabel}:</span> {viewBill.number}</div>
@@ -2330,15 +2367,32 @@ function Sales({ db, userId, isAuthReady, appId }) {
              Print {docTypeOptions.find(opt => opt.value === docType)?.label || 'Document'}
            </StandardButton>
            
-           <StandardButton
-             variant="light"
-             onClick={() => {
-               setShowSuccessModal(false);
-             }}
-             className="w-full"
-           >
-             Create New {docTypeOptions.find(opt => opt.value === docType)?.label || 'Document'}
-           </StandardButton>
+            <StandardButton
+              variant="light"
+              onClick={() => {
+                // Prepare a new blank document without full refresh
+                setShowSuccessModal(false);
+                setEditingBillId(null);
+                setParty('');
+                setNotes('');
+                setCustomFields({ ewayBillNo: '', ewayQr: '', ewayDate: '' });
+                setRows(Array.from({ length: 5 }, () => ({ ...initialItemRow })));
+                // Recompute next invoice number based on current date and latest bills
+                const prefixMap = { invoice: 'INV', challan: 'CHA', quotation: 'QUO' };
+                const prefix = prefixMap[docType] || 'INV';
+                const fy = getFinancialYear(new Date());
+                const fyShort = fy.split('-').map(y => y.slice(-2)).join('-');
+                const serials = bills
+                  .filter(bill => (bill.number || '').startsWith(`${prefix}${fyShort}/`))
+                  .map(bill => parseInt((bill.number || '').split('/')[1], 10))
+                  .filter(n => !isNaN(n));
+                const nextSerial = (serials.length ? Math.max(...serials) : 0) + 1;
+                setInvoiceNumber(`${prefix}${fyShort}/${nextSerial}`);
+              }}
+              className="w-full"
+            >
+              Create New {docTypeOptions.find(opt => opt.value === docType)?.label || 'Document'}
+            </StandardButton>
            
            <StandardButton
              variant="light"
@@ -2644,14 +2698,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
          </div>
        </PreviewModal>
 
-       {/* Image Manager Modal */}
-       <ImageManager
-         userId={userId}
-         showModal={showImageManager}
-         onClose={() => setShowImageManager(false)}
-         onImageSelect={handleImageSelect}
-         selectedImageId={null}
-       />
+
 
     </div>
     );

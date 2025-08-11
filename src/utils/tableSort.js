@@ -10,15 +10,19 @@ export const useTableSort = (initialData = [], defaultSort = null) => {
   );
 
   const sortData = (data, sortKey, sortDirection) => {
-    if (!sortKey) return data;
+    // Ensure data is an array and handle undefined/null cases
+    const safeData = Array.isArray(data) ? data : [];
+    if (!sortKey) return safeData;
 
-    const sortedData = [...data].sort((a, b) => {
+    const sortedData = [...safeData].sort((a, b) => {
       let aValue = a[sortKey];
       let bValue = b[sortKey];
 
       // Special handling for invoice/bill numbers (serial numbers) - LIFO by default
-      if (sortKey === 'number' || sortKey === 'invoiceNumber' || sortKey === 'billNumber' || 
-          sortKey === 'challanNumber' || sortKey === 'receiptNumber') {
+      if (sortKey === 'number' || sortKey === 'invoiceNumber' || sortKey === 'invoiceNo' || 
+          sortKey === 'billNumber' || sortKey === 'challanNumber' || sortKey === 'receiptNumber' ||
+          sortKey === 'docNo' || sortKey === 'paymentNo' || sortKey === 'refNo' ||
+          sortKey.endsWith('No') || sortKey.endsWith('Number')) {
         const result = sortFunctions.serialNumber(aValue, bValue);
         // For LIFO, we want descending order by default
         return sortDirection === 'asc' ? result : -result;
@@ -100,7 +104,8 @@ export const useTableSort = (initialData = [], defaultSort = null) => {
     handleSort,
     getSortedData,
     getSortIcon,
-    getSortClassName
+    getSortClassName,
+    sortedData: getSortedData(initialData)
   };
 };
 

@@ -14,26 +14,13 @@ import {
   allocateAdvanceToBill as allocateAdvanceToBillUtil, 
   markAdvanceUsed as markAdvanceUsedUtil, 
   refundAdvance as refundAdvanceUtil, 
-  getAdvanceDetails as getAdvanceDetailsUtil 
+  getAdvanceDetails as getAdvanceDetailsUtil,
+  isAdvancePayment as isAdvancePaymentUtil,
+  applyAdvanceToBills as applyAdvanceToBillsUtil
 } from '../utils/advanceUtils';
+import jsPDF from 'jspdf';
 
-// Use jsPDF from the global window object
-const jsPDF = window.jspdf.jsPDF;
-console.log('autoTable on jsPDF:', typeof jsPDF.prototype.autoTable);
-
-// Import jspdf-autotable dynamically
-// Initialize autoTable if available
-let autoTable = null;
-try {
-  // Try to get jsPDF from global scope
-  const jsPDF = window.jsPDF || (window.jspdf && window.jspdf.jsPDF);
-  if (jsPDF && typeof jsPDF.prototype.autoTable === 'undefined') {
-    // AutoTable should be automatically attached when loaded via CDN
-    console.log('AutoTable plugin status:', typeof jsPDF.prototype.autoTable);
-  }
-} catch (error) {
-  console.warn('jspdf-autotable not available, using fallback PDF generation');
-}
+// jsPDF is imported from module; plugin will be loaded dynamically where needed
 
 // Comprehensive Export Functions (from Reports.js)
 // Utility: Convert array of objects to CSV string
@@ -126,31 +113,36 @@ const arrayToPDF = async (arr, columns, filename, title = 'Report', companyDetai
     };
   });
   
-  // Table
-  doc.autoTable({
-    head: [columns.map(col => col.label)],
-    body: tableData.map(row => row.data),
-    startY: detailsY + 12,
-    styles: { fontSize: 8 },
-    headStyles: { fillColor: [41, 128, 185] },
-    bodyStyles: { fontSize: 8 },
-    alternateRowStyles: { fillColor: [248, 249, 250] },
-    didParseCell: function(data) {
-      // Apply custom styling to total rows
-      if (data.row.index < arr.length) {
-        const row = arr[data.row.index];
-        const isTotalRow = row.billNumber?.includes('TOTAL') || 
-                          row.partyName?.includes('TOTAL') || 
-                          row.receiptNumber?.includes('TOTAL');
-        
-        if (isTotalRow) {
-          data.cell.styles.fontStyle = 'bold';
-          data.cell.styles.fillColor = [240, 240, 240];
-          data.cell.styles.textColor = [0, 0, 0];
+  // Table (use plugin function form)
+  try {
+    const { default: autoTable } = await import('jspdf-autotable');
+    autoTable(doc, {
+      head: [columns.map(col => col.label)],
+      body: tableData.map(row => row.data),
+      startY: detailsY + 12,
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [41, 128, 185] },
+      bodyStyles: { fontSize: 8 },
+      alternateRowStyles: { fillColor: [248, 249, 250] },
+      didParseCell: function(data) {
+        // Apply custom styling to total rows
+        if (data.row.index < arr.length) {
+          const row = arr[data.row.index];
+          const isTotalRow = row.billNumber?.includes('TOTAL') || 
+                            row.partyName?.includes('TOTAL') || 
+                            row.receiptNumber?.includes('TOTAL');
+          
+          if (isTotalRow) {
+            data.cell.styles.fontStyle = 'bold';
+            data.cell.styles.fillColor = [240, 240, 240];
+            data.cell.styles.textColor = [0, 0, 0];
+          }
         }
       }
-    }
-  });
+    });
+  } catch (e) {
+    console.warn('jspdf-autotable not available for Payments arrayToPDF:', e);
+  }
   doc.save(filename);
 };
 
@@ -196,47 +188,49 @@ const multiTablePDF = async (tables, filename, title = 'Report', companyDetails 
   doc.text(title, 14, detailsY + 6);
   detailsY += 12;
   
-  // Add each table
-  tables.forEach((table, index) => {
+  // Add each table synchronously to preserve layout
+  for (let index = 0; index < tables.length; index += 1) {
+    const table = tables[index];
     if (index > 0) {
       doc.addPage();
       detailsY = 25;
     }
-    
+
     // Table title
     doc.setFontSize(12);
     doc.setFont(undefined, 'bold');
     doc.text(table.tableTitle, 14, detailsY);
     detailsY += 8;
-    
-    // Table
-    doc.autoTable({
-      head: [table.columns.map(col => col.label)],
-      body: table.arr.map(row => table.columns.map(col => row[col.key] ?? '')),
-      startY: detailsY,
-      styles: { fontSize: 8 },
-      headStyles: { fillColor: [41, 128, 185] },
-      bodyStyles: { fontSize: 8 },
-      alternateRowStyles: { fillColor: [248, 249, 250] },
-      didParseCell: function(data) {
-        // Apply custom styling to total rows
-        if (data.row.index < table.arr.length) {
-          const row = table.arr[data.row.index];
-          const isTotalRow = row.billNumber?.includes('TOTAL') || 
-                            row.partyName?.includes('TOTAL') || 
-                            row.receiptNumber?.includes('TOTAL');
-          
-          if (isTotalRow) {
-            data.cell.styles.fontStyle = 'bold';
-            data.cell.styles.fillColor = [240, 240, 240];
-            data.cell.styles.textColor = [0, 0, 0];
+
+    try {
+      const { default: autoTable } = await import('jspdf-autotable');
+      autoTable(doc, {
+        head: [table.columns.map(col => col.label)],
+        body: table.arr.map(row => table.columns.map(col => row[col.key] ?? '')),
+        startY: detailsY,
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: [41, 128, 185] },
+        bodyStyles: { fontSize: 8 },
+        alternateRowStyles: { fillColor: [248, 249, 250] },
+        didParseCell: function(data) {
+          if (data.row.index < table.arr.length) {
+            const row = table.arr[data.row.index];
+            const isTotalRow = row.billNumber?.includes('TOTAL') ||
+                              row.partyName?.includes('TOTAL') ||
+                              row.receiptNumber?.includes('TOTAL');
+            if (isTotalRow) {
+              data.cell.styles.fontStyle = 'bold';
+              data.cell.styles.fillColor = [240, 240, 240];
+              data.cell.styles.textColor = [0, 0, 0];
+            }
           }
         }
-      }
-    });
-    
-    detailsY = doc.lastAutoTable.finalY + 10;
-  });
+      });
+      detailsY = (doc.lastAutoTable && doc.lastAutoTable.finalY ? doc.lastAutoTable.finalY : detailsY) + 10;
+    } catch (e) {
+      console.warn('jspdf-autotable not available for Payments multi-table export:', e);
+    }
+  }
   
   doc.save(filename);
 };
@@ -484,6 +478,8 @@ const exportToPDF = (data, filename, title, companyData = {}) => {
 };
 
 const Payments = ({ db, userId, isAuthReady, appId }) => {
+  // ESC Key Functionality: Press ESC key to close modals in LIFO order (Last In, First Out)
+  // Order: Receipt Modal → Payment Details Modal → Payment Modal → Advance Modal
   // URL parameter handling for tab selection
   const location = useLocation();
   
@@ -541,6 +537,9 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
   const [paymentNotes, setPaymentNotes] = useState('');
   const [receiptNumber, setReceiptNumber] = useState('');
   const [selectedPartyForPayment, setSelectedPartyForPayment] = useState('');
+  const [advanceModalParty, setAdvanceModalParty] = useState(null);
+  const [showAdvanceInfo, setShowAdvanceInfo] = useState(false);
+  const [advanceInfo, setAdvanceInfo] = useState({ collected: 0, used: 0 });
 
   const paymentModes = [
     'Cash', 'Cheque', 'Bank Transfer', 'UPI', 'Credit Card', 'Debit Card', 
@@ -700,7 +699,7 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
     const financialYear = `${currentYear.toString().slice(-2)}-${(currentYear + 1).toString().slice(-2)}`;
     const paymentType = activeTab === 'invoice' ? 'I' : activeTab === 'challan' ? 'C' : 'P';
     
-    console.log('Generating receipt number for financial year:', financialYear, 'payment type:', paymentType);
+
     
     try {
       // Get ALL payments to find the highest sequence number for THIS specific payment type
@@ -713,7 +712,7 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
       paymentsSnapshot.forEach((doc) => {
         const payment = doc.data();
         if (payment.receiptNumber) {
-          console.log('Checking receipt number:', payment.receiptNumber);
+
           
           // Match pattern: PR[I|C|P]25-26/number - but only for THIS payment type
           const regexPattern = new RegExp(`PR${paymentType}${financialYear.replace('-', '\\-')}\\/(\\d+)`);
@@ -721,26 +720,23 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
           
           if (match) {
             const sequence = parseInt(match[1]);
-            console.log('Found sequence for payment type', paymentType, ':', sequence);
+
             if (sequence > highestSequence) {
               highestSequence = sequence;
-              console.log('New highest sequence for payment type', paymentType, ':', highestSequence);
+
             }
           }
         }
       });
       
       const nextSequence = highestSequence + 1;
-      console.log('Final next sequence for payment type', paymentType, ':', nextSequence);
-      
       const receiptNumber = `PR${paymentType}${financialYear}/${nextSequence}`;
-      console.log('Generated receipt number:', receiptNumber);
       
       return receiptNumber;
     } catch (error) {
       console.error('Error generating receipt number:', error);
       const fallbackNumber = `PR${paymentType}${financialYear}/1`;
-      console.log('Fallback receipt number:', fallbackNumber);
+
       return fallbackNumber;
     }
   };
@@ -754,7 +750,7 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
         return { allocations: [], remainingAmount: paymentAmount };
       }
       
-    const bills = billType === 'invoice' ? invoices : billType === 'challan' ? challans : purchaseBills;
+      const bills = billType === 'invoice' ? invoices : billType === 'challan' ? challans : purchaseBills;
       
       // Validate bills array
       if (!Array.isArray(bills)) {
@@ -762,34 +758,99 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
         return { allocations: [], remainingAmount: paymentAmount };
       }
       
-    const partyBills = bills.filter(bill => (bill.partyId === partyId || bill.party === partyId) && bill.outstanding > 0);
-    
-    // Sort by date (FIFO - oldest first)
-    partyBills.sort((a, b) => new Date(a.date || a.invoiceDate || a.challanDate || a.billDate) - new Date(b.date || b.invoiceDate || b.challanDate || b.billDate));
-    
-    let remainingAmount = paymentAmount;
-    const allocations = [];
-    
-    for (const bill of partyBills) {
-      if (remainingAmount <= 0) break;
+      const partyBills = bills.filter(bill => (bill.partyId === partyId || bill.party === partyId) && bill.outstanding > 0);
       
-      const billOutstanding = bill.outstanding || 0;
-      const allocatedAmount = Math.min(remainingAmount, billOutstanding);
+      // Sort by date (FIFO - oldest first)
+      partyBills.sort((a, b) => new Date(a.date || a.invoiceDate || a.challanDate || a.billDate) - new Date(b.date || b.invoiceDate || b.challanDate || b.billDate));
       
-      allocations.push({
-        billType: billType,
-        billId: bill.id,
-        billNumber: bill.number || bill.invoiceNumber || bill.challanNumber || bill.billNumber,
-        allocatedAmount: allocatedAmount,
-        billOutstanding: billOutstanding,
-        isFullPayment: allocatedAmount >= billOutstanding
-      });
+
       
-      remainingAmount -= allocatedAmount;
-    }
-    
-      console.log('FIFO result:', { allocations: allocations.length, remainingAmount });
-    return { allocations, remainingAmount };
+      // Check if there are any advance payments that should be applied first
+      const availableAdvance = getPartyAdvance(partyId);
+      let remainingAmount = paymentAmount;
+      const allocations = [];
+      
+      // If there's available advance, apply it first to outstanding bills
+      if (availableAdvance > 0 && partyBills.length > 0) {
+
+        
+        // Use the new advance allocation utility
+        const advanceResult = applyAdvanceToBillsUtil(partyId, partyBills, payments);
+        
+        if (advanceResult.totalApplied > 0) {
+          
+          // Add advance allocations to the result
+          advanceResult.allocations.forEach(advanceAlloc => {
+            const bill = partyBills.find(b => b.id === advanceAlloc.billId);
+            if (bill) {
+              allocations.push({
+                billType: billType,
+                billId: bill.id,
+                billNumber: bill.number || bill.invoiceNumber || bill.challanNumber || bill.billNumber,
+                allocatedAmount: advanceAlloc.amountApplied,
+                billOutstanding: advanceAlloc.billOutstanding,
+                isFullPayment: advanceAlloc.amountApplied >= advanceAlloc.billOutstanding,
+                isAdvanceAllocation: true,
+                advancePaymentId: advanceAlloc.advancePaymentId
+              });
+              
+              // Update the bill's outstanding amount for subsequent calculations
+              bill.outstanding = Math.max(0, bill.outstanding - advanceAlloc.amountApplied);
+            }
+          });
+          
+
+        }
+      }
+      
+      // Now allocate the current payment amount
+      for (const bill of partyBills) {
+        if (remainingAmount <= 0) break;
+        
+        // Check if this bill already has advance allocated
+        const existingAdvanceAllocation = allocations.find(alloc => alloc.billId === bill.id && alloc.isAdvanceAllocation);
+        const alreadyAllocated = existingAdvanceAllocation ? existingAdvanceAllocation.allocatedAmount : 0;
+        
+        const billOutstanding = bill.outstanding || 0;
+        const remainingBillOutstanding = billOutstanding - alreadyAllocated;
+        
+
+        
+        if (remainingBillOutstanding <= 0) {
+
+          continue; // Bill already fully paid by advance
+        }
+        
+        const allocatedAmount = Math.min(remainingAmount, remainingBillOutstanding);
+        
+        if (allocatedAmount > 0) {
+          if (existingAdvanceAllocation) {
+            // Update existing allocation
+            existingAdvanceAllocation.allocatedAmount += allocatedAmount;
+            existingAdvanceAllocation.isFullPayment = existingAdvanceAllocation.allocatedAmount >= billOutstanding;
+            existingAdvanceAllocation.isAdvanceAllocation = false; // Now it's a regular payment
+
+          } else {
+            // Create new allocation
+            allocations.push({
+              billType: billType,
+              billId: bill.id,
+              billNumber: bill.number || bill.invoiceNumber || bill.challanNumber || bill.billNumber,
+              allocatedAmount: allocatedAmount,
+              billOutstanding: billOutstanding,
+              isFullPayment: allocatedAmount >= billOutstanding,
+              isAdvanceAllocation: false
+            });
+
+          }
+          
+          remainingAmount -= allocatedAmount;
+
+        }
+      }
+      
+
+      return { allocations, remainingAmount };
     } catch (error) {
       console.error('Error in allocatePaymentFIFO:', error);
       return { allocations: [], remainingAmount: paymentAmount };
@@ -822,7 +883,7 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
 
   // Fetch invoices
   useEffect(() => {
-    console.log('Invoices useEffect triggered, payments length:', payments.length);
+    
     if (db && userId && isAuthReady) {
       const path = `artifacts/${appId}/users/${userId}/salesBills`;
       const billsCollectionRef = collection(db, path);
@@ -851,42 +912,30 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
               });
             }
             
-            // Calculate outstanding from payments (including advance allocations)
-            const billPayments = payments.filter(p => 
-              p.allocations && p.allocations.some(a => a.billId === bill.id && a.billType === 'invoice')
-            );
+            // Calculate total paid by summing all allocations from all payment documents
+            let totalPaid = 0;
             
-            // Calculate direct payments
-            const directPayments = billPayments.reduce((sum, payment) => {
-              const allocation = payment.allocations.find(a => a.billId === bill.id && a.billType === 'invoice');
-              return sum + (allocation ? allocation.allocatedAmount : 0);
-            }, 0);
-            
-            // Calculate advance allocations for this bill
-            // We need to check if any payments have advance allocations that should be applied to this bill
-            const advanceAllocations = payments.reduce((sum, payment) => {
-              if (payment.advanceAllocations && Array.isArray(payment.advanceAllocations) && payment.advanceAllocations.length > 0) {
-                // If this payment has advance allocations and is for the same party, 
-                // we need to determine how much of that advance should be applied to this specific bill
-                if (payment.partyId === bill.partyId || payment.partyId === bill.party) {
-                  // For now, we'll use a simple approach: distribute advance proportionally based on bill amount
-                  const totalAdvanceUsed = payment.advanceAllocations.reduce((acc, adv) => acc + adv.amountUsed, 0);
-                  const partyBills = getCurrentBills().filter(b => (b.partyId === bill.partyId || b.party === bill.partyId) && b.id !== bill.id);
-                  const totalPartyAmount = partyBills.reduce((acc, b) => acc + (b.totalAmount || 0), 0) + (bill.totalAmount || 0);
-                  if (totalPartyAmount > 0) {
-                    const billProportion = (bill.totalAmount || 0) / totalPartyAmount;
-                    return sum + (totalAdvanceUsed * billProportion);
-                  }
+            // Sum all allocations for this bill from all payments
+            payments.forEach(payment => {
+              if (payment.allocations) {
+                const billAllocation = payment.allocations.find(a => 
+                  a.billId === bill.id && a.billType === 'invoice'
+                );
+                if (billAllocation) {
+                  totalPaid += billAllocation.allocatedAmount || 0;
                 }
               }
-              return sum;
-            }, 0);
+            });
             
-            const totalPaid = directPayments + advanceAllocations;
             const totalAmount = parseFloat(bill.totalAmount || bill.amount) || 0;
             bill.outstanding = Math.max(0, totalAmount - totalPaid);
             bill.totalPaid = totalPaid;
             bill.totalAmount = totalAmount;
+            
+            // Count payments for this bill
+            const billPayments = payments.filter(p => 
+              p.allocations && p.allocations.some(a => a.billId === bill.id && a.billType === 'invoice')
+            );
             bill.paymentCount = billPayments.length;
             
             // Debug logging for first few bills
@@ -895,8 +944,6 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
                 id: bill.id,
                 number: bill.number,
                 totalAmount,
-                directPayments,
-                advanceAllocations,
                 totalPaid,
                 outstanding: bill.outstanding,
                 paymentCount: bill.paymentCount,
@@ -907,8 +954,8 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
             
             bills.push(bill);
           });
-                      // LIFO sorting is now handled by the pagination utility
-            setInvoices(bills);
+          // LIFO sorting is now handled by the pagination utility
+          setInvoices(bills);
         },
         (error) => {
           console.error('Error fetching invoices:', error);
@@ -937,28 +984,32 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
               date: convertTimestamp(data.date || data.createdAt)
             };
             
-            // Calculate outstanding from payments (including advance allocations)
-            const billPayments = payments.filter(p => 
-              p.allocations && p.allocations.some(a => a.billId === bill.id && a.billType === 'challan')
-            );
+            // Calculate total paid by summing all allocations from all payment documents
+            let totalPaid = 0;
             
-            // Calculate direct payments
-            const directPayments = billPayments.reduce((sum, payment) => {
-              const allocation = payment.allocations.find(a => a.billId === bill.id && a.billType === 'challan');
-              return sum + (allocation ? allocation.allocatedAmount : 0);
-            }, 0);
+            // Sum all allocations for this bill from all payments
+            payments.forEach(payment => {
+              if (payment.allocations) {
+                const billAllocation = payment.allocations.find(a => 
+                  a.billId === bill.id && a.billType === 'challan'
+                );
+                if (billAllocation) {
+                  totalPaid += billAllocation.allocatedAmount || 0;
+                }
+              }
+            });
             
-            // Calculate advance allocations for this bill
-            // For now, we'll skip advance allocation calculation in outstanding
-            // as it requires more complex tracking of which bills the advance was allocated to
-            const advanceAllocations = 0;
-            
-            const totalPaid = directPayments + advanceAllocations;
             const totalAmount = parseFloat(bill.totalAmount || bill.amount) || 0;
             bill.outstanding = Math.max(0, totalAmount - totalPaid);
             bill.totalPaid = totalPaid;
             bill.totalAmount = totalAmount;
+            
+            // Count payments for this bill
+            const billPayments = payments.filter(p => 
+              p.allocations && p.allocations.some(a => a.billId === bill.id && a.billType === 'challan')
+            );
             bill.paymentCount = billPayments.length;
+            
             bills.push(bill);
           });
           // LIFO sorting is now handled by the pagination utility
@@ -991,28 +1042,32 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
               date: convertTimestamp(data.date || data.createdAt)
             };
             
-            // Calculate outstanding from payments (including advance allocations)
-            const billPayments = payments.filter(p => 
-              p.allocations && p.allocations.some(a => a.billId === bill.id && a.billType === 'purchase')
-            );
+            // Calculate total paid by summing all allocations from all payment documents
+            let totalPaid = 0;
             
-            // Calculate direct payments
-            const directPayments = billPayments.reduce((sum, payment) => {
-              const allocation = payment.allocations.find(a => a.billId === bill.id && a.billType === 'purchase');
-              return sum + (allocation ? allocation.allocatedAmount : 0);
-            }, 0);
+            // Sum all allocations for this bill from all payments
+            payments.forEach(payment => {
+              if (payment.allocations) {
+                const billAllocation = payment.allocations.find(a => 
+                  a.billId === bill.id && a.billType === 'purchase'
+                );
+                if (billAllocation) {
+                  totalPaid += billAllocation.allocatedAmount || 0;
+                }
+              }
+            });
             
-            // Calculate advance allocations for this bill
-            // For now, we'll skip advance allocation calculation in outstanding
-            // as it requires more complex tracking of which bills the advance was allocated to
-            const advanceAllocations = 0;
-            
-            const totalPaid = directPayments + advanceAllocations;
             const totalAmount = parseFloat(bill.totalAmount || bill.amount) || 0;
             bill.outstanding = Math.max(0, totalAmount - totalPaid);
             bill.totalPaid = totalPaid;
             bill.totalAmount = totalAmount;
+            
+            // Count payments for this bill
+            const billPayments = payments.filter(p => 
+              p.allocations && p.allocations.some(a => a.billId === bill.id && a.billType === 'purchase')
+            );
             bill.paymentCount = billPayments.length;
+            
             bills.push(bill);
           });
           // LIFO sorting is now handled by the pagination utility
@@ -1044,15 +1099,7 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
           };
           allPayments.push(payment);
         });
-        console.log('Fetched all payments:', allPayments.length, 'payments');
-        console.log('First few payments:', allPayments.slice(0, 3).map(p => ({
-          id: p.id,
-          partyId: p.partyId,
-          partyName: p.partyName,
-          totalAmount: p.totalAmount,
-          allocations: p.allocations?.length || 0,
-          advanceAllocations: p.advanceAllocations?.length || 0
-        })));
+
         setPayments(allPayments);
         
         // Check for duplicate receipt numbers after payments are loaded
@@ -1082,19 +1129,13 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
   useEffect(() => {
     if (invoices.length > 0 || challans.length > 0 || purchaseBills.length > 0 || payments.length > 0) {
       const availableYears = getAvailableFinancialYears();
-      console.log('Available Financial Years:', availableYears);
-      console.log('Current Data Counts:', {
-        invoices: invoices.length,
-        challans: challans.length,
-        purchaseBills: purchaseBills.length,
-        payments: payments.length
-      });
+
       
       if (availableYears.length > 0 && !selectedFinancialYear) {
         // Set to current financial year if available, otherwise use the first available year
         const currentFY = getCurrentFinancialYear();
         const defaultYear = availableYears.includes(currentFY) ? currentFY : availableYears[0];
-        console.log('Setting default financial year:', { currentFY, defaultYear, availableYears });
+
         setSelectedFinancialYear(defaultYear);
       }
     }
@@ -1185,13 +1226,7 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
         startDate = yearRange.startDate;
         endDate = yearRange.endDate;
         
-        // Debug logging
-        console.log('Financial Year Filter Debug:', {
-          selectedFinancialYear,
-          startDate: startDate.toISOString(),
-          endDate: endDate.toISOString(),
-          totalBillsBeforeFilter: bills.length
-        });
+
       }
       
       bills = bills.filter(bill => {
@@ -1199,26 +1234,12 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
         const billDateValue = bill[billDateField];
         const billDate = new Date(billDateValue);
         
-        // Debug logging for first few bills
-        if (bills.length <= 3) {
-          console.log('Bill Date Debug:', {
-            billId: bill.id,
-            billDateField,
-            billDateValue,
-            billDate: billDate.toISOString(),
-            isInRange: billDate >= startDate && billDate <= endDate
-          });
-        }
+
         
         return billDate >= startDate && billDate <= endDate;
       });
       
-      // Debug logging
-      if (selectedSubFilter === '') {
-        console.log('Financial Year Filter Result:', {
-          totalBillsAfterFilter: bills.length
-        });
-      }
+
     }
     
     // Add partyName field for sorting and normalize bill number field
@@ -1295,10 +1316,24 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
     const receiptNum = await generateReceiptNumber();
     setReceiptNumber(receiptNum);
     setShowPaymentModal(true);
+    
     // Show advance info
-    const collected = getPartyAdvance(bill.partyId || bill.party);
-    setAdvanceInfo({ collected, used: 0 });
+    const partyId = bill.partyId || bill.party;
+    const collected = getPartyAdvance(partyId);
+    
+    // Calculate how much advance will be auto-applied
+    let advanceToBeApplied = 0;
+    if (collected > 0) {
+      const { allocatedAdvance } = allocateAdvanceToBill(partyId, bill.outstanding);
+      advanceToBeApplied = allocatedAdvance;
+    }
+    
+    setAdvanceInfo({ collected, used: advanceToBeApplied });
     setShowAdvanceInfo(collected > 0);
+    
+    if (collected > 0) {
+
+    }
   };
 
   // Handle add khata payment (Party-wise)
@@ -1310,15 +1345,33 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
     const receiptNum = await generateReceiptNumber();
     setReceiptNumber(receiptNum);
     setShowPaymentModal(true);
+    
     // Show advance info
     const collected = getPartyAdvance(partyId);
-    setAdvanceInfo({ collected, used: 0 });
+    
+    // Calculate how much advance will be auto-applied to outstanding bills
+    let advanceToBeApplied = 0;
+    if (collected > 0) {
+      const outstandingBills = getCurrentBills().filter(bill => 
+        (bill.partyId === partyId || bill.party === partyId) && 
+        bill.outstanding > 0
+      );
+      
+      if (outstandingBills.length > 0) {
+        const totalOutstanding = outstandingBills.reduce((sum, bill) => sum + bill.outstanding, 0);
+        const { allocatedAdvance } = allocateAdvanceToBill(partyId, totalOutstanding);
+        advanceToBeApplied = allocatedAdvance;
+      }
+    }
+    
+    setAdvanceInfo({ collected, used: advanceToBeApplied });
     setShowAdvanceInfo(collected > 0);
+    
+
   };
 
   // Handle save payment
   const handleSavePayment = async () => {
-    console.log('Payment save started');
 
     if (!selectedPartyForPayment || !paymentAmount) {
       alert('Please select a party and enter payment amount.');
@@ -1351,18 +1404,30 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
         // Bill-wise payment - allocate to specific bill
         const billOutstanding = selectedBill.outstanding || 0;
         
+        // Check if payment amount exceeds bill outstanding
+        if (paymentAmountNum > billOutstanding) {
+          alert(`Payment amount (₹${paymentAmountNum.toLocaleString('en-IN')}) cannot exceed the bill's outstanding amount (₹${billOutstanding.toLocaleString('en-IN')}). Please use Khata-wise payment for amounts greater than the bill outstanding.`);
+          setPaymentType('khata');
+          return;
+        }
+        
         // First, try to allocate available advance to this bill
         const { allocatedAdvance, advanceAllocs, remainingBillAmount } = allocateAdvanceToBill(selectedPartyForPayment, billOutstanding);
+        
+
+        
         if (allocatedAdvance > 0) {
           advanceAllocations = advanceAllocs;
           // Mark advances as used
           await markAdvanceUsed(advanceAllocs);
+
         }
         
         // Now allocate the new payment
         const actualOutstanding = remainingBillAmount; // After advance allocation
         const allocatedAmount = Math.min(paymentAmountNum, actualOutstanding);
-        const remainingAmount = paymentAmountNum - allocatedAmount;
+        
+
         
         // Update the bill's outstanding amount for display
         selectedBill.outstanding = actualOutstanding;
@@ -1376,75 +1441,7 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
           isFullPayment: allocatedAmount >= actualOutstanding
         }];
         
-        // Enhanced FIFO Logic: If payment amount exceeds bill outstanding, allocate excess to other bills
-        if (remainingAmount > 0) {
-          console.log(`Payment amount (₹${paymentAmountNum}) exceeds bill outstanding (₹${actualOutstanding}). Allocating excess ₹${remainingAmount} using FIFO.`);
-          
-          // Get all other outstanding bills for this party (excluding the current bill)
-          const otherOutstandingBills = getCurrentBills().filter(bill => 
-            (bill.partyId === selectedPartyForPayment || bill.party === selectedPartyForPayment) && 
-            bill.outstanding > 0 && 
-            bill.id !== selectedBill.id
-          );
-          
-          if (otherOutstandingBills.length > 0) {
-            // Sort by date (FIFO - oldest first)
-            otherOutstandingBills.sort((a, b) => {
-              const dateA = new Date(a[getBillDateField()] || a.date || a.createdAt);
-              const dateB = new Date(b[getBillDateField()] || b.date || b.createdAt);
-              return dateA - dateB;
-            });
-            
-            let remainingToAllocate = remainingAmount;
-            const fifoAllocations = [];
-            
-            for (const bill of otherOutstandingBills) {
-              if (remainingToAllocate <= 0) break;
-              
-              const billOutstanding = bill.outstanding || 0;
-              const allocatedToThisBill = Math.min(remainingToAllocate, billOutstanding);
-              
-              fifoAllocations.push({
-                billType: activeTab,
-                billId: bill.id,
-                billNumber: getBillNumber(bill),
-                allocatedAmount: allocatedToThisBill,
-                billOutstanding: billOutstanding,
-                isFullPayment: allocatedToThisBill >= billOutstanding
-              });
-              
-              remainingToAllocate -= allocatedToThisBill;
-            }
-            
-            allocations.push(...fifoAllocations);
-            
-            // Update remaining amount (if any bills couldn't be fully paid)
-            const finalRemainingAmount = remainingToAllocate;
-            
-            paymentData = {
-              receiptNumber: receiptNumber,
-              paymentDate: paymentDate,
-              partyId: selectedPartyForPayment,
-              partyName: getPartyName(selectedPartyForPayment),
-              totalAmount: paymentAmountNum,
-              paymentMode: paymentMode,
-              reference: paymentReference,
-              notes: paymentNotes,
-              type: activeTab,
-              paymentType: 'bill',
-              billId: selectedBill.id,
-              billNumber: getBillNumber(selectedBill),
-              allocations: allocations,
-              remainingAmount: finalRemainingAmount,
-              advanceAllocations: advanceAllocations,
-              advanceUsed: allocatedAdvance,
-              fifoAllocationUsed: remainingAmount - finalRemainingAmount,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp()
-            };
-          } else {
-            // No other outstanding bills, create advance
-            console.log(`No other outstanding bills found. Creating advance of ₹${remainingAmount} for party ${selectedPartyForPayment}`);
+        // Simple bill payment - no excess amount handling since it's restricted above
         paymentData = {
           receiptNumber: receiptNumber,
           paymentDate: paymentDate,
@@ -1459,45 +1456,22 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
           billId: selectedBill.id,
           billNumber: getBillNumber(selectedBill),
           allocations: allocations,
-          remainingAmount: remainingAmount,
-              advanceAllocations: advanceAllocations,
-              advanceUsed: allocatedAdvance,
-              fifoAllocationUsed: 0,
+          remainingAmount: 0, // No remaining amount since payment cannot exceed bill outstanding
+          advanceAllocations: advanceAllocations,
+          advanceUsed: allocatedAdvance,
+          fifoAllocationUsed: 0,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         };
-          }
-      } else {
-          // No excess amount, normal payment
-          paymentData = {
-            receiptNumber: receiptNumber,
-            paymentDate: paymentDate,
-            partyId: selectedPartyForPayment,
-            partyName: getPartyName(selectedPartyForPayment),
-            totalAmount: paymentAmountNum,
-            paymentMode: paymentMode,
-            reference: paymentReference,
-            notes: paymentNotes,
-            type: activeTab,
-            paymentType: 'bill',
-            billId: selectedBill.id,
-            billNumber: getBillNumber(selectedBill),
-            allocations: allocations,
-            remainingAmount: remainingAmount,
-            advanceAllocations: advanceAllocations,
-            advanceUsed: allocatedAdvance,
-            fifoAllocationUsed: 0,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp()
-          };
-        }
 
       } else {
-        // Khata-wise payment - first try to allocate available advance
+        // Khata-wise payment - combine advance + new payment for total allocation
         const availableAdvance = getPartyAdvance(selectedPartyForPayment);
         let advanceAllocations = [];
         let advanceUsed = 0;
-        let remainingPaymentAmount = paymentAmountNum;
+        let totalAmountToAllocate = paymentAmountNum;
+        
+
         
         if (availableAdvance > 0) {
           // Get all outstanding bills for this party
@@ -1506,23 +1480,34 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
             bill.outstanding > 0
           );
           
-                      if (outstandingBills.length > 0) {
-              // Allocate advance to outstanding bills
-              const advanceResult = allocateAdvanceToBill(selectedPartyForPayment, outstandingBills.reduce((sum, bill) => sum + bill.outstanding, 0));
+
+          
+          if (outstandingBills.length > 0) {
+            // Calculate total amount to allocate (advance + new payment)
+            totalAmountToAllocate = availableAdvance + paymentAmountNum;
+
+            
+            // Mark advances as used first
+            const advanceResult = allocateAdvanceToBill(selectedPartyForPayment, availableAdvance);
+            
+            if (advanceResult.allocatedAdvance > 0) {
+              advanceAllocations = advanceResult.advanceAllocations;
+              advanceUsed = advanceResult.allocatedAdvance;
               
-              if (advanceResult.allocatedAdvance > 0) {
-                advanceAllocations = advanceResult.advanceAllocations;
-                advanceUsed = advanceResult.allocatedAdvance;
-                // Mark advances as used - only if advanceAllocations is an array
-                if (Array.isArray(advanceResult.advanceAllocations) && advanceResult.advanceAllocations.length > 0) {
-                  await markAdvanceUsed(advanceResult.advanceAllocations);
-                }
+
+              
+              // Mark advances as used - only if advanceAllocations is an array
+              if (Array.isArray(advanceResult.advanceAllocations) && advanceResult.advanceAllocations.length > 0) {
+                await markAdvanceUsed(advanceResult.advanceAllocations);
+
               }
             }
+          }
         }
         
-        // Now allocate the remaining payment amount using FIFO
-        const fifoResult = allocatePaymentFIFO(selectedPartyForPayment, remainingPaymentAmount, activeTab);
+        // Now allocate the total amount using FIFO
+
+        const fifoResult = allocatePaymentFIFO(selectedPartyForPayment, totalAmountToAllocate, activeTab);
         
         // Validate FIFO result
         if (!fifoResult || !Array.isArray(fifoResult.allocations)) {
@@ -1537,7 +1522,7 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
           paymentDate: paymentDate,
           partyId: selectedPartyForPayment,
           partyName: getPartyName(selectedPartyForPayment),
-          totalAmount: paymentAmountNum,
+          totalAmount: totalAmountToAllocate, // Use combined amount (advance + payment)
           paymentMode: paymentMode,
           reference: paymentReference,
           notes: paymentNotes,
@@ -1547,6 +1532,8 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
           remainingAmount: remainingAmount,
           advanceAllocations: advanceAllocations,
           advanceUsed: advanceUsed,
+          originalPaymentAmount: paymentAmountNum, // Store the original payment amount entered by user
+          advanceAmount: availableAdvance, // Store the advance amount that was combined
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         };
@@ -1560,7 +1547,6 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
       // Add to payments collection
       const paymentsRef = collection(db, `artifacts/${appId}/users/${userId}/payments`);
       const docRef = await addDoc(paymentsRef, paymentData);
-      console.log('Payment added with ID:', docRef.id);
 
       // Reset form
       setPaymentAmount('');
@@ -1574,6 +1560,7 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
       setShowPaymentModal(false);
       setSelectedBill(null);
       
+      // Show success message
       alert('Payment added successfully!');
     } catch (error) {
       console.error('Error saving payment:', error);
@@ -2063,7 +2050,6 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
   // Check and fix duplicate receipt numbers
   const checkAndFixDuplicateReceiptNumbers = async () => {
     try {
-      console.log('=== CHECKING ALL RECEIPT NUMBERS ===');
       const paymentsQuery = query(collection(db, `artifacts/${appId}/users/${userId}/payments`), orderBy('receiptNumber'));
       const paymentsSnapshot = await getDocs(paymentsQuery);
       
@@ -2089,32 +2075,16 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
         }
       });
       
-      console.log('=== ALL EXISTING RECEIPT NUMBERS ===');
-      allReceiptNumbers.forEach((item, index) => {
-        console.log(`${index + 1}. ${item.receiptNumber} - ${item.partyName} - ₹${item.amount}`);
-      });
-      
-      console.log('=== DUPLICATE RECEIPT NUMBERS ===');
-      console.log('Duplicates found:', duplicates);
-      
       if (duplicates.length > 0) {
-        console.log('=== FIXING DUPLICATES ===');
         // Fix duplicates by regenerating receipt numbers
         for (const duplicate of duplicates) {
           const newReceiptNumber = await generateReceiptNumber();
-          console.log(`Fixing duplicate: ${duplicate.receiptNumber} -> ${newReceiptNumber}`);
           
           await updateDoc(doc(db, `artifacts/${appId}/users/${userId}/payments`, duplicate.id), {
             receiptNumber: newReceiptNumber
           });
         }
-        
-        console.log(`Fixed ${duplicates.length} duplicate receipt numbers`);
-      } else {
-        console.log('No duplicates found!');
       }
-      
-      console.log('=== END CHECK ===');
     } catch (error) {
       console.error('Error checking/fixing duplicate receipt numbers:', error);
     }
@@ -2131,22 +2101,61 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
           setShowPaymentDetailsModal(false);
         } else if (showPaymentModal) {
           setShowPaymentModal(false);
+        } else if (advanceModalParty) {
+          setAdvanceModalParty(null);
         }
       }
     };
-    if (showPaymentModal || showPaymentDetailsModal || showReceiptModal) {
+    
+    // Add event listener if any modal is open
+    if (showPaymentModal || showPaymentDetailsModal || showReceiptModal || advanceModalParty) {
       document.addEventListener('keydown', handleEscKey);
     }
+    
     return () => {
       document.removeEventListener('keydown', handleEscKey);
     };
-  }, [showPaymentModal, showPaymentDetailsModal, showReceiptModal]);
+  }, [showPaymentModal, showPaymentDetailsModal, showReceiptModal, advanceModalParty]);
 
   // Get bill payments
   const getBillPayments = (bill) => {
-    return payments.filter(p => 
-      p.allocations && p.allocations.some(a => a.billId === bill.id && a.billType === activeTab)
-    );
+    return payments.filter(payment => {
+      // Check if payment is for the same party
+      const paymentPartyId = payment.partyId || payment.party;
+      const billPartyId = bill.partyId || bill.party;
+      if (paymentPartyId !== billPartyId) {
+        return false;
+      }
+      
+      // Special handling for advance receipts
+      if (payment.receiptNumber && payment.receiptNumber.startsWith('ADV-')) {
+        // Extract invoice number from advance receipt (e.g., ADV-INV25-26/12 -> INV25-26/12)
+        const targetInvoiceNo = payment.receiptNumber.replace('ADV-', '');
+        const currentInvoiceNo = bill.number || bill.invoiceNumber || bill.id;
+        return targetInvoiceNo === currentInvoiceNo;
+      }
+      
+      // Check if payment has allocations for this invoice
+      if (payment.allocations && Array.isArray(payment.allocations)) {
+        return payment.allocations.some(allocation => 
+          allocation.billId === bill.id && allocation.billType === activeTab
+        );
+      }
+      
+      // Check if payment has advance allocations for this invoice
+      if (payment.advanceAllocations && Array.isArray(payment.advanceAllocations)) {
+        return payment.advanceAllocations.some(allocation => 
+          allocation.billId === bill.id
+        );
+      }
+      
+      // Check direct billId match
+      if (payment.billId === bill.id) {
+        return true;
+      }
+      
+      return false;
+    });
   };
 
   // Get party-wise summary
@@ -2524,6 +2533,15 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
   };
 
   /**
+   * Check if a payment is an advance payment
+   * @param {Object} payment
+   * @returns {boolean}
+   */
+  const isAdvancePayment = (payment) => {
+    return isAdvancePaymentUtil(payment);
+  };
+
+  /**
    * Mark advances as used (update payment records with advanceUsed field)
    * @param {Array} allocations [{paymentId, amountUsed}]
    */
@@ -2544,31 +2562,25 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
     return getAdvanceDetailsUtil(partyId, payments);
   };
 
-  // Set advance modal party
-  const [advanceModalParty, setAdvanceModalParty] = useState(null);
 
-  // Add state for advance info popup
-  const [showAdvanceInfo, setShowAdvanceInfo] = useState(false);
-  const [advanceInfo, setAdvanceInfo] = useState({ collected: 0, used: 0 });
 
-  // Add ESC key handling for modals (LIFO order)
+
+
+  // Reset advance info when payment modal is closed
   useEffect(() => {
-    const handleEsc = (e) => {
-      if (e.key === 'Escape') {
-        if (showReceiptModal) {
-          setShowReceiptModal(false);
-        } else if (advanceModalParty) {
-          setAdvanceModalParty(null);
-        }
-      }
-    };
-    window.addEventListener('keydown', handleEsc);
-    return () => window.removeEventListener('keydown', handleEsc);
-  }, [showReceiptModal, advanceModalParty]);
+    if (!showPaymentModal) {
+      setShowAdvanceInfo(false);
+      setAdvanceInfo({ collected: 0, used: 0 });
+    }
+  }, [showPaymentModal]);
+
+
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
-      <h1 className="text-3xl font-bold text-gray-800 mb-6">Payments</h1>
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-3xl font-bold text-gray-800">Payments</h1>
+      </div>
       
       {/* Tabs */}
       <div className="flex space-x-1 mb-6">
@@ -3201,12 +3213,15 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
               <h2 className="text-xl font-semibold">
                 {paymentType === 'bill' ? 'Add Bill Payment' : 'Add Khata Payment'}
               </h2>
-              <button
-                onClick={() => setShowPaymentModal(false)}
-                className="text-gray-500 hover:text-gray-700 text-xl"
-              >
-                ✕
-              </button>
+              <div className="flex items-center space-x-2">
+                <span className="text-xs text-gray-500">Press ESC to close</span>
+                <button
+                  onClick={() => setShowPaymentModal(false)}
+                  className="text-gray-500 hover:text-gray-700 text-xl"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
             
             <div className="space-y-4">
@@ -3257,13 +3272,31 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
                   {selectedPartyForPayment && (() => {
                     const availableAdvance = getPartyAdvance(selectedPartyForPayment);
                     if (availableAdvance > 0) {
+                      // Calculate how much advance will be auto-applied
+                      const outstandingBills = getCurrentBills().filter(bill => 
+                        (bill.partyId === selectedPartyForPayment || bill.party === selectedPartyForPayment) && 
+                        bill.outstanding > 0
+                      );
+                      
+                      let advanceToBeApplied = 0;
+                      if (outstandingBills.length > 0) {
+                        const totalOutstanding = outstandingBills.reduce((sum, bill) => sum + bill.outstanding, 0);
+                        const { allocatedAdvance } = allocateAdvanceToBill(selectedPartyForPayment, totalOutstanding);
+                        advanceToBeApplied = allocatedAdvance;
+                      }
+                      
                       return (
-                        <div className="bg-yellow-50 p-3 rounded-md border border-yellow-200">
-                          <div className="text-sm text-yellow-800">
-                            <strong>Available Advance:</strong> ₹{availableAdvance.toLocaleString('en-IN')}
+                        <div className="bg-blue-50 p-3 rounded-md border border-blue-200">
+                          <div className="text-sm text-blue-800">
+                            <strong>Advance Auto-Adjustment:</strong> ₹{availableAdvance.toLocaleString('en-IN')} available
                           </div>
-                          <div className="text-xs text-yellow-600 mt-1">
-                            This advance will be automatically allocated to outstanding bills before processing the new payment.
+                          {advanceToBeApplied > 0 && (
+                            <div className="text-xs text-green-600 mt-1 font-medium">
+                              ₹{advanceToBeApplied.toLocaleString('en-IN')} will be automatically applied to outstanding bills
+                            </div>
+                          )}
+                          <div className="text-xs text-blue-600 mt-1">
+                            Advance will be allocated chronologically (oldest bills first) before processing the new payment.
                           </div>
                         </div>
                       );
@@ -3294,6 +3327,33 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
                       readOnly
                     />
                   </div>
+                  
+                  {/* Advance Information for Bill Payment */}
+                  {(() => {
+                    const partyId = selectedBill.partyId || selectedBill.party;
+                    const availableAdvance = getPartyAdvance(partyId);
+                    if (availableAdvance > 0) {
+                      // Calculate how much advance will be auto-applied to this specific bill
+                      const { allocatedAdvance } = allocateAdvanceToBill(partyId, selectedBill.outstanding);
+                      
+                      return (
+                        <div className="bg-blue-50 p-3 rounded-md border border-blue-200">
+                          <div className="text-sm text-blue-800">
+                            <strong>Advance Auto-Adjustment:</strong> ₹{availableAdvance.toLocaleString('en-IN')} available
+                          </div>
+                          {allocatedAdvance > 0 && (
+                            <div className="text-xs text-green-600 mt-1 font-medium">
+                              ₹{allocatedAdvance.toLocaleString('en-IN')} will be automatically applied to this bill
+                            </div>
+                          )}
+                          <div className="text-xs text-blue-600 mt-1">
+                            Advance will be applied first, then the payment amount will be allocated.
+                          </div>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
                   
                   {/* Advance Information */}
                   {(() => {
@@ -3344,11 +3404,7 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
                             (after ₹{availableAdvance.toLocaleString('en-IN')} advance allocation)
                           </div>
                         )}
-                        <div className="text-xs text-blue-600">
-                          <strong>Note:</strong> If you pay more than ₹{actualOutstanding.toLocaleString('en-IN')}, 
-                          the excess amount will be automatically allocated to other outstanding bills using FIFO. 
-                          If no other bills exist, it will be saved as advance.
-                        </div>
+
                       </div>
                     );
                   })()}
@@ -3417,13 +3473,17 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
               {showAdvanceInfo && (
                 <div className="p-3 bg-yellow-50 border-l-4 border-yellow-400 text-yellow-800 rounded">
                   <div className="font-semibold mb-1">Advance Information</div>
-                  <div>Advance Collected: <span className="font-bold">₹{advanceInfo.collected.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></div>
-                  {advanceInfo.used > 0 && (
-                    <div>Advance Used: <span className="font-bold">₹{advanceInfo.used.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></div>
-                  )}
+                  <div>Available Advance: <span className="font-bold">₹{advanceInfo.collected.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></div>
+                  <div>New Payment Amount: <span className="font-bold">₹{paymentAmount ? parseFloat(paymentAmount).toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '0'}</span></div>
+                  <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded">
+                    <div className="font-semibold text-green-800">Total Amount to be Applied: <span className="font-bold">₹{(advanceInfo.collected + (paymentAmount ? parseFloat(paymentAmount) : 0)).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span></div>
+                    <div className="text-xs text-green-600 mt-1">This total amount (advance + payment) will be allocated to outstanding bills using FIFO.</div>
+                  </div>
                   <button className="mt-2 text-blue-600 underline text-xs" onClick={() => setShowAdvanceInfo(false)}>Dismiss</button>
                 </div>
               )}
+              
+
             </div>
             
             <div className="flex space-x-3 mt-6">
@@ -3457,12 +3517,15 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
                   Total Amount: ₹{(selectedBill.totalAmount || 0).toLocaleString('en-IN')}
                 </p>
               </div>
-              <button
-                onClick={() => setShowPaymentDetailsModal(false)}
-                className="text-gray-500 hover:text-gray-700 text-xl"
-              >
-                ✕
-              </button>
+              <div className="flex items-center space-x-2">
+                <span className="text-xs text-gray-500">Press ESC to close</span>
+                <button
+                  onClick={() => setShowPaymentDetailsModal(false)}
+                  className="text-gray-500 hover:text-gray-700 text-xl"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
             
             {/* Payment Summary */}
@@ -3586,12 +3649,15 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
       {advanceModalParty && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black bg-opacity-40 p-4">
           <div className="bg-white rounded-lg shadow-lg p-6 max-w-lg w-full relative max-h-[90vh] overflow-y-auto">
-            <button
-              className="absolute top-2 right-2 text-gray-500 hover:text-gray-800"
-              onClick={() => setAdvanceModalParty(null)}
-            >
-              ×
-            </button>
+            <div className="absolute top-2 right-2 flex items-center space-x-2">
+              <span className="text-xs text-gray-500">Press ESC to close</span>
+              <button
+                className="text-gray-500 hover:text-gray-800"
+                onClick={() => setAdvanceModalParty(null)}
+              >
+                ×
+              </button>
+            </div>
             <h2 className="text-xl font-bold mb-4 text-blue-700">Advance Details</h2>
             <div className="mb-4">
               <span className="font-semibold">Party:</span> {getPartyName(advanceModalParty)}
@@ -3643,37 +3709,40 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
                       <div className="bg-white rounded-lg p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-semibold">Payment Receipt - {selectedReceipt.receiptNumber}</h2>
-              <div className="flex space-x-2">
-                <button
-                  onClick={() => {
-                    setShowReceiptModal(false);
-                    setShowPaymentDetailsModal(true);
-                  }}
-                  className="bg-gray-500 text-white px-4 py-2 rounded-md hover:bg-gray-600 transition-colors"
-                  title="Back to receipts list"
-                >
-                  ← Back to List
-                </button>
-                <button
-                  onClick={printReceipt}
-                  className="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 transition-colors"
-                  title="Print using browser print dialog"
-                >
-                  Print
-                </button>
-                <button
-                  onClick={generatePDFReceipt}
-                  className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors"
-                  title="Download as PDF file"
-                >
-                  Download PDF
-                </button>
-                <button
-                  onClick={() => setShowReceiptModal(false)}
-                  className="bg-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-400 transition-colors"
-                >
-                  Close
-                </button>
+              <div className="flex items-center space-x-4">
+                <span className="text-xs text-gray-500">Press ESC to close</span>
+                <div className="flex space-x-2">
+                  <button
+                    onClick={() => {
+                      setShowReceiptModal(false);
+                      setShowPaymentDetailsModal(true);
+                    }}
+                    className="bg-gray-500 text-white px-4 py-2 rounded-md hover:bg-gray-600 transition-colors"
+                    title="Back to receipts list"
+                  >
+                    ← Back to List
+                  </button>
+                  <button
+                    onClick={printReceipt}
+                    className="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 transition-colors"
+                    title="Print using browser print dialog"
+                  >
+                    Print
+                  </button>
+                  <button
+                    onClick={generatePDFReceipt}
+                    className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors"
+                    title="Download as PDF file"
+                  >
+                    Download PDF
+                  </button>
+                  <button
+                    onClick={() => setShowReceiptModal(false)}
+                    className="bg-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-400 transition-colors"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
             </div>
             <div className="border border-gray-200 rounded-lg p-4">

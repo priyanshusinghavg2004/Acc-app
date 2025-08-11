@@ -186,12 +186,15 @@ export const StandardModal = ({
         <div className="flex justify-between items-center p-4 border-b border-gray-200 bg-gray-50">
           <h3 className="text-xl font-bold text-gray-900">{title}</h3>
           {showCloseButton && (
-            <button
-              onClick={onClose}
-              className="text-gray-500 hover:text-gray-700 text-xl transition-colors"
-            >
-              ✕
-            </button>
+            <div className="flex items-center space-x-2">
+              <span className="text-xs text-gray-500">Press ESC to close</span>
+              <button
+                onClick={onClose}
+                className="text-gray-500 hover:text-gray-700 text-xl transition-colors"
+              >
+                ✕
+              </button>
+            </div>
           )}
         </div>
         
@@ -264,6 +267,7 @@ export const PreviewModal = ({
             <h3 className="text-xl font-bold text-gray-900">{title}</h3>
           </div>
           <ActionBar>
+            <span className="text-xs text-gray-500">Press ESC to close</span>
             {showPrintButton && (
               <StandardButton variant="primary" onClick={onPrint}>
                 Print

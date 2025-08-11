@@ -16,14 +16,13 @@ import Expenses from './components/Expenses';
 import UserOnboarding from './components/UserOnboarding';
 import HelpSupport from './components/HelpSupport';
 import NotificationSettings from './components/NotificationSettings';
-import EmailVerification from './components/EmailVerification';
+import LandingPage from './components/LandingPage';
 
 import DataExport from './components/DataExport';
 import OfflineIndicator from './components/OfflineIndicator';
 import MobileBottomNav from './components/MobileBottomNav';
 import Settings from './components/Settings';
-import AdminPanel from './components/AdminPanel';
-import JoinCompany from './components/JoinCompany';
+
 import { db, auth } from './firebase.config';
 import { 
   onAuthStateChanged, 
@@ -45,23 +44,6 @@ import {
 } from 'firebase/firestore';
 import { getCompanyInfo } from './utils/companyUtils';
 import './utils/runMigration';
-import {
-  sendVerificationEmail,
-  checkEmailVerification,
-  updateUserEmailVerificationStatus,
-  generateVerificationCode,
-  storeVerificationCode,
-  verifyPhoneCode,
-  sendPasswordReset,
-  resetPassword,
-  trackLoginAttempt,
-  getLoginAttempts,
-  registerUser,
-  validateEmail,
-  validatePhone,
-  validatePassword,
-  formatPhoneNumber
-} from './utils/verification';
 
 function App() {
   const [user, setUser] = useState(null);
@@ -70,38 +52,16 @@ function App() {
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [showRegister, setShowRegister] = useState(false);
-  const [showForgotPassword, setShowForgotPassword] = useState(false);
-  const [showPhoneVerification, setShowPhoneVerification] = useState(false);
-  const [showEmailVerification, setShowEmailVerification] = useState(false);
   const [registerEmail, setRegisterEmail] = useState('');
   const [registerPassword, setRegisterPassword] = useState('');
   const [registerCompany, setRegisterCompany] = useState('');
   const [registerError, setRegisterError] = useState('');
-  const [registerContact, setRegisterContact] = useState('');
   const [showCompanyDetailsWizard, setShowCompanyDetailsWizard] = useState(false);
   const [companyWizardStep, setCompanyWizardStep] = useState(1);
   const [showCompanyDetailsModal, setShowCompanyDetailsModal] = useState(false);
   const appId = 'acc-app-e5316'; // Use the Firebase project ID
-  
-  // Verification states
-  const [verificationCode, setVerificationCode] = useState('');
-  const [phoneVerificationId, setPhoneVerificationId] = useState('');
-  const [verificationError, setVerificationError] = useState('');
-  const [isVerifying, setIsVerifying] = useState(false);
-  const [resendTimer, setResendTimer] = useState(0);
-  const [loginAttempts, setLoginAttempts] = useState(0);
-  const [isAccountLocked, setIsAccountLocked] = useState(false);
-  const [lockoutTimer, setLockoutTimer] = useState(0);
-  
-  // Password reset states
-  const [resetEmail, setResetEmail] = useState('');
-  const [resetError, setResetError] = useState('');
-  const [resetSuccess, setResetSuccess] = useState(false);
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmNewPassword, setConfirmNewPassword] = useState('');
-  const [resetCode, setResetCode] = useState('');
-  const [showResetPasswordForm, setShowResetPasswordForm] = useState(false);
-  const [showAdminPanel, setShowAdminPanel] = useState(false);
+
+
   const [companyInfo, setCompanyInfo] = useState(null);
   const [userInfo, setUserInfo] = useState(null);
   
@@ -160,51 +120,6 @@ function App() {
   // Add state to store the newly created user's UID during registration:
   const [newUserId, setNewUserId] = useState(null);
 
-  // Load login attempts from localStorage
-  useEffect(() => {
-    const attempts = localStorage.getItem('loginAttempts') || 0;
-    const lockoutTime = localStorage.getItem('lockoutTime') || 0;
-    const currentTime = Date.now();
-    
-    if (lockoutTime && currentTime < parseInt(lockoutTime)) {
-      setIsAccountLocked(true);
-      const remainingTime = Math.ceil((parseInt(lockoutTime) - currentTime) / 1000);
-      setLockoutTimer(remainingTime);
-    } else {
-      setLoginAttempts(parseInt(attempts));
-      setIsAccountLocked(false);
-    }
-  }, []);
-
-  // Handle lockout timer
-  useEffect(() => {
-    if (lockoutTimer > 0) {
-      const timer = setInterval(() => {
-        setLockoutTimer(prev => {
-          if (prev <= 1) {
-            setIsAccountLocked(false);
-            setLoginAttempts(0);
-            localStorage.removeItem('loginAttempts');
-            localStorage.removeItem('lockoutTime');
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-      return () => clearInterval(timer);
-    }
-  }, [lockoutTimer]);
-
-  // Handle resend timer
-  useEffect(() => {
-    if (resendTimer > 0) {
-      const timer = setInterval(() => {
-        setResendTimer(prev => prev - 1);
-      }, 1000);
-      return () => clearInterval(timer);
-    }
-  }, [resendTimer]);
-
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setUser(user);
@@ -213,19 +128,6 @@ function App() {
       // Clear newUserId when user logs out
       if (!user) {
         setNewUserId(null);
-        setShowEmailVerification(false);
-        setShowPhoneVerification(false);
-      } else {
-        // Check if email is verified
-        if (user && !user.emailVerified) {
-          setShowEmailVerification(true);
-        }
-        
-        // Check if phone is verified
-        const userDoc = await getDoc(doc(db, 'users', user.uid));
-        if (userDoc.exists() && !userDoc.data().phoneVerified) {
-          setShowPhoneVerification(true);
-        }
       }
     });
     return () => unsubscribe();
@@ -347,68 +249,43 @@ function App() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [avatarDropdownOpen]);
 
-  // Enhanced login with rate limiting
+  // Simple login with email and password
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoginError('');
-    
-    if (isAccountLocked) {
-      setLoginError(`Account temporarily locked. Please try again in ${lockoutTimer} seconds.`);
-      return;
-    }
 
     try {
       await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
-      // Reset login attempts on successful login
-      setLoginAttempts(0);
-      localStorage.removeItem('loginAttempts');
-      localStorage.removeItem('lockoutTime');
     } catch (err) {
-      const newAttempts = loginAttempts + 1;
-      setLoginAttempts(newAttempts);
-      localStorage.setItem('loginAttempts', newAttempts.toString());
-      
-      if (newAttempts >= 5) {
-        // Lock account for 15 minutes
-        const lockoutTime = Date.now() + (15 * 60 * 1000);
-        localStorage.setItem('lockoutTime', lockoutTime.toString());
-        setIsAccountLocked(true);
-        setLockoutTimer(15 * 60);
-        setLoginError('Too many failed attempts. Account locked for 15 minutes.');
+      console.error('Login error:', err);
+      if (err.code === 'auth/user-not-found') {
+        setLoginError('No account found with this email address.');
+      } else if (err.code === 'auth/wrong-password') {
+        setLoginError('Incorrect password. Please try again.');
+      } else if (err.code === 'auth/invalid-email') {
+        setLoginError('Invalid email address format.');
       } else {
-        setLoginError(`Invalid credentials. ${5 - newAttempts} attempts remaining.`);
+        setLoginError('Login failed. Please check your credentials and try again.');
       }
     }
   };
 
-  // Enhanced registration with email verification
+  // Simple registration with email and password
   const handleRegister = async (e) => {
     e.preventDefault();
     setRegisterError('');
     
-    // Enhanced validation
+    // Basic validation
     if (!registerEmail.trim()) {
       setRegisterError('Email is required.');
-      return;
-    }
-    if (!validateEmail(registerEmail)) {
-      setRegisterError('Please enter a valid email address.');
-      return;
-    }
-    if (!registerContact.trim()) {
-      setRegisterError('Contact Number is required.');
-      return;
-    }
-    if (!validatePhone(registerContact)) {
-      setRegisterError('Please enter a valid phone number.');
       return;
     }
     if (!registerPassword.trim()) {
       setRegisterError('Password is required.');
       return;
     }
-    if (!validatePassword(registerPassword)) {
-      setRegisterError('Password must be at least 6 characters with uppercase, lowercase, and number.');
+    if (registerPassword.length < 6) {
+      setRegisterError('Password must be at least 6 characters.');
       return;
     }
     if (!registerCompany.trim()) {
@@ -423,35 +300,17 @@ function App() {
       // Store the new user's UID for later use
       setNewUserId(newUser.user.uid);
       
-      // Register user with verification utilities
-      const registrationResult = await registerUser({
+      // Create user document in Firestore
+      const userRef = doc(db, 'users', newUser.user.uid);
+      await setDoc(userRef, {
         email: registerEmail,
-        contact: formatPhoneNumber(registerContact),
         companyName: registerCompany,
-        uid: newUser.user.uid
+        createdAt: serverTimestamp(),
+        status: 'active'
       });
       
-      if (!registrationResult.success) {
-        setRegisterError(registrationResult.message);
-        return;
-      }
-      
-      // Send email verification
-      const emailResult = await sendVerificationEmail(newUser.user);
-      if (!emailResult.success) {
-        setRegisterError(emailResult.message);
-        return;
-      }
-      
-      // Store registration data in localStorage for later use
-      localStorage.setItem('registrationData', JSON.stringify({
-        contact: registerContact,
-        email: registerEmail,
-        companyName: registerCompany
-      }));
-      
-      setRegisterError('✅ Registration successful! Please check your email for verification link.');
-      setShowEmailVerification(true);
+      setRegisterError('✅ Registration successful! You can now login.');
+      setShowRegister(false);
       
     } catch (err) {
       console.error('Registration error:', err);
@@ -468,190 +327,9 @@ function App() {
   };
 
   // Email verification functions
-  const handleResendEmailVerification = async () => {
-    if (resendTimer > 0) return;
-    
-    setVerificationError('');
-    
-    try {
-      console.log('Resending verification email...');
-      const result = await sendVerificationEmail(auth.currentUser);
-      
-      if (result.success) {
-        setResendTimer(60);
-        setVerificationError('✅ Verification email sent! Please check your inbox (and spam folder).');
-        console.log('Verification email sent successfully');
-      } else {
-        console.error('Failed to send verification email:', result.message);
-        setVerificationError(`Failed to send verification email: ${result.message}`);
-      }
-    } catch (error) {
-      console.error('Error resending verification email:', error);
-      setVerificationError(`Failed to send verification email: ${error.message}. Please try again.`);
-    }
-  };
 
-  const handleEmailVerificationCheck = async () => {
-    setIsVerifying(true);
-    setVerificationError('');
-    
-    try {
-      console.log('Checking email verification status...');
-      const isVerified = await checkEmailVerification(auth.currentUser);
-      
-      console.log('Email verification result:', isVerified);
-      
-      if (isVerified) {
-        console.log('Email is verified, updating user status...');
-        const result = await updateUserEmailVerificationStatus(auth.currentUser.uid, true);
-        if (result.success) {
-          setShowEmailVerification(false);
-          setVerificationError('');
-          console.log('Email verification completed successfully');
-        } else {
-          console.error('Failed to update user status:', result.message);
-          setVerificationError(`Status update failed: ${result.message}`);
-        }
-      } else {
-        console.log('Email not verified yet');
-        setVerificationError('Email not verified yet. Please check your inbox and click the verification link. If you don\'t see the email, check your spam folder.');
-      }
-    } catch (error) {
-      console.error('Error checking verification status:', error);
-      setVerificationError(`Error checking verification status: ${error.message}. Please try again.`);
-    } finally {
-      setIsVerifying(false);
-    }
-  };
 
-  // Skip email verification for testing
-  const handleSkipEmailVerification = async () => {
-    try {
-      console.log('Skipping email verification for testing...');
-      const result = await updateUserEmailVerificationStatus(auth.currentUser.uid, true);
-      if (result.success) {
-        setShowEmailVerification(false);
-        setVerificationError('');
-        console.log('Email verification skipped successfully');
-      } else {
-        setVerificationError(`Failed to skip verification: ${result.message}`);
-      }
-    } catch (error) {
-      console.error('Error skipping verification:', error);
-      setVerificationError(`Error skipping verification: ${error.message}`);
-    }
-  };
 
-  // Phone verification functions (using SMS)
-  const handleSendPhoneVerification = async () => {
-    if (resendTimer > 0) return;
-    
-    try {
-      const code = generateVerificationCode();
-      const userDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
-      const phoneNumber = userDoc.data()?.contact || '';
-      
-      const result = await storeVerificationCode(auth.currentUser.uid, phoneNumber, code);
-      if (result.success) {
-        setPhoneVerificationId(code);
-        setResendTimer(60);
-        setVerificationError(`✅ Verification code sent! Demo code: ${code}`);
-      } else {
-        setVerificationError(result.message);
-      }
-    } catch (error) {
-      setVerificationError('Failed to send verification code. Please try again.');
-    }
-  };
-
-  const handleVerifyPhone = async () => {
-    if (!verificationCode.trim()) {
-      setVerificationError('Please enter the verification code.');
-      return;
-    }
-
-    try {
-      const userDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
-      const phoneNumber = userDoc.data()?.contact || '';
-      
-      const result = await verifyPhoneCode(auth.currentUser.uid, phoneNumber, verificationCode);
-      if (result.success) {
-        setShowPhoneVerification(false);
-        setVerificationError('');
-        setVerificationCode('');
-      } else {
-        setVerificationError(result.message);
-      }
-    } catch (error) {
-      setVerificationError('Error verifying phone number. Please try again.');
-    }
-  };
-
-  // Password reset functions
-  const handleForgotPassword = async (e) => {
-    e.preventDefault();
-    setResetError('');
-    
-    if (!resetEmail.trim()) {
-      setResetError('Please enter your email address.');
-      return;
-    }
-
-    if (!validateEmail(resetEmail)) {
-      setResetError('Please enter a valid email address.');
-      return;
-    }
-
-    try {
-      const result = await sendPasswordReset(resetEmail);
-      if (result.success) {
-        setResetSuccess(true);
-        setResetError('');
-      } else {
-        setResetError(result.message);
-      }
-    } catch (error) {
-      setResetError('Failed to send reset email. Please try again.');
-    }
-  };
-
-  const handleResetPassword = async (e) => {
-    e.preventDefault();
-    setResetError('');
-    
-    if (!resetCode.trim()) {
-      setResetError('Please enter the reset code.');
-      return;
-    }
-    if (!newPassword.trim()) {
-      setResetError('Please enter a new password.');
-      return;
-    }
-    if (!validatePassword(newPassword)) {
-      setResetError('Password must be at least 6 characters with uppercase, lowercase, and number.');
-      return;
-    }
-    if (newPassword !== confirmNewPassword) {
-      setResetError('Passwords do not match.');
-      return;
-    }
-
-    try {
-      const result = await resetPassword(resetCode, newPassword);
-      if (result.success) {
-        setResetSuccess(true);
-        setShowResetPasswordForm(false);
-        setResetError('');
-        setResetCode('');
-        setNewPassword('');
-        setConfirmNewPassword('');
-      } else {
-        setResetError(result.message);
-      }
-    } catch (error) {
-      setResetError('Failed to reset password. Please try again.');
-    }
-  };
 
 
 
@@ -687,146 +365,104 @@ function App() {
 
   if (!user) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-100">
-        <div className="bg-white p-8 rounded shadow-md w-full max-w-sm">
-          {showForgotPassword ? (
-            <form onSubmit={handleForgotPassword}>
-              <h2 className="text-2xl font-bold mb-4 text-center">Forgot Password</h2>
-              {resetError && <div className="mb-2 text-red-600 text-sm">{resetError}</div>}
-              {resetSuccess && <div className="mb-2 text-green-600 text-sm">Password reset email sent! Please check your inbox.</div>}
-              <div className="mb-4">
-                <label className="block text-sm font-medium mb-1">Email</label>
-                <input 
-                  type="email" 
-                  value={resetEmail} 
-                  onChange={e => setResetEmail(e.target.value)} 
-                  required 
-                  className="w-full border rounded p-2" 
-                  placeholder="Enter your email address"
-                />
+      <Router>
+        <Routes>
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/login" element={
+            <div className="min-h-screen flex items-center justify-center bg-gray-100">
+              <div className="bg-white p-8 rounded shadow-md w-full max-w-sm">
+                {showRegister ? (
+                  <form onSubmit={handleRegister}>
+                    <h2 className="text-2xl font-bold mb-4 text-center">Register</h2>
+                    {registerError && <div className="mb-2 text-red-600 text-sm">{registerError}</div>}
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium mb-1">Company Name</label>
+                      <input 
+                        type="text" 
+                        value={registerCompany} 
+                        onChange={e => setRegisterCompany(e.target.value)} 
+                        required 
+                        className="w-full border rounded p-2" 
+                        placeholder="Enter your company name"
+                      />
+                    </div>
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium mb-1">Email</label>
+                      <input 
+                        type="email" 
+                        value={registerEmail} 
+                        onChange={e => setRegisterEmail(e.target.value)} 
+                        required 
+                        className="w-full border rounded p-2" 
+                        placeholder="Enter your email address"
+                      />
+                    </div>
+
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium mb-1">Password</label>
+                      <input 
+                        type="password" 
+                        value={registerPassword} 
+                        onChange={e => setRegisterPassword(e.target.value)} 
+                        required 
+                        className="w-full border rounded p-2" 
+                        placeholder="Minimum 6 characters"
+                        minLength={6}
+                      />
+                    </div>
+                    <button type="submit" className="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded hover:bg-blue-700">
+                      Register
+                    </button>
+                    <div className="mt-4 text-center">
+                      <button type="button" className="text-blue-600 underline" onClick={() => setShowRegister(false)}>
+                        Already have an account? Login
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <form onSubmit={handleLogin}>
+                    <h2 className="text-2xl font-bold mb-4 text-center">Login</h2>
+                    {loginError && <div className="mb-2 text-red-600 text-sm">{loginError}</div>}
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium mb-1">Email</label>
+                      <input 
+                        type="email" 
+                        value={loginEmail} 
+                        onChange={e => setLoginEmail(e.target.value)} 
+                        required 
+                        className="w-full border rounded p-2" 
+                        placeholder="Enter your email"
+                      />
+                    </div>
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium mb-1">Password</label>
+                      <input 
+                        type="password" 
+                        value={loginPassword} 
+                        onChange={e => setLoginPassword(e.target.value)} 
+                        required 
+                        className="w-full border rounded p-2" 
+                        placeholder="Enter your password"
+                      />
+                    </div>
+                    <button 
+                      type="submit" 
+                      className="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded hover:bg-blue-700"
+                    >
+                      Login
+                    </button>
+                    <div className="mt-4 text-center">
+                      <button type="button" className="text-blue-600 underline block" onClick={() => setShowRegister(true)}>
+                        New user? Register
+                      </button>
+                    </div>
+                  </form>
+                )}
               </div>
-              <button type="submit" className="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded hover:bg-blue-700">
-                Send Reset Email
-              </button>
-              <div className="mt-4 text-center space-y-2">
-                <button type="button" className="text-blue-600 underline block" onClick={() => setShowForgotPassword(false)}>
-                  Back to Login
-                </button>
-                <button type="button" className="text-blue-600 underline block" onClick={() => setShowRegister(true)}>
-                  New user? Register
-                </button>
-              </div>
-            </form>
-          ) : showRegister ? (
-            <form onSubmit={handleRegister}>
-              <h2 className="text-2xl font-bold mb-4 text-center">Register</h2>
-              {registerError && <div className="mb-2 text-red-600 text-sm">{registerError}</div>}
-              <div className="mb-4">
-                <label className="block text-sm font-medium mb-1">Company Name</label>
-                <input 
-                  type="text" 
-                  value={registerCompany} 
-                  onChange={e => setRegisterCompany(e.target.value)} 
-                  required 
-                  className="w-full border rounded p-2" 
-                  placeholder="Enter your company name"
-                />
-              </div>
-              <div className="mb-4">
-                <label className="block text-sm font-medium mb-1">Email</label>
-                <input 
-                  type="email" 
-                  value={registerEmail} 
-                  onChange={e => setRegisterEmail(e.target.value)} 
-                  required 
-                  className="w-full border rounded p-2" 
-                  placeholder="Enter your email address"
-                />
-              </div>
-              <div className="mb-4">
-                <label className="block text-sm font-medium mb-1">Contact Number</label>
-                <input 
-                  type="tel" 
-                  value={registerContact} 
-                  onChange={e => setRegisterContact(e.target.value)} 
-                  required 
-                  className="w-full border rounded p-2" 
-                  placeholder="Enter your phone number"
-                />
-              </div>
-              <div className="mb-4">
-                <label className="block text-sm font-medium mb-1">Password</label>
-                <input 
-                  type="password" 
-                  value={registerPassword} 
-                  onChange={e => setRegisterPassword(e.target.value)} 
-                  required 
-                  className="w-full border rounded p-2" 
-                  placeholder="Minimum 6 characters"
-                  minLength={6}
-                />
-              </div>
-              <button type="submit" className="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded hover:bg-blue-700">
-                Register
-              </button>
-              <div className="mt-4 text-center">
-                <button type="button" className="text-blue-600 underline" onClick={() => setShowRegister(false)}>
-                  Already have an account? Login
-                </button>
-              </div>
-            </form>
-          ) : (
-            <form onSubmit={handleLogin}>
-              <h2 className="text-2xl font-bold mb-4 text-center">Login</h2>
-              {loginError && <div className="mb-2 text-red-600 text-sm">{loginError}</div>}
-              {isAccountLocked && (
-                <div className="mb-2 text-red-600 text-sm">
-                  Account locked. Please try again in {lockoutTimer} seconds.
-                </div>
-              )}
-              <div className="mb-4">
-                <label className="block text-sm font-medium mb-1">Email</label>
-                <input 
-                  type="email" 
-                  value={loginEmail} 
-                  onChange={e => setLoginEmail(e.target.value)} 
-                  required 
-                  className="w-full border rounded p-2" 
-                  placeholder="Enter your email"
-                  disabled={isAccountLocked}
-                />
-              </div>
-              <div className="mb-4">
-                <label className="block text-sm font-medium mb-1">Password</label>
-                <input 
-                  type="password" 
-                  value={loginPassword} 
-                  onChange={e => setLoginPassword(e.target.value)} 
-                  required 
-                  className="w-full border rounded p-2" 
-                  placeholder="Enter your password"
-                  disabled={isAccountLocked}
-                />
-              </div>
-              <button 
-                type="submit" 
-                className="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded hover:bg-blue-700 disabled:bg-gray-400"
-                disabled={isAccountLocked}
-              >
-                Login
-              </button>
-              <div className="mt-4 text-center space-y-2">
-                <button type="button" className="text-blue-600 underline block" onClick={() => setShowForgotPassword(true)}>
-                  Forgot Password?
-                </button>
-                <button type="button" className="text-blue-600 underline block" onClick={() => setShowRegister(true)}>
-                  New user? Register
-                </button>
-              </div>
-            </form>
-          )}
-        </div>
-      </div>
+            </div>
+          } />
+        </Routes>
+      </Router>
     );
   }
 
@@ -884,7 +520,7 @@ function App() {
         setCurrentTourStep={setCurrentTourStep}
         showCompanyDetailsWizard={showCompanyDetailsWizard}
         setShowCompanyDetailsWizard={setShowCompanyDetailsWizard}
-        registerContact={registerContact}
+
         registerEmail={registerEmail}
         newUserId={newUserId}
         showHelp={showHelp}
@@ -898,44 +534,6 @@ function App() {
         setShowDataExport={setShowDataExport}
         showSettings={showSettings}
         setShowSettings={setShowSettings}
-        showAdminPanel={showAdminPanel}
-        setShowAdminPanel={setShowAdminPanel}
-
-        showEmailVerification={showEmailVerification}
-        setShowEmailVerification={setShowEmailVerification}
-        handleEmailVerificationCheck={handleEmailVerificationCheck}
-        handleResendEmailVerification={handleResendEmailVerification}
-        handleSkipEmailVerification={handleSkipEmailVerification}
-        showPhoneVerification={showPhoneVerification}
-        setShowPhoneVerification={setShowPhoneVerification}
-        handleSendPhoneVerification={handleSendPhoneVerification}
-        handleVerifyPhone={handleVerifyPhone}
-        verificationCode={verificationCode}
-        setVerificationCode={setVerificationCode}
-        verificationError={verificationError}
-        isVerifying={isVerifying}
-        resendTimer={resendTimer}
-        loginAttempts={loginAttempts}
-        isAccountLocked={isAccountLocked}
-        lockoutTimer={lockoutTimer}
-        showForgotPassword={showForgotPassword}
-        setShowForgotPassword={setShowForgotPassword}
-        resetEmail={resetEmail}
-        setResetEmail={setResetEmail}
-        resetError={resetError}
-        setResetError={setResetError}
-        resetSuccess={resetSuccess}
-        setResetSuccess={setResetSuccess}
-        newPassword={newPassword}
-        setNewPassword={setNewPassword}
-        confirmNewPassword={confirmNewPassword}
-        setConfirmNewPassword={setConfirmNewPassword}
-        resetCode={resetCode}
-        setResetCode={setResetCode}
-        showResetPasswordForm={showResetPasswordForm}
-        setShowResetPasswordForm={setShowResetPasswordForm}
-        handleForgotPassword={handleForgotPassword}
-        handleResetPassword={handleResetPassword}
       />
     </Router>
   );
@@ -958,7 +556,6 @@ function AppContent({
   setCurrentTourStep,
   showCompanyDetailsWizard,
   setShowCompanyDetailsWizard,
-  registerContact,
   registerEmail,
   newUserId,
   showHelp,
@@ -971,45 +568,7 @@ function AppContent({
   showDataExport,
   setShowDataExport,
   showSettings,
-  setShowSettings,
-  showAdminPanel,
-  setShowAdminPanel,
-
-  showEmailVerification,
-  setShowEmailVerification,
-  handleEmailVerificationCheck,
-  handleResendEmailVerification,
-  handleSkipEmailVerification,
-  showPhoneVerification,
-  setShowPhoneVerification,
-  handleSendPhoneVerification,
-  handleVerifyPhone,
-  verificationCode,
-  setVerificationCode,
-  verificationError,
-  isVerifying,
-  resendTimer,
-  loginAttempts,
-  isAccountLocked,
-  lockoutTimer,
-  showForgotPassword,
-  setShowForgotPassword,
-  resetEmail,
-  setResetEmail,
-  resetError,
-  setResetError,
-  resetSuccess,
-  setResetSuccess,
-  newPassword,
-  setNewPassword,
-  confirmNewPassword,
-  setConfirmNewPassword,
-  resetCode,
-  setResetCode,
-  showResetPasswordForm,
-  setShowResetPasswordForm,
-  handleForgotPassword,
-  handleResetPassword
+  setShowSettings
 }) {
   const currentLocation = useLocation();
   
@@ -1179,7 +738,7 @@ function AppContent({
             try {
               const parsed = JSON.parse(storedData);
               return {
-                contact: parsed.contact || registerContact || user?.contact || '',
+                contact: parsed.contact || user?.contact || '',
                 email: parsed.email || registerEmail || user?.email || ''
               };
             } catch (e) {
@@ -1188,7 +747,7 @@ function AppContent({
           }
           // Fallback to current state
           return {
-            contact: registerContact || user?.contact || '',
+            contact: user?.contact || '',
             email: registerEmail || user?.email || ''
           };
         })()}
@@ -1485,17 +1044,7 @@ function AppContent({
                     >
                       ⚙️ Settings
                     </button>
-                    {userInfo?.companyRole === 'owner' || userInfo?.companyRole === 'admin' ? (
-                      <button
-                        className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
-                        onClick={() => {
-                          setShowAdminPanel(true);
-                          setAvatarDropdownOpen(false);
-                        }}
-                      >
-                        👑 Admin Panel
-                      </button>
-                    ) : null}
+
 
                     <button
                       className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
@@ -1865,8 +1414,8 @@ function AppContent({
                 setShowSettings={setShowSettings}
               />
             } />
-            <Route path="/complete-verification" element={<EmailVerification />} />
-            <Route path="/join/:companyId/:linkId" element={<JoinCompany />} />
+
+
           </Routes>
         </div>
       </div>
@@ -1912,162 +1461,14 @@ function AppContent({
                 <Settings onClose={() => setShowSettings(false)} />
               )}
 
-              {/* Admin Panel */}
-              {showAdminPanel && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-                  <div className="bg-white rounded-lg shadow-xl max-w-6xl w-full max-h-[90vh] overflow-y-auto">
-                    <div className="flex justify-between items-center p-6 border-b">
-                      <h2 className="text-xl font-bold text-gray-800">Admin Panel</h2>
-                      <button
-                        onClick={() => setShowAdminPanel(false)}
-                        className="text-gray-500 hover:text-gray-700 text-2xl"
-                      >
-                        ×
-                      </button>
-                    </div>
-                    <AdminPanel
-                      db={db}
-                      userId={user?.uid}
-                      isAuthReady={isAuthReady}
-                      appId={appId}
-                    />
-                  </div>
-                </div>
-              )}
+
       
       
       
 
-      {/* Email Verification Modal */}
-      {showEmailVerification && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 relative">
-            <h3 className="text-xl font-bold text-gray-900 mb-4 text-center">Email Verification Required</h3>
-                          <p className="text-gray-600 mb-6 text-center">
-                Please check your email ({auth.currentUser?.email || 'your email'}) and click the verification link to complete your registration.
-              </p>
-            <div className="flex justify-center space-x-2 mb-4">
-              <button
-                onClick={handleEmailVerificationCheck}
-                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-                disabled={isVerifying}
-              >
-                {isVerifying ? 'Verifying...' : 'Check Verification Status'}
-              </button>
-              <button
-                onClick={handleResendEmailVerification}
-                className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
-                disabled={resendTimer > 0}
-              >
-                {resendTimer > 0 ? `Resend in ${resendTimer}s` : 'Resend Verification Email'}
-              </button>
-            </div>
-            <div className="text-center">
-              <button
-                onClick={handleSkipEmailVerification}
-                className="text-gray-500 text-sm underline hover:text-gray-700"
-              >
-                Skip for now (Testing only)
-              </button>
-            </div>
-            {verificationError && <div className="mt-4 text-red-600 text-sm text-center">{verificationError}</div>}
-          </div>
-        </div>
-      )}
 
-      {/* Phone Verification Modal */}
-      {showPhoneVerification && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 relative">
-            <h3 className="text-xl font-bold text-gray-900 mb-4 text-center">Phone Verification Required</h3>
-                          <p className="text-gray-600 mb-6 text-center">
-                Please enter the verification code sent to your phone number ({auth.currentUser?.phoneNumber || 'your phone'}).
-              </p>
-            <div className="flex flex-col items-center mb-4">
-              <input
-                type="text"
-                placeholder="Enter verification code"
-                value={verificationCode}
-                onChange={(e) => setVerificationCode(e.target.value)}
-                className="w-full border rounded p-2 mb-4"
-                maxLength={6}
-              />
-              <div className="flex space-x-2">
-                <button
-                  onClick={handleSendPhoneVerification}
-                  className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
-                  disabled={resendTimer > 0}
-                >
-                  {resendTimer > 0 ? `Send in ${resendTimer}s` : 'Send Code'}
-                </button>
-                <button
-                  onClick={handleVerifyPhone}
-                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-                  disabled={isVerifying}
-                >
-                  {isVerifying ? 'Verifying...' : 'Verify Phone Number'}
-                </button>
-              </div>
-            </div>
-            <div className="text-center">
-              <button
-                onClick={() => setShowPhoneVerification(false)}
-                className="text-gray-500 text-sm underline hover:text-gray-700"
-              >
-                Skip for now (Testing only)
-              </button>
-            </div>
-            {verificationError && <div className="mt-4 text-red-600 text-sm text-center">{verificationError}</div>}
-          </div>
-        </div>
-      )}
 
-      {/* Password Reset Modal */}
-      {showResetPasswordForm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 relative">
-            <h3 className="text-xl font-bold text-gray-900 mb-4 text-center">Reset Password</h3>
-            <p className="text-gray-600 mb-6 text-center">
-              Enter the reset code sent to your email ({resetEmail}) to reset your password.
-            </p>
-            <div className="flex flex-col items-center">
-              <input
-                type="text"
-                placeholder="Enter reset code"
-                value={resetCode}
-                onChange={(e) => setResetCode(e.target.value)}
-                className="w-full border rounded p-2 mb-4"
-                maxLength={6}
-              />
-              <input
-                type="password"
-                placeholder="Enter new password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                className="w-full border rounded p-2 mb-4"
-                minLength={6}
-              />
-              <input
-                type="password"
-                placeholder="Confirm new password"
-                value={confirmNewPassword}
-                onChange={(e) => setConfirmNewPassword(e.target.value)}
-                className="w-full border rounded p-2 mb-4"
-                minLength={6}
-              />
-              <button
-                onClick={handleResetPassword}
-                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-                disabled={isVerifying}
-              >
-                {isVerifying ? 'Resetting...' : 'Reset Password'}
-              </button>
-            </div>
-            {resetError && <div className="mt-4 text-red-600 text-sm text-center">{resetError}</div>}
-            {resetSuccess && <div className="mt-4 text-green-600 text-sm text-center">Password reset successful!</div>}
-          </div>
-        </div>
-      )}
+
     </>
   );
 }
