@@ -36,6 +36,7 @@ ios/
 
 # Local JDKs and large Java source trees (not needed for the React app)
 java-1.8.0-openjdk-*/
+java/
 src/java/
 src/javax/
 src/jdk/
