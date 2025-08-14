@@ -82,10 +82,23 @@ function InvoiceTemplate({
     discount = parseFloat(billData.discountValue) || 0;
   }
   const discountedSubtotal = Math.max(0, subtotal - discount);
-  // GST calculations
-  const totalSGST = visibleItems.reduce((sum, item) => sum + ((parseFloat(item.amount) || 0) * ((parseFloat(item.sgst) || 0) / 100)), 0) || 0;
-  const totalCGST = visibleItems.reduce((sum, item) => sum + ((parseFloat(item.amount) || 0) * ((parseFloat(item.cgst) || 0) / 100)), 0) || 0;
-  const totalIGST = visibleItems.reduce((sum, item) => sum + ((parseFloat(item.amount) || 0) * ((parseFloat(item.gst) || 0) / 100)), 0) || 0;
+  // GST calculations after proportional discount
+  const discountRatio = subtotal > 0 ? (discount / subtotal) : 0;
+  const totalSGST = visibleItems.reduce((sum, item) => {
+    const amt = parseFloat(item.amount) || 0;
+    const effAmt = amt - (amt * discountRatio);
+    return sum + (effAmt * ((parseFloat(item.sgst) || 0) / 100));
+  }, 0) || 0;
+  const totalCGST = visibleItems.reduce((sum, item) => {
+    const amt = parseFloat(item.amount) || 0;
+    const effAmt = amt - (amt * discountRatio);
+    return sum + (effAmt * ((parseFloat(item.cgst) || 0) / 100));
+  }, 0) || 0;
+  const totalIGST = visibleItems.reduce((sum, item) => {
+    const amt = parseFloat(item.amount) || 0;
+    const effAmt = amt - (amt * discountRatio);
+    return sum + (effAmt * ((parseFloat(item.igst) || parseFloat(item.gst) || 0) / 100));
+  }, 0) || 0;
   const grandTotal = discountedSubtotal + totalSGST + totalCGST + totalIGST;
 
   // GST summary table logic
@@ -174,6 +187,7 @@ function InvoiceTemplate({
             {(companyDetails.gstinType === 'Regular') && <th className="border px-2 py-1">HSN</th>}
             <th className="border px-2 py-1">Qty</th>
             <th className="border px-2 py-1">Rate</th>
+            <th className="border px-2 py-1">Discount</th>
             <th className="border px-2 py-1">Amount</th>
             {(companyDetails.gstinType === 'Regular') && <th className="border px-2 py-1">GST %</th>}
             <th className="border px-2 py-1">Total</th>
@@ -186,12 +200,19 @@ function InvoiceTemplate({
               <td className="border px-2 py-1">
                 {item.description}
                 <div style={{ fontSize: '0.85em', fontStyle: 'italic', color: '#555' }}>
-                  {item.nos || item.qty || item.Nos || 1}x{item.length || 1}x{item.height || 1}
+                  {item.qtyDisplay ? item.qtyDisplay : `${item.nos || item.qty || item.Nos || 1}x${item.length || 1}x${item.height || 1}`}
                 </div>
               </td>
               {(companyDetails.gstinType === 'Regular') && <td className="border px-2 py-1 text-center">{item.hsn}</td>}
               <td className="border px-2 py-1 text-center">{item.qty}</td>
               <td className="border px-2 py-1 text-right">{item.rate}</td>
+              <td className="border px-2 py-1 text-right">
+                {parseFloat(item.lineDiscountValue) > 0
+                  ? (item.lineDiscountType === 'percent'
+                      ? `${item.lineDiscountValue}%`
+                      : item.lineDiscountValue)
+                  : ''}
+              </td>
               <td className="border px-2 py-1 text-right">{item.amount}</td>
               {(companyDetails.gstinType === 'Regular') && <td className="border px-2 py-1 text-center">{item.gst || item.sgst + item.cgst + item.igst}</td>}
               <td className="border px-2 py-1 text-right">

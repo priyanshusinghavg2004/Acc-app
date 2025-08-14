@@ -40,59 +40,87 @@ const StockReport = ({ db, userId, appId, dateRange, setLoading }) => {
   useEffect(() => {
     if (!db || !userId) return;
     setLoading(true);
+
+    // Compute quantity from a row (supports nos x length x height pattern)
+    const computeRowQty = (row) => {
+      const direct = parseFloat(row?.qty);
+      if (!Number.isNaN(direct) && direct) return direct;
+      return (parseFloat(row?.nos) || 0) * (parseFloat(row?.length) || 1) * (parseFloat(row?.height) || 1);
+    };
+
     const fetchData = async () => {
       try {
         const basePath = `artifacts/${appId}/users/${userId}`;
+        // Date strings for filtering
+        const startStr = new Date(dateRange.start).toISOString().split('T')[0];
+        const endStr = new Date(dateRange.end).toISOString().split('T')[0];
+
         // Fetch items
-        const itemsQuery = query(collection(db, `${basePath}/items`), orderBy('itemName', 'asc'));
-        const itemsSnapshot = await getDocs(itemsQuery);
+        const itemsQueryRef = query(collection(db, `${basePath}/items`), orderBy('itemName', 'asc'));
+        const itemsSnapshot = await getDocs(itemsQueryRef);
         const items = itemsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        // Fetch purchases
-        const purchasesQuery = query(
+
+        // Fetch purchases in date range (by billDate string)
+        const purchasesQueryRef = query(
           collection(db, `${basePath}/purchaseBills`),
-          where('billDate', '>=', dateRange.start),
-          where('billDate', '<=', dateRange.end),
+          where('billDate', '>=', startStr),
+          where('billDate', '<=', endStr),
           orderBy('billDate', 'asc')
         );
-        const purchasesSnapshot = await getDocs(purchasesQuery);
+        const purchasesSnapshot = await getDocs(purchasesQueryRef);
         const purchases = purchasesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        // Fetch sales
-        const salesQuery = query(
+
+        // Fetch sales in date range (by invoiceDate string)
+        const salesQueryRef = query(
           collection(db, `${basePath}/salesBills`),
-          where('date', '>=', dateRange.start),
-          where('date', '<=', dateRange.end),
-          orderBy('date', 'asc')
+          where('invoiceDate', '>=', startStr),
+          where('invoiceDate', '<=', endStr),
+          orderBy('invoiceDate', 'asc')
         );
-        const salesSnapshot = await getDocs(salesQuery);
+        const salesSnapshot = await getDocs(salesQueryRef);
         const sales = salesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
         // Calculate stock movement for each item
         const stockReport = items.map(item => {
-          // Calculate purchased quantity
           const purchasedQty = purchases.reduce((total, purchase) => {
-            if (purchase.rows && Array.isArray(purchase.rows)) {
-              const itemInPurchase = purchase.rows.find(i => i.item === item.id);
-              return total + (itemInPurchase?.qty || 0);
-            }
-            return total;
+            const rows = Array.isArray(purchase.rows) ? purchase.rows : (Array.isArray(purchase.items) ? purchase.items : []);
+            const sum = rows.reduce((s, r) => s + (r.item === item.id ? computeRowQty(r) : 0), 0);
+            return total + sum;
           }, 0);
-          // Calculate sold quantity
+
           const soldQty = sales.reduce((total, sale) => {
-            if (sale.rows && Array.isArray(sale.rows)) {
-              const itemInSale = sale.rows.find(i => i.item === item.id);
-              return total + (itemInSale?.qty || 0);
+            const rows = Array.isArray(sale.rows) ? sale.rows : (Array.isArray(sale.items) ? sale.items : []);
+            const sum = rows.reduce((s, r) => s + (r.item === item.id ? computeRowQty(r) : 0), 0);
+            return total + sum;
+          }, 0);
+
+          // Opening stock as of start date: sum of all transactions before start
+          const startDateStr = new Date(dateRange.start).toISOString().split('T')[0];
+          const purchasedBefore = purchases.reduce((total, purchase) => {
+            const pDate = purchase.billDate || purchase.date || '';
+            if (pDate < startDateStr) {
+              const rows = Array.isArray(purchase.rows) ? purchase.rows : (Array.isArray(purchase.items) ? purchase.items : []);
+              const qty = rows.reduce((s, r) => s + (r.item === item.id ? computeRowQty(r) : 0), 0);
+              return total + qty;
             }
             return total;
           }, 0);
-          // Calculate in-hand stock
-          const openingStock = parseFloat(item.openingStock || 0);
+          const soldBefore = sales.reduce((total, sale) => {
+            const sDate = sale.invoiceDate || sale.date || '';
+            if (sDate < startDateStr) {
+              const rows = Array.isArray(sale.rows) ? sale.rows : (Array.isArray(sale.items) ? sale.items : []);
+              const qty = rows.reduce((s, r) => s + (r.item === item.id ? computeRowQty(r) : 0), 0);
+              return total + qty;
+            }
+            return total;
+          }, 0);
+          const openingStock = (parseFloat(item.openingStock || 0) || 0) + purchasedBefore - soldBefore;
           const inHand = openingStock + purchasedQty - soldQty; // opening + purchases - sales
-          // Determine status
+
           let status = 'Normal';
-          if (inHand < 0) {
-            status = 'Negative';
-          } else if (inHand <= (item.reorderLevel || 10)) {
-            status = 'Low Stock';
-          }
+          if (inHand < 0) status = 'Negative';
+          else if (inHand <= (item.reorderLevel || 10)) status = 'Low Stock';
+
           return {
             itemId: item.id,
             itemName: item.itemName,
@@ -105,8 +133,9 @@ const StockReport = ({ db, userId, appId, dateRange, setLoading }) => {
             averageRate: item.defaultRate || 0
           };
         });
+
         setStockData(stockReport);
-        // Calculate totals
+
         const totals = stockReport.reduce((acc, item) => ({
           totalItems: acc.totalItems + 1,
           totalValue: acc.totalValue + (item.inHand * item.averageRate),
@@ -126,7 +155,7 @@ const StockReport = ({ db, userId, appId, dateRange, setLoading }) => {
       }
     };
     fetchData();
-  }, [db, userId, dateRange, setLoading]);
+  }, [db, userId, appId, dateRange, setLoading]);
 
   // Table columns
   const columns = [
@@ -179,11 +208,17 @@ const StockReport = ({ db, userId, appId, dateRange, setLoading }) => {
               <tr><td colSpan={columns.length} className="text-center py-8 text-gray-400">No data found</td></tr>
             ) : stockData.map((row, idx) => (
               <tr key={row.itemId || idx} className="cursor-pointer hover:bg-blue-50" onClick={() => handleItemClick(row)}>
-                {columns.map(col => (
-                  <td key={col.key} className="px-6 py-4 whitespace-nowrap">
-                    {row[col.key]}
-                  </td>
-                ))}
+                {columns.map(col => {
+                  const isInHand = col.key === 'inHand';
+                  const cls = isInHand
+                    ? (row.inHand < 0 ? 'text-red-700' : row.inHand > 0 ? 'text-green-700' : 'text-gray-700')
+                    : '';
+                  return (
+                    <td key={col.key} className={`px-6 py-4 whitespace-nowrap ${cls}`}>
+                      {row[col.key]}
+                    </td>
+                  );
+                })}
               </tr>
             ))}
           </tbody>

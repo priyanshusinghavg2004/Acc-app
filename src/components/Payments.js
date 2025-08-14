@@ -546,6 +546,212 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
     'Online Payment', 'Demand Draft', 'NEFT', 'RTGS', 'IMPS'
   ];
 
+  // Expose a simple Payment Mode analytics tab for Balance Sheet
+  const [modeSummary, setModeSummary] = useState([]);
+  const [showModeModal, setShowModeModal] = useState(false);
+  const [modeModalTitle, setModeModalTitle] = useState('');
+  const [modeModalRowsSales, setModeModalRowsSales] = useState([]);
+  const [modeModalRowsPurchase, setModeModalRowsPurchase] = useState([]);
+  const [modeModalRowsExpense, setModeModalRowsExpense] = useState([]);
+  const [modeModalRowsTax, setModeModalRowsTax] = useState([]);
+  const [modeModalType, setModeModalType] = useState('sales'); // 'sales' | 'purchase' | 'expense' | 'tax'
+
+  // Export/Print helpers for Payment Mode tables
+  const buildModeRows = () => {
+    const rows = modeSummary.map(m => ({ mode: m.mode, receipts: m.salesTotal || 0, payments: m.purchasePaidTotal || 0, expenses: m.expenseTotal || 0 }));
+    return rows;
+  };
+  const paymentModeColumns = [
+    { key: 'mode', label: 'Mode' },
+    { key: 'receipts', label: 'Received' },
+    { key: 'payments', label: 'Paid' },
+    { key: 'expenses', label: 'Expense' }
+  ];
+  const handleExportPaymentMode = async (type) => {
+    const companyDetails = company || {};
+    const reportDetails = {};
+    const data = buildModeRows();
+    const filename = `Payment-Mode-${new Date().toISOString().slice(0,10)}`;
+    if (type === 'pdf') {
+      // Multi-table PDF with letterhead
+      const tables = [
+        { tableTitle: '1) Payment Received (Sales/PRI)', columns: [{key:'mode',label:'Mode'},{key:'value',label:'Total'}], arr: data.map(r=>({mode:r.mode,value:r.receipts})) },
+        { tableTitle: '2) Payment Paid (Purchase/PRP)', columns: [{key:'mode',label:'Mode'},{key:'value',label:'Total'}], arr: data.map(r=>({mode:r.mode,value:r.payments})) },
+        { tableTitle: '3) Expense', columns: [{key:'mode',label:'Mode'},{key:'value',label:'Total'}], arr: data.map(r=>({mode:r.mode,value:r.expenses})) },
+        { tableTitle: '4) Balance', columns: [{key:'mode',label:'Mode'},{key:'value',label:'Balance'}], arr: (()=>{ const cash = data.find(r=>r.mode==='Cash')||{receipts:0,payments:0,expenses:0}; const bank = data.filter(r=>r.mode!=='Cash').reduce((s,r)=>s+((r.receipts||0)-(r.payments||0)-(r.expenses||0)),0); return [{mode:'Cash',value: (cash.receipts - cash.payments - cash.expenses)}, {mode:'Bank (UPI+Bank+Cheque/DD)', value: bank}]; })() }
+      ];
+      await multiTablePDF(tables, `${filename}.pdf`, 'Payment Mode', companyDetails);
+    } else if (type === 'excel') {
+      // Workbook with four sheets
+      const wb = XLSX.utils.book_new();
+      const makeSheet = (title, rows, cols) => {
+        const wsData = [cols.map(c=>c.label), ...rows.map(r=>cols.map(c=> r[c.key] ?? ''))];
+        const ws = XLSX.utils.aoa_to_sheet(wsData);
+        XLSX.utils.book_append_sheet(wb, ws, title.slice(0,31));
+      };
+      makeSheet('1-Received', data.map(r=>({mode:r.mode,value:r.receipts})), [{key:'mode',label:'Mode'},{key:'value',label:'Total'}]);
+      makeSheet('2-Paid', data.map(r=>({mode:r.mode,value:r.payments})), [{key:'mode',label:'Mode'},{key:'value',label:'Total'}]);
+      makeSheet('3-Expense', data.map(r=>({mode:r.mode,value:r.expenses})), [{key:'mode',label:'Mode'},{key:'value',label:'Total'}]);
+      const cash = data.find(r=>r.mode==='Cash')||{receipts:0,payments:0,expenses:0};
+      const bank = data.filter(r=>r.mode!=='Cash').reduce((s,r)=>s+((r.receipts||0)-(r.payments||0)-(r.expenses||0)),0);
+      makeSheet('4-Balance', [{mode:'Cash',value:(cash.receipts - cash.payments - cash.expenses)},{mode:'Bank Combined',value:bank}], [{key:'mode',label:'Mode'},{key:'value',label:'Balance'}]);
+      XLSX.writeFile(wb, `${filename}.xlsx`);
+    } else if (type === 'print') {
+      // Print with letterhead-like header; only the four tables in compact form
+      const w = window.open('', 'PRINT', 'height=700,width=900');
+      const headerHtml = `
+        <div style="text-align:center;margin-bottom:8px;border-bottom:2px solid #333;padding-bottom:8px;">
+          <div style="font-size:20px;font-weight:bold;">${companyDetails?.firmName||'Company'}</div>
+          <div style="font-size:12px;color:#555;">${companyDetails?.address||''}</div>
+          <div style="font-size:12px;color:#555;">${companyDetails?.gstin?('GSTIN: '+companyDetails.gstin):''}</div>
+        </div>`;
+      const renderTable = (title, rows, cols) => {
+        const head = `<tr>${cols.map(c=>`<th style=\"border:1px solid #ddd;padding:6px;text-align:${c.key==='mode'?'left':'right'};\">${c.label}</th>`).join('')}</tr>`;
+        const body = rows.map(r=>`<tr>${cols.map(c=>`<td style=\"border:1px solid #ddd;padding:6px;text-align:${c.key==='mode'?'left':'right'};\">${(r[c.key]||0).toLocaleString? r[c.key].toLocaleString('en-IN') : (r[c.key]||'')}</td>`).join('')}</tr>`).join('');
+        return `<div style=\"margin:10px 0\"><div style=\"font-weight:600;margin:6px 0\">${title}</div><table style=\"width:100%;border-collapse:collapse\"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
+      };
+      const rows = buildModeRows();
+      const cashRow = rows.find(r=>r.mode==='Cash') || { receipts:0,payments:0,expenses:0 };
+      const bankCombined = rows.filter(r=>r.mode!=='Cash').reduce((s,r)=>s+((r.receipts||0)-(r.payments||0)-(r.expenses||0)),0);
+      const balanceRows = [ { mode:'Cash', balance: (cashRow.receipts - cashRow.payments - cashRow.expenses) }, { mode:'Bank (UPI+Bank+Cheque/DD)', balance: bankCombined } ];
+      const balanceCols = [ {key:'mode',label:'Mode'}, {key:'balance',label:'Balance'} ];
+      w.document.write(`<html><head><title>Payment Mode</title><style>body{font-family:Arial;padding:16px} table{width:100%;border-collapse:collapse} th,td{border:1px solid #ddd;padding:6px} th{background:#f6f6f6}</style></head><body>${headerHtml}${renderTable('1) Payment Received (Sales/PRI)', rows.map(r=>({ mode:r.mode, value:r.receipts })), [{key:'mode',label:'Mode'},{key:'value',label:'Total'}])}${renderTable('2) Payment Paid (Purchase/PRP)', rows.map(r=>({ mode:r.mode, value:r.payments })), [{key:'mode',label:'Mode'},{key:'value',label:'Total'}])}${renderTable('3) Expense', rows.map(r=>({ mode:r.mode, value:r.expenses })), [{key:'mode',label:'Mode'},{key:'value',label:'Total'}])}${renderTable('4) Balance', balanceRows, balanceCols)}</body></html>`);
+      w.document.close(); w.focus(); setTimeout(()=>{ w.print(); w.close(); }, 300);
+    }
+  };
+  useEffect(() => {
+    if (activeTab !== 'mode') return;
+    const effectiveAppId = appId || 'acc-app-e5316';
+    const basePath = `artifacts/${effectiveAppId}/users/${userId}`;
+    const load = async () => {
+      try {
+        // Compute date range from filters
+        let startDate = null, endDate = null;
+        if (timeFilter === 'custom' && customDateFrom && customDateTo) {
+          startDate = new Date(customDateFrom);
+          endDate = new Date(customDateTo);
+        } else if (timeFilter === 'financial' && selectedFinancialYear) {
+          if (selectedSubFilter === 'month' && selectedMonth) {
+            const r = getMonthRange(selectedMonth);
+            startDate = r.startDate; endDate = r.endDate;
+          } else if (selectedSubFilter === 'quarter' && selectedQuarter) {
+            const r = getQuarterRange(selectedQuarter);
+            startDate = r.startDate; endDate = r.endDate;
+          } else {
+            const r = getFinancialYearRange(selectedFinancialYear);
+            startDate = r.startDate; endDate = r.endDate;
+          }
+        }
+
+        // Fetch all payments, then filter JS-side by date/party
+        const snap = await getDocs(collection(db, `${basePath}/payments`));
+        let rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        rows = rows.filter(r => {
+          // Party filter (if available on record)
+          if (selectedParty && (r.partyId || r.party)) {
+            const pid = r.partyId || r.party;
+            if (pid !== selectedParty) return false;
+          }
+          // Date filter
+          if (startDate && endDate) {
+            const ds = r.paymentDate || r.date;
+            if (!ds) return false;
+            const dObj = new Date(ds);
+            return dObj >= startDate && dObj <= endDate;
+          }
+          return true;
+        });
+        const normalizeMode = (raw) => {
+          const m = String(raw || '').toLowerCase();
+          if (m.includes('cash')) return 'Cash';
+          if (m.includes('upi')) return 'UPI';
+          if (m.includes('cheque') || m.includes('dd') || m.includes('demand draft')) return 'Cheque/DD';
+          return 'Bank Transfer';
+        };
+        const map = new Map();
+        rows.forEach(r => {
+          const group = normalizeMode(r.paymentMode);
+          const amt = Number(r.totalAmount || r.amount || 0);
+          if (!map.has(group)) map.set(group, { mode: group, salesTotal: 0, salesCount: 0, receiptRowsSales: [], purchasePaidTotal: 0, purchasePaidCount: 0, receiptRowsPurchase: [], expenseTotal: 0, expenseCount: 0, expenseRows: [], taxPaymentsTotal: 0, taxPaymentsCount: 0, taxPaymentsRows: [] });
+          const m = map.get(group);
+          const recNo = (r.receiptNumber || r.number || '').toString().toUpperCase();
+          const isSalesReceipt = recNo.startsWith('PRI');
+          const isPurchasePayment = recNo.startsWith('PRP') || recNo.startsWith('PRB');
+          if (isSalesReceipt) {
+            m.salesTotal += amt; m.salesCount += 1;
+            m.receiptRowsSales.push({ id: r.id, date: r.paymentDate || r.date, receiptNumber: r.receiptNumber || r.number, partyName: r.partyName || r.partyFirmName || '', amount: amt });
+          }
+          if (isPurchasePayment) {
+            m.purchasePaidTotal += amt; m.purchasePaidCount += 1;
+            m.receiptRowsPurchase.push({ id: r.id, date: r.paymentDate || r.date, receiptNumber: r.receiptNumber || r.number, partyName: r.partyName || r.partyFirmName || '', amount: amt });
+          }
+        });
+        // Fetch expenses and merge by paymentMode
+        const expSnap = await getDocs(collection(db, `${basePath}/expenses`));
+        expSnap.docs.forEach(d => {
+          const e = d.data() || {};
+          const group = normalizeMode(e.paymentMode || 'Bank Transfer');
+          const amt = Number(e.amount || 0);
+          if (startDate && endDate) {
+            const ds = e.date;
+            if (!ds) return; // skip if no date
+            const dObj = new Date(ds);
+            if (!(dObj >= startDate && dObj <= endDate)) return;
+          }
+          if (!map.has(group)) map.set(group, { mode: group, salesTotal: 0, salesCount: 0, receiptRowsSales: [], purchasePaidTotal: 0, purchasePaidCount: 0, receiptRowsPurchase: [], expenseTotal: 0, expenseCount: 0, expenseRows: [], taxPaymentsTotal: 0, taxPaymentsCount: 0, taxPaymentsRows: [] });
+          const m = map.get(group);
+          m.expenseTotal += amt; m.expenseCount += 1;
+          m.expenseRows.push({ id: d.id, date: e.date, receiptNumber: e.head || e.description || '', partyName: e.head || '', amount: amt });
+        });
+
+        // Include salary payments as expenses (fallback paymentMode Bank Transfer)
+        const salarySnap = await getDocs(collection(db, `${basePath}/salaryPayments`));
+        salarySnap.docs.forEach(sd => {
+          const s = sd.data() || {};
+          const ds = s.date || s.paymentDate || s.createdAt;
+          if (startDate && endDate) {
+            if (!ds) return; const dObj = new Date(ds); if (!(dObj >= startDate && dObj <= endDate)) return;
+          }
+          const group = normalizeMode(s.paymentMode || 'Bank Transfer');
+          if (!map.has(group)) map.set(group, { mode: group, salesTotal: 0, salesCount: 0, receiptRowsSales: [], purchasePaidTotal: 0, purchasePaidCount: 0, receiptRowsPurchase: [], expenseTotal: 0, expenseCount: 0, expenseRows: [], taxPaymentsTotal: 0, taxPaymentsCount: 0, taxPaymentsRows: [] });
+          const m = map.get(group);
+          const amt = Number(s.netAmount || s.totalEarnings || s.total || 0);
+          m.expenseTotal += amt; m.expenseCount += 1;
+          m.expenseRows.push({ id: sd.id, date: s.date || '', receiptNumber: s.remarks || s.month || 'Salary', partyName: s.employeeName || '', amount: amt });
+        });
+
+        // Tax payments dedicated collection
+        try {
+          const taxSnap = await getDocs(collection(db, `${basePath}/taxPayments`));
+          taxSnap.docs.forEach(td => {
+            const t = td.data() || {};
+            const group = normalizeMode(t.paymentMode || 'Bank Transfer');
+            const amt = Number(t.amount || 0);
+            if (startDate && endDate) {
+              const ds = t.paymentDate;
+              if (!ds) return; const dObj = new Date(ds); if (!(dObj >= startDate && dObj <= endDate)) return;
+            }
+            if (!map.has(group)) map.set(group, { mode: group, salesTotal: 0, salesCount: 0, receiptRowsSales: [], purchasePaidTotal: 0, purchasePaidCount: 0, receiptRowsPurchase: [], expenseTotal: 0, expenseCount: 0, expenseRows: [], taxPaymentsTotal: 0, taxPaymentsCount: 0, taxPaymentsRows: [] });
+            const m = map.get(group);
+            m.taxPaymentsTotal += amt; m.taxPaymentsCount += 1;
+            m.taxPaymentsRows.push({ id: td.id, date: t.paymentDate || '', receiptNumber: `${t.taxType||'TAX'} ${t.periodValue||''} ${t.reference||''}`.trim(), partyName: 'Tax', amount: amt });
+            // also include into expense for balance
+            m.expenseTotal += amt; m.expenseCount += 1;
+          });
+        } catch {}
+
+        const summaryRows = Array.from(map.values()).sort((a,b)=>a.mode.localeCompare(b.mode));
+        setModeSummary(summaryRows);
+        // Persist for Balance Sheet to consume (totals only)
+        try {
+          const period = (startDate && endDate) ? { start: startDate.toISOString().slice(0,10), end: endDate.toISOString().slice(0,10) } : null;
+          localStorage.setItem(`mode-summary:${appId}:${userId}`, JSON.stringify({ period, rows: summaryRows.map(({mode,salesTotal,purchasePaidTotal,expenseTotal})=>({mode,receipts:salesTotal,payments:purchasePaidTotal,expenses:expenseTotal})) }));
+        } catch {}
+      } catch {}
+    };
+    load();
+  }, [activeTab, db, appId, userId, timeFilter, customDateFrom, customDateTo, selectedFinancialYear, selectedSubFilter, selectedMonth, selectedQuarter, selectedParty]);
+
   // Helper function to convert Firestore timestamp to date string
   const convertTimestamp = (timestamp) => {
     if (!timestamp) return new Date().toISOString().split('T')[0];
@@ -2597,6 +2803,14 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
             {tab === 'receipts' ? 'Payment Receipts' : tab.charAt(0).toUpperCase() + tab.slice(1)}
           </button>
         ))}
+        <button
+          onClick={() => setActiveTab('mode')}
+          className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+            activeTab === 'mode' ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          Payment Mode
+        </button>
       </div>
 
       {/* Sub-tabs for Payment Receipts */}
@@ -2618,8 +2832,305 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
         </div>
       )}
 
-      {/* Filters */}
-      <div className="bg-white p-4 rounded-lg shadow mb-6">
+      {/* Filters (on top) for Payment Mode tab */}
+      {activeTab === 'mode' && (
+        <div className="bg-white p-4 rounded-lg shadow mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            {/* Time Filter */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Time Filter</label>
+              <select
+                value={timeFilter}
+                onChange={(e) => {
+                  setTimeFilter(e.target.value);
+                  setSelectedSubFilter('');
+                  setSelectedMonth('');
+                  setSelectedQuarter('');
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="all">All Time</option>
+                <option value="custom">Custom</option>
+                <option value="financial">Financial Year</option>
+              </select>
+            </div>
+
+            {/* Custom Date Range */}
+            {timeFilter === 'custom' && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">From Date</label>
+                  <input type="date" value={customDateFrom} onChange={(e)=>setCustomDateFrom(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">To Date</label>
+                  <input type="date" value={customDateTo} onChange={(e)=>setCustomDateTo(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+              </>
+            )}
+
+            {/* Financial Year Filter */}
+            {timeFilter === 'financial' && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Financial Year</label>
+                  <select
+                    value={selectedFinancialYear}
+                    onChange={(e) => {
+                      setSelectedFinancialYear(e.target.value);
+                      setSelectedSubFilter('');
+                      setSelectedMonth('');
+                      setSelectedQuarter('');
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {getAvailableFinancialYears().map(year => (
+                      <option key={year} value={year}>{year}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Filter Type</label>
+                  <select
+                    value={selectedSubFilter}
+                    onChange={(e)=>{ setSelectedSubFilter(e.target.value); setSelectedMonth(''); setSelectedQuarter(''); }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">Full Financial Year</option>
+                    <option value="month">Specific Month</option>
+                    <option value="quarter">Specific Quarter</option>
+                  </select>
+                </div>
+                {selectedSubFilter === 'month' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Month</label>
+                    <select value={selectedMonth} onChange={(e)=>setSelectedMonth(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                      <option value="">Select Month</option>
+                      <option value="04-25">April 2025</option>
+                      <option value="05-25">May 2025</option>
+                      <option value="06-25">June 2025</option>
+                      <option value="07-25">July 2025</option>
+                      <option value="08-25">August 2025</option>
+                      <option value="09-25">September 2025</option>
+                      <option value="10-25">October 2025</option>
+                      <option value="11-25">November 2025</option>
+                      <option value="12-25">December 2025</option>
+                      <option value="01-26">January 2026</option>
+                      <option value="02-26">February 2026</option>
+                      <option value="03-26">March 2026</option>
+                    </select>
+                  </div>
+                )}
+                {selectedSubFilter === 'quarter' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Quarter</label>
+                    <select value={selectedQuarter} onChange={(e)=>setSelectedQuarter(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                      <option value="">Select Quarter</option>
+                      {getCurrentFinancialYearQuarters().map(q => (<option key={q.value} value={q.value}>{q.label}</option>))}
+                    </select>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Party Filter and Clear */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Party</label>
+              <div className="flex space-x-2">
+                <select value={selectedParty} onChange={(e)=>setSelectedParty(e.target.value)} className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="">All Parties</option>
+                  {parties.map((party)=>(<option key={party.id} value={party.id}>{party.firmName || party.name}</option>))}
+                </select>
+                <button onClick={()=>{ setSelectedParty(''); setTimeFilter('all'); setCustomDateFrom(''); setCustomDateTo(''); const yrs=getAvailableFinancialYears(); const cur=getCurrentFinancialYear(); setSelectedFinancialYear(yrs.includes(cur)?cur:(yrs[0]||'')); setSelectedMonth(''); setSelectedQuarter(''); setSelectedSubFilter(''); }} className="px-3 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 text-sm">Clear</button>
+              </div>
+            </div>
+
+            {/* Export Format */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Export Format</label>
+              <select value={exportFormat} onChange={(e)=>setExportFormat(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="csv">CSV</option>
+                <option value="excel">Excel</option>
+                <option value="pdf">PDF</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Payment Mode Summary (new tab) */}
+      {activeTab === 'mode' && (
+        <div className="bg-white p-4 rounded-lg shadow mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-lg font-semibold">Payment Mode</h3>
+            <div className="flex gap-2">
+              <button onClick={() => handleExportPaymentMode('pdf')} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm">Export PDF</button>
+              <button onClick={() => handleExportPaymentMode('excel')} className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm">Export Excel</button>
+              <button onClick={() => handleExportPaymentMode('print')} className="bg-gray-700 hover:bg-gray-800 text-white px-3 py-1 rounded text-sm">Print</button>
+            </div>
+          </div>
+          {/* 1. Payment Received (Sales/PRI) */}
+          <div className="mb-8">
+            <h4 className="font-semibold mb-2">1) Payment Received (Sales/PRI)</h4>
+            <table className="min-w-full divide-y divide-gray-200 text-sm">
+              <thead className="bg-gray-50"><tr><th className="px-4 py-2 text-left">Mode</th><th className="px-4 py-2 text-right">Receipts</th><th className="px-4 py-2 text-right">Total</th></tr></thead>
+              <tbody>
+                {modeSummary.map((m,i)=> (
+                  <tr key={`rec-${i}`} className="border-t">
+                    <td className="px-4 py-2">{m.mode}</td>
+                    <td className="px-4 py-2 text-right"><button onClick={()=>{ setModeModalType('sales'); setModeModalTitle(`${m.mode} - Sales Receipts (${m.salesCount||0})`); setModeModalRowsSales(m.receiptRowsSales||[]); setModeModalRowsPurchase([]); setModeModalRowsExpense([]); setShowModeModal(true); }} className="text-xs text-blue-600 hover:underline">{m.salesCount||0} receipts</button></td>
+                    <td className="px-4 py-2 text-right">{(m.salesTotal||0).toLocaleString('en-IN')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* 2. Payment Paid (Purchase/PRP) */}
+          <div className="mb-8">
+            <h4 className="font-semibold mb-2">2) Payment Paid (Purchase/PRP)</h4>
+            <table className="min-w-full divide-y divide-gray-200 text-sm">
+              <thead className="bg-gray-50"><tr><th className="px-4 py-2 text-left">Mode</th><th className="px-4 py-2 text-right">Receipts</th><th className="px-4 py-2 text-right">Total</th></tr></thead>
+              <tbody>
+                {modeSummary.map((m,i)=> (
+                  <tr key={`paid-${i}`} className="border-t">
+                    <td className="px-4 py-2">{m.mode}</td>
+                    <td className="px-4 py-2 text-right"><button onClick={()=>{ setModeModalType('purchase'); setModeModalTitle(`${m.mode} - Purchase Receipts (${m.purchasePaidCount||0})`); setModeModalRowsSales([]); setModeModalRowsPurchase(m.receiptRowsPurchase||[]); setModeModalRowsExpense([]); setShowModeModal(true); }} className="text-xs text-blue-600 hover:underline">{m.purchasePaidCount||0} receipts</button></td>
+                    <td className="px-4 py-2 text-right">{(m.purchasePaidTotal||0).toLocaleString('en-IN')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* 3. Expense */}
+          <div className="mb-8">
+            <h4 className="font-semibold mb-2">3) Expense</h4>
+            <table className="min-w-full divide-y divide-gray-200 text-sm">
+              <thead className="bg-gray-50"><tr><th className="px-4 py-2 text-left">Mode</th><th className="px-4 py-2 text-right">Entries</th><th className="px-4 py-2 text-right">Total</th></tr></thead>
+              <tbody>
+                {modeSummary.map((m,i)=> (
+                  <tr key={`exp-${i}`} className="border-t">
+                    <td className="px-4 py-2">{m.mode}</td>
+                    <td className="px-4 py-2 text-right"><button onClick={()=>{ setModeModalType('expense'); setModeModalTitle(`${m.mode} - Expenses (${m.expenseCount||0})`); setModeModalRowsSales([]); setModeModalRowsPurchase([]); setModeModalRowsExpense(m.expenseRows||[]); setShowModeModal(true); }} className="text-xs text-blue-600 hover:underline">{m.expenseCount||0} entries</button></td>
+                    <td className="px-4 py-2 text-right">{(m.expenseTotal||0).toLocaleString('en-IN')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* 4. Tax Payments (treated as expenses) */}
+          <div className="mb-8">
+            <h4 className="font-semibold mb-2">4) Tax Payments</h4>
+            <table className="min-w-full divide-y divide-gray-200 text-sm">
+              <thead className="bg-gray-50"><tr><th className="px-4 py-2 text-left">Mode</th><th className="px-4 py-2 text-right">Entries</th><th className="px-4 py-2 text-right">Total</th></tr></thead>
+              <tbody>
+                {modeSummary.map((m,i)=>{
+                  const count = m.taxPaymentsCount || 0;
+                  const total = m.taxPaymentsTotal || 0;
+                  return (
+                    <tr key={`tax-${i}`} className="border-t">
+                      <td className="px-4 py-2">{m.mode}</td>
+                      <td className="px-4 py-2 text-right">
+                        <button onClick={()=>{ setModeModalType('tax'); setModeModalTitle(`${m.mode} - Tax Payments (${count})`); setModeModalRowsSales([]); setModeModalRowsPurchase([]); setModeModalRowsExpense([]); setModeModalRowsTax(m.taxPaymentsRows||[]); setShowModeModal(true); }} className="text-xs text-blue-600 hover:underline">{count} entries</button>
+                      </td>
+                      <td className="px-4 py-2 text-right">{total.toLocaleString('en-IN')}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* 5. Balance (Cash and Combined Bank) */}
+          <div>
+            <h4 className="font-semibold mb-2">5) Balance</h4>
+            {(() => {
+              const byMode = modeSummary.map(m => ({ mode: m.mode, balance: (m.salesTotal||0) - (m.purchasePaidTotal||0) - (m.expenseTotal||0) }));
+              const cashRow = byMode.find(r => r.mode === 'Cash');
+              const bankCombined = byMode.filter(r => r.mode !== 'Cash').reduce((s,r)=>s+r.balance,0);
+              return (
+                <table className="min-w-full divide-y divide-gray-200 text-sm">
+                  <thead className="bg-gray-50"><tr><th className="px-4 py-2 text-left">Mode</th><th className="px-4 py-2 text-right">Balance</th></tr></thead>
+                  <tbody>
+                    <tr className="border-t"><td className="px-4 py-2">Cash</td><td className="px-4 py-2 text-right">{((cashRow?.balance)||0).toLocaleString('en-IN')}</td></tr>
+                    <tr className="border-t"><td className="px-4 py-2">Bank Transfer (UPI + Bank + Cheque/DD)</td><td className="px-4 py-2 text-right">{bankCombined.toLocaleString('en-IN')}</td></tr>
+                  </tbody>
+                </table>
+              );
+            })()}
+          </div>
+          <div className="text-xs text-gray-500 mt-2">Modes: Cash, UPI, Cheque/DD (clubbed), Bank Transfer (others). Click counts to view details.</div>
+        </div>
+      )}
+
+      {showModeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+      <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-2xl relative" onKeyDown={(e)=>{ if (e.key==='Escape') { setShowModeModal(false);} }} tabIndex={0}>
+            <button className="absolute top-2 right-2 text-gray-500 hover:text-gray-800 text-xl" onClick={()=>setShowModeModal(false)}>&times;</button>
+            <h4 className="text-lg font-semibold mb-3">{modeModalTitle}</h4>
+            <div className="max-h-96 overflow-y-auto">
+              {modeModalType === 'sales' && (
+                <div className="mb-4">
+                  <table className="min-w-full divide-y divide-gray-200 text-sm">
+                    <thead className="bg-gray-50"><tr><th className="px-4 py-2 text-left">Date</th><th className="px-4 py-2 text-left">Receipt No</th><th className="px-4 py-2 text-left">Party</th><th className="px-4 py-2 text-right">Amount</th></tr></thead>
+                    <tbody>
+                      {(modeModalRowsSales||[]).map((r,idx)=> (
+                        <tr key={r.id||idx} className="border-t"><td className="px-4 py-2">{r.date||''}</td><td className="px-4 py-2">{r.receiptNumber||''}</td><td className="px-4 py-2">{r.partyName||''}</td><td className="px-4 py-2 text-right">{(r.amount||0).toLocaleString('en-IN')}</td></tr>
+                      ))}
+                      {(!modeModalRowsSales || modeModalRowsSales.length===0) && (<tr><td className="px-4 py-6 text-gray-500" colSpan={4}>No invoice receipts</td></tr>)}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {modeModalType === 'purchase' && (
+                <div>
+                  <table className="min-w-full divide-y divide-gray-200 text-sm">
+                    <thead className="bg-gray-50"><tr><th className="px-4 py-2 text-left">Date</th><th className="px-4 py-2 text-left">Receipt No</th><th className="px-4 py-2 text-left">Party</th><th className="px-4 py-2 text-right">Amount</th></tr></thead>
+                    <tbody>
+                      {(modeModalRowsPurchase||[]).map((r,idx)=> (
+                        <tr key={r.id||idx} className="border-t"><td className="px-4 py-2">{r.date||''}</td><td className="px-4 py-2">{r.receiptNumber||''}</td><td className="px-4 py-2">{r.partyName||''}</td><td className="px-4 py-2 text-right">{(r.amount||0).toLocaleString('en-IN')}</td></tr>
+                      ))}
+                      {(!modeModalRowsPurchase || modeModalRowsPurchase.length===0) && (<tr><td className="px-4 py-6 text-gray-500" colSpan={4}>No purchase receipts</td></tr>)}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {modeModalType === 'expense' && (
+                <div className="mt-6">
+                  <table className="min-w-full divide-y divide-gray-200 text-sm">
+                    <thead className="bg-gray-50"><tr><th className="px-4 py-2 text-left">Date</th><th className="px-4 py-2 text-left">Head/Note</th><th className="px-4 py-2 text-right">Amount</th></tr></thead>
+                    <tbody>
+                      {(modeModalRowsExpense||[]).map((r,idx)=> (
+                        <tr key={r.id||idx} className="border-t"><td className="px-4 py-2">{r.date||''}</td><td className="px-4 py-2">{r.receiptNumber||''}</td><td className="px-4 py-2 text-right">{(r.amount||0).toLocaleString('en-IN')}</td></tr>
+                      ))}
+                      {(!modeModalRowsExpense || modeModalRowsExpense.length===0) && (<tr><td className="px-4 py-6 text-gray-500" colSpan={3}>No expenses</td></tr>)}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {modeModalType === 'tax' && (
+                <div className="mt-6">
+                  <table className="min-w-full divide-y divide-gray-200 text-sm">
+                    <thead className="bg-gray-50"><tr><th className="px-4 py-2 text-left">Date</th><th className="px-4 py-2 text-left">Details</th><th className="px-4 py-2 text-right">Amount</th></tr></thead>
+                    <tbody>
+                      {(modeModalRowsTax||[]).map((r,idx)=> (
+                        <tr key={r.id||idx} className="border-t"><td className="px-4 py-2">{r.date||''}</td><td className="px-4 py-2">{r.receiptNumber||''}</td><td className="px-4 py-2 text-right">{(r.amount||0).toLocaleString('en-IN')}</td></tr>
+                      ))}
+                      {(!modeModalRowsTax || modeModalRowsTax.length===0) && (<tr><td className="px-4 py-6 text-gray-500" colSpan={3}>No tax payments</td></tr>)}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Filters (hide when in Payment Mode tab) */}
+      {activeTab !== 'mode' && (<div className="bg-white p-4 rounded-lg shadow mb-6">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           {/* Time Filter */}
           <div>
@@ -2805,10 +3316,10 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
             </select>
           </div>
         </div>
-      </div>
+      </div>)}
 
-      {/* Main Content - Bills and Party Summary (for invoice, challan, purchase tabs) */}
-      {activeTab !== 'receipts' && (
+      {/* Main Content - Bills and Party Summary (hide in Payment Mode) */}
+      {activeTab !== 'receipts' && activeTab !== 'mode' && (
         <>
           {/* Overall Records Table */}
       <div className="bg-white rounded-lg shadow mb-6">

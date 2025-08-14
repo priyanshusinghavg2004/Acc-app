@@ -37,6 +37,10 @@ const initialItemRow = {
   length: 0,
   height: 0,
   qty: 0,
+  qtyExpr: '',
+  qtyDisplay: '',
+  lineDiscountType: 'amount',
+  lineDiscountValue: 0,
   rate: 0,
   amount: 0,
   sgst: 0,
@@ -92,6 +96,20 @@ function round2(val) {
   return Math.round((parseFloat(val) + Number.EPSILON) * 100) / 100;
 }
 
+// Parse a quantity expression like "5x3x2" or "10*2" into a numeric product and a normalized display string
+function parseQtyExpression(input) {
+  const s = String(input || '').trim().replace(/\s+/g, '');
+  if (!s) return { ok: false, value: 0, display: '' };
+  const parts = s.split(/[xX\*]/).filter(Boolean);
+  if (parts.length === 0) return { ok: false, value: 0, display: '' };
+  let product = 1;
+  for (const p of parts) {
+    const n = Number(p);
+    if (!isFinite(n) || n <= 0) return { ok: false, value: 0, display: '' };
+    product *= n;
+  }
+  return { ok: true, value: product, display: parts.join('×') };
+}
 
 
 
@@ -201,8 +219,8 @@ function Sales({ db, userId, isAuthReady, appId }) {
   // Add at the top:
   const [errorMessage, setErrorMessage] = useState('');
 
-  // 1. Add state for discount type and value:
-  const [discountType, setDiscountType] = useState('percent'); // 'percent' or 'amount'
+  // Legacy bill-level discount (kept for backward compatibility in saved bills)
+  const [discountType, setDiscountType] = useState('amount');
   const [discountValue, setDiscountValue] = useState('');
 
   const [quotationTermsOverride, setQuotationTermsOverride] = useState('');
@@ -427,13 +445,34 @@ function Sales({ db, userId, isAuthReady, appId }) {
           // Only update the changed field and recalculate total using current GST values
           let itemObj = items.find(it => it.id === row.item);
           const unit = itemObj ? itemObj.quantityMeasurement : '';
-          if (areaUnits.includes(unit)) {
-            updated.qty = (parseFloat(updated.nos) || 0) * (parseFloat(updated.length) || 1) * (parseFloat(updated.height) || 1);
-            updated.amount = (parseFloat(updated.qty) || 0) * (parseFloat(updated.rate) || 0);
+          // Compute quantity from qtyExpr if present/valid; else fallback to Nos×Length×Height
+          const parsed = parseQtyExpression(updated.qtyExpr);
+          let computedQty;
+          if (parsed.ok) {
+            computedQty = parsed.value;
+            updated.qtyDisplay = parsed.display;
           } else {
-            updated.qty = (parseFloat(updated.nos) || 0) * (parseFloat(updated.length) || 1) * (parseFloat(updated.height) || 1);
-            updated.amount = (parseFloat(updated.qty) || 0) * (parseFloat(updated.rate) || 0);
+            computedQty = (parseFloat(updated.nos) || 0) * (parseFloat(updated.length) || 1) * (parseFloat(updated.height) || 1);
+            if (!updated.qtyExpr) {
+              const a = parseFloat(updated.nos) || 0; const b = parseFloat(updated.length) || 1; const c = parseFloat(updated.height) || 1;
+              updated.qtyDisplay = `${a}×${b}×${c}`;
+            }
           }
+          updated.qty = computedQty;
+          // Keep nos in sync for legacy stock logic
+          updated.nos = computedQty;
+          updated.amount = (parseFloat(updated.qty) || 0) * (parseFloat(updated.rate) || 0);
+          // Compute effective amount after per-line discount
+          const rawAmount = (parseFloat(updated.qty) || 0) * (parseFloat(updated.rate) || 0);
+          let lineDiscAmt = 0;
+          if ((updated.lineDiscountType || 'amount') === 'percent') {
+            lineDiscAmt = rawAmount * ((parseFloat(updated.lineDiscountValue) || 0) / 100);
+          } else {
+            lineDiscAmt = parseFloat(updated.lineDiscountValue) || 0;
+          }
+          lineDiscAmt = Math.min(Math.max(lineDiscAmt, 0), rawAmount);
+          updated.amount = round2(rawAmount - lineDiscAmt);
+
           // Always use the GST values already present in the row
           updated.sgst = row.sgst;
           updated.cgst = row.cgst;
@@ -501,13 +540,32 @@ function Sales({ db, userId, isAuthReady, appId }) {
         // For all other fields (new bill), preserve GST values and just recalculate total
         let itemObj = items.find(it => it.id === (field === 'item' ? value : row.item));
         const unit = itemObj ? itemObj.quantityMeasurement : '';
-        if (areaUnits.includes(unit)) {
-          updated.qty = (parseFloat(updated.nos) || 0) * (parseFloat(updated.length) || 1) * (parseFloat(updated.height) || 1);
-          updated.amount = (parseFloat(updated.qty) || 0) * (parseFloat(updated.rate) || 0);
+        // Compute quantity from qtyExpr if present/valid; else fallback to Nos×Length×Height
+        const parsed = parseQtyExpression(updated.qtyExpr);
+        let computedQty;
+        if (parsed.ok) {
+          computedQty = parsed.value;
+          updated.qtyDisplay = parsed.display;
         } else {
-          updated.qty = (parseFloat(updated.nos) || 0) * (parseFloat(updated.length) || 1) * (parseFloat(updated.height) || 1);
-          updated.amount = (parseFloat(updated.qty) || 0) * (parseFloat(updated.rate) || 0);
+          computedQty = (parseFloat(updated.nos) || 0) * (parseFloat(updated.length) || 1) * (parseFloat(updated.height) || 1);
+          if (!updated.qtyExpr) {
+            const a = parseFloat(updated.nos) || 0; const b = parseFloat(updated.length) || 1; const c = parseFloat(updated.height) || 1;
+            updated.qtyDisplay = `${a}×${b}×${c}`;
+          }
         }
+        updated.qty = computedQty;
+        // Keep nos in sync for legacy stock logic
+        updated.nos = computedQty;
+        // Apply per-line discount to amount
+        const rawAmount = (parseFloat(updated.qty) || 0) * (parseFloat(updated.rate) || 0);
+        let lineDiscAmt = 0;
+        if ((updated.lineDiscountType || 'amount') === 'percent') {
+          lineDiscAmt = rawAmount * ((parseFloat(updated.lineDiscountValue) || 0) / 100);
+        } else {
+          lineDiscAmt = parseFloat(updated.lineDiscountValue) || 0;
+        }
+        lineDiscAmt = Math.min(Math.max(lineDiscAmt, 0), rawAmount);
+        updated.amount = round2(rawAmount - lineDiscAmt);
         // GST and total calculation
         const sgstAmt = (parseFloat(updated.amount) || 0) * (parseFloat(updated.sgst) || 0) / 100;
         const cgstAmt = (parseFloat(updated.amount) || 0) * (parseFloat(updated.cgst) || 0) / 100;
@@ -518,7 +576,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
 
       // Auto-add trailing row when user fills the last visible row
       const isRowNonEmpty = (r) => {
-        return !!(r.item || (parseFloat(r.rate) || 0) || (parseFloat(r.nos) || 0) > 1 || (parseFloat(r.length) || 0) || (parseFloat(r.height) || 0));
+        return !!(r.item || (parseFloat(r.rate) || 0) || (r.qtyExpr && String(r.qtyExpr).trim()) || (parseFloat(r.qty) || 0) > 0 || (parseFloat(r.nos) || 0) > 1 || (parseFloat(r.length) || 0) || (parseFloat(r.height) || 0) || (parseFloat(r.lineDiscountValue) || 0));
       };
       const last = updatedRows[updatedRows.length - 1];
       if (isRowNonEmpty(last)) {
@@ -650,11 +708,40 @@ function Sales({ db, userId, isAuthReady, appId }) {
     return rows;
   };
 
-  const discount = discountType === 'percent' ? getRowsForCalculation().reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0) * (parseFloat(discountValue) || 0) / 100 : parseFloat(discountValue) || 0;
-  const discountedSubtotal = Math.max(0, getRowsForCalculation().reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0) - discount);
-  const totalSGST = company.gstinType === 'Regular' ? round2(getRowsForCalculation().reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.sgst) || 0) / 100), 0)) : 0;
-  const totalCGST = company.gstinType === 'Regular' ? round2(getRowsForCalculation().reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0) / 100), 0)) : 0;
-  const totalIGST = company.gstinType === 'Regular' ? round2(getRowsForCalculation().reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0) / 100), 0)) : 0;
+  // With per-line discounts, subtotalBeforeDiscount is sum of line net amounts, and overall discount is derived
+  const subtotalBeforeDiscount = getRowsForCalculation().reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0);
+  const derivedDiscount = getRowsForCalculation().reduce((sum, row) => {
+    const qty = parseFloat(row.qty) || 0;
+    const rate = parseFloat(row.rate) || 0;
+    const rawAmount = qty * rate;
+    let disc = 0;
+    if ((row.lineDiscountType || 'amount') === 'percent') {
+      disc = rawAmount * ((parseFloat(row.lineDiscountValue) || 0) / 100);
+    } else {
+      disc = parseFloat(row.lineDiscountValue) || 0;
+    }
+    disc = Math.min(Math.max(disc, 0), rawAmount);
+    return sum + disc;
+  }, 0);
+  const discount = derivedDiscount; // for display
+  const discountedSubtotal = Math.max(0, subtotalBeforeDiscount);
+  // No proportional adjustment needed; amounts are already net of line discounts
+  const discountRatio = 0;
+  const totalSGST = company.gstinType === 'Regular' ? round2(getRowsForCalculation().reduce((sum, row) => {
+    const amt = parseFloat(row.amount) || 0;
+    const effAmt = amt - (amt * discountRatio);
+    return sum + (effAmt * (parseFloat(row.sgst) || 0) / 100);
+  }, 0)) : 0;
+  const totalCGST = company.gstinType === 'Regular' ? round2(getRowsForCalculation().reduce((sum, row) => {
+    const amt = parseFloat(row.amount) || 0;
+    const effAmt = amt - (amt * discountRatio);
+    return sum + (effAmt * (parseFloat(row.cgst) || 0) / 100);
+  }, 0)) : 0;
+  const totalIGST = company.gstinType === 'Regular' ? round2(getRowsForCalculation().reduce((sum, row) => {
+    const amt = parseFloat(row.amount) || 0;
+    const effAmt = amt - (amt * discountRatio);
+    return sum + (effAmt * (parseFloat(row.igst) || 0) / 100);
+  }, 0)) : 0;
   const grandTotal = discountedSubtotal + totalSGST + totalCGST + totalIGST;
 
   // Seller details from company
@@ -1617,14 +1704,13 @@ function Sales({ db, userId, isAuthReady, appId }) {
           <h3 className="text-xl font-bold text-gray-800 mb-2">Invoice Items</h3>
           <div className="overflow-x-auto rounded-lg border border-gray-200 mb-4">
             <table className="min-w-full divide-y divide-gray-200 text-sm">
-                                <thead className="bg-gray-50">
+                <thead className="bg-gray-50">
                                     <tr>
                   <th className="px-2 py-1">ITEM</th>
-                  <th className="px-2 py-1">NOS</th>
-                  <th className="px-2 py-1">LENGTH</th>
-                  <th className="px-2 py-1">HEIGHT</th>
+                  <th className="px-2 py-1">MEASUREMENT / NUMBERS</th>
                   <th className="px-2 py-1">QTY</th>
                   <th className="px-2 py-1">RATE</th>
+                  <th className="px-2 py-1">DISCOUNT</th>
                   <th className="px-2 py-1">AMOUNT</th>
                   {company.gstinType === 'Regular' && <th className="px-2 py-1">SGST</th>}
                   {company.gstinType === 'Regular' && <th className="px-2 py-1">CGST</th>}
@@ -1700,16 +1786,18 @@ function Sales({ db, userId, isAuthReady, appId }) {
                       </div>
                     </td>
                     <td className="px-2 py-1">
-                      <input type="number" value={row.nos} min={1} onChange={e => handleRowChange(idx, 'nos', e.target.value)}
-                        className="border border-gray-300 rounded-md p-1 w-16" />
-                    </td>
-                    <td className="px-2 py-1">
-                      <input type="number" value={row.length} min={0} onChange={e => handleRowChange(idx, 'length', e.target.value)}
-                        className="border border-gray-300 rounded-md p-1 w-16" />
-                    </td>
-                    <td className="px-2 py-1">
-                      <input type="number" value={row.height} min={0} onChange={e => handleRowChange(idx, 'height', e.target.value)}
-                        className="border border-gray-300 rounded-md p-1 w-16" />
+                      <div className="flex flex-col">
+                        <input
+                          type="text"
+                          value={row.qtyExpr}
+                          onChange={e => handleRowChange(idx, 'qtyExpr', e.target.value)}
+                          placeholder="e.g. 5x3x2 or 10*2"
+                          className="border border-gray-300 rounded-md p-1 w-40"
+                        />
+                        {row.qtyDisplay && (
+                          <span className="text-xs text-gray-500 mt-1">= {row.qty} ({row.qtyDisplay})</span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-2 py-1">
                       <input type="number" value={row.qty} min={0} readOnly
@@ -1718,6 +1806,27 @@ function Sales({ db, userId, isAuthReady, appId }) {
                     <td className="px-2 py-1">
                       <input type="number" value={row.rate} min={0} onChange={e => handleRowChange(idx, 'rate', e.target.value)}
                         className="border border-gray-300 rounded-md p-1 w-16" />
+                    </td>
+                    {/* Line Discount controls */}
+                    <td className="px-2 py-1">
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          min={0}
+                          value={row.lineDiscountValue}
+                          onChange={e => handleRowChange(idx, 'lineDiscountValue', e.target.value)}
+                          className="border border-gray-300 rounded-md p-1 w-20"
+                          placeholder={row.lineDiscountType === 'percent' ? 'Percent' : 'Amount'}
+                        />
+                        <select
+                          value={row.lineDiscountType || 'amount'}
+                          onChange={e => handleRowChange(idx, 'lineDiscountType', e.target.value)}
+                          className="border border-gray-300 rounded-md p-1"
+                        >
+                          <option value="amount">₹</option>
+                          <option value="percent">%</option>
+                        </select>
+                      </div>
                     </td>
                     <td className="px-2 py-1">
                       <input type="number" value={row.amount} min={0} readOnly
@@ -1758,7 +1867,8 @@ function Sales({ db, userId, isAuthReady, appId }) {
                                             </td>
                                         </tr>
                                     );
-                                  })}
+                 })}
+                 {/* Removed bill-level discount row in table; discount handled per line */}
                                 </tbody>
                             </table>
           </div>
@@ -1769,21 +1879,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
             </div>
             <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 w-full md:w-80">
               <div className="flex justify-between mb-1"><span>Subtotal (Excl. GST):</span><span>₹{rows.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0)}</span></div>
-              <div className="flex items-center gap-2 mb-2">
-                <label className="block text-sm font-medium text-gray-700">Discount:</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={discountValue}
-                  onChange={e => setDiscountValue(e.target.value)}
-                  className="w-24 border border-gray-300 rounded-md p-2"
-                  placeholder={discountType === 'percent' ? 'Percent' : 'Amount'}
-                />
-                <select value={discountType} onChange={e => setDiscountType(e.target.value)} className="border border-gray-300 rounded-md p-2">
-                  <option value="percent">%</option>
-                  <option value="amount">₹</option>
-                </select>
-              </div>
+              <div className="flex justify-between mb-1"><span>Discount:</span><span>-₹{round2(discount)}</span></div>
               <div className="flex justify-between mb-1 font-semibold"><span>Net Subtotal:</span><span>₹{discountedSubtotal.toFixed(2)}</span></div>
               <div className="flex justify-between mb-1"><span>Total SGST:</span><span>₹{totalSGST}</span></div>
               <div className="flex justify-between mb-1"><span>Total CGST:</span><span>₹{totalCGST}</span></div>

@@ -27,10 +27,12 @@ const TrialBalanceReport = ({ db, userId, appId, dateRange, financialYear, selec
       
       setLoading(true);
       try {
+        // Normalize date to string for Firestore comparisons (YYYY-MM-DD)
+        const endStr = new Date(dateRange.end).toISOString().split('T')[0];
         // Get all sales (credit to sales account)
         let salesQuery = query(
           collection(db, `artifacts/${appId}/users/${userId}/salesBills`),
-          where('invoiceDate', '<=', dateRange.end),
+          where('invoiceDate', '<=', endStr),
           orderBy('invoiceDate', 'desc')
         );
 
@@ -43,7 +45,7 @@ const TrialBalanceReport = ({ db, userId, appId, dateRange, financialYear, selec
         // Get all purchases (debit to purchase account)
         let purchasesQuery = query(
           collection(db, `artifacts/${appId}/users/${userId}/purchaseBills`),
-          where('billDate', '<=', dateRange.end),
+          where('billDate', '<=', endStr),
           orderBy('billDate', 'desc')
         );
 
@@ -56,7 +58,7 @@ const TrialBalanceReport = ({ db, userId, appId, dateRange, financialYear, selec
         // Get all payments for cash/bank accounts
         let paymentsQuery = query(
           collection(db, `artifacts/${appId}/users/${userId}/payments`),
-          where('paymentDate', '<=', dateRange.end),
+          where('paymentDate', '<=', endStr),
           orderBy('paymentDate', 'desc')
         );
 
@@ -76,7 +78,7 @@ const TrialBalanceReport = ({ db, userId, appId, dateRange, financialYear, selec
         // Get all expenses
         let expensesQuery = query(
           collection(db, `artifacts/${appId}/users/${userId}/expenses`),
-          where('date', '<=', dateRange.end),
+          where('date', '<=', endStr),
           orderBy('date', 'desc')
         );
 
@@ -188,42 +190,7 @@ const TrialBalanceReport = ({ db, userId, appId, dateRange, financialYear, selec
           description: 'Operating and administrative expenses'
         });
 
-        // Sample ledger entries
-        trialBalanceEntries.push({
-          ledger: 'Salaries',
-          group: 'Expenses',
-          debit: 50000,
-          credit: 0,
-          drillDownData: [],
-          description: 'Employee salaries and wages'
-        });
-
-        trialBalanceEntries.push({
-          ledger: 'Rent',
-          group: 'Expenses',
-          debit: 20000,
-          credit: 0,
-          drillDownData: [],
-          description: 'Office and warehouse rent'
-        });
-
-        trialBalanceEntries.push({
-          ledger: 'Capital Account',
-          group: 'Equity',
-          debit: 0,
-          credit: 400000,
-          drillDownData: [],
-          description: 'Owner\'s capital investment'
-        });
-
-        trialBalanceEntries.push({
-          ledger: 'Loans',
-          group: 'Liabilities',
-          debit: 0,
-          credit: 100000,
-          drillDownData: [],
-          description: 'Long-term borrowings'
-        });
+        // Note: No sample ledger entries. Using only real calculated entries above
 
         setTrialBalanceData(trialBalanceEntries);
 
@@ -289,76 +256,8 @@ const TrialBalanceReport = ({ db, userId, appId, dateRange, financialYear, selec
     return sortedData.filter(entry => entry.group === ledgerGroup);
   };
 
-  // Sample data for testing
-  const sampleData = [
-    {
-      ledger: 'Sales',
-      group: 'Income',
-      debit: 0,
-      credit: 500000,
-      drillDownData: [],
-      description: 'Revenue from sales of goods/services'
-    },
-    {
-      ledger: 'Purchase',
-      group: 'Expenses',
-      debit: 300000,
-      credit: 0,
-      drillDownData: [],
-      description: 'Cost of goods purchased'
-    },
-    {
-      ledger: 'Cash in Hand',
-      group: 'Assets',
-      debit: 50000,
-      credit: 0,
-      drillDownData: [],
-      description: 'Cash balance in hand'
-    },
-    {
-      ledger: 'Bank Balance',
-      group: 'Assets',
-      debit: 100000,
-      credit: 0,
-      drillDownData: [],
-      description: 'Bank account balance'
-    },
-    {
-      ledger: 'Debtors',
-      group: 'Assets',
-      debit: 200000,
-      credit: 0,
-      drillDownData: [],
-      description: 'Amount receivable from customers'
-    },
-    {
-      ledger: 'Creditors',
-      group: 'Liabilities',
-      debit: 0,
-      credit: 120000,
-      drillDownData: [],
-      description: 'Amount payable to suppliers'
-    },
-    {
-      ledger: 'Salaries',
-      group: 'Expenses',
-      debit: 50000,
-      credit: 0,
-      drillDownData: [],
-      description: 'Employee salaries and wages'
-    },
-    {
-      ledger: 'Capital Account',
-      group: 'Equity',
-      debit: 0,
-      credit: 400000,
-      drillDownData: [],
-      description: 'Owner\'s capital investment'
-    }
-  ];
-
-  // Use sample data if no real data
-  const displayData = trialBalanceData.length > 0 ? getFilteredData() : sampleData;
+  // Use only real data
+  const displayData = getFilteredData();
 
   return (
     <div className="p-6">

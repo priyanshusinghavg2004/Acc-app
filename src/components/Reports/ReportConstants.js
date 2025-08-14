@@ -20,9 +20,9 @@ export const REPORT_CONSTANTS = {
     { value: 'payment-register', label: 'Payment Register Report', icon: '💰' },
     { value: 'aging-report', label: 'Aging Report', icon: '⏰' },
     { value: 'itemwise-sales', label: 'Itemwise Sales Report', icon: '📦' },
-    { value: 'bills-report', label: 'Bills Report', icon: '🧾' },
+    { value: 'purchase-bills-summary', label: 'Purchase Bill Summary', icon: '🧾' },
     { value: 'stock-report', label: 'Stock Report', icon: '📈' },
-    { value: 'gst-summary', label: 'GST Summary Report', icon: '🏛️' },
+    // GST reports moved to Taxes module
     { value: 'profit-loss', label: 'Profit & Loss Report', icon: '💹' },
     { value: 'balance-sheet', label: 'Balance Sheet Report', icon: '⚖️' },
     { value: 'trial-balance', label: 'Trial Balance Report', icon: '🔍' },

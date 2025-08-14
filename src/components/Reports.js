@@ -12,9 +12,9 @@ import InvoiceCollectionReport from './Reports/InvoiceCollectionReport';
 import PaymentRegisterReport from './Reports/PaymentRegisterReport';
 import AgingReport from './Reports/AgingReport';
 import ItemwiseSalesReport from './Reports/ItemwiseSalesReport';
-import BillsReport from './Reports/BillsReport';
+import PurchaseBillsSummary from './Reports/BillsReport';
 import StockReport from './Reports/StockReport';
-import GSTSummaryReport from './Reports/GSTSummaryReport';
+// GST reports moved under Taxes section
 import ProfitLossReport from './Reports/ProfitLossReport';
 import BalanceSheetReport from './Reports/BalanceSheetReport';
 import TrialBalanceReport from './Reports/TrialBalanceReport';
@@ -37,6 +37,14 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
   const [parties, setParties] = useState([]);
   const [loading, setLoading] = useState(false);
   const [companyDetails, setCompanyDetails] = useState(null);
+
+  // Sync date range when financial year changes
+  useEffect(() => {
+    if (!financialYear) return;
+    const start = new Date(financialYear, 3, 1); // April 1 of selected FY
+    const end = new Date(financialYear + 1, 2, 31, 23, 59, 59, 999); // March 31 of next year
+    setDateRange({ start, end });
+  }, [financialYear]);
 
   // Fetch parties for filters
   useEffect(() => {
@@ -131,7 +139,18 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
     setDateRange({ start, end });
   };
 
-  const reportTypes = REPORT_CONSTANTS.REPORT_TYPES;
+  // Filter report types based on company GST type
+  const reportTypes = useMemo(() => {
+    const all = REPORT_CONSTANTS.REPORT_TYPES;
+    const type = (companyDetails?.gstinType || '').toLowerCase();
+    return all.filter(rt => {
+      if (rt.value === 'gst-summary-regular') return type === 'regular';
+      if (rt.value === 'gst-summary-composition') return type === 'composition';
+      if (rt.value === 'gst-hsn-summary-regular') return type === 'regular';
+      if (rt.value === 'gst-hsn-summary-composition') return type === 'composition';
+      return true;
+    });
+  }, [companyDetails]);
 
 
 
@@ -146,8 +165,9 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
     parties,
     loading,
     setLoading,
-    isAuthReady
-  }), [db, userId, appId, dateRange, financialYear, selectedParty, loading, isAuthReady]); // Removed parties from dependency array
+    isAuthReady,
+    companyDetails
+  }), [db, userId, appId, dateRange, financialYear, selectedParty, loading, isAuthReady, companyDetails]); // Removed parties from dependency array
 
   const renderReportComponent = () => {
     switch (selectedReport) {
@@ -163,12 +183,10 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
         return <AgingReport {...commonProps} />;
       case 'itemwise-sales':
         return <ItemwiseSalesReport {...commonProps} />;
-      case 'bills-report':
-        return <BillsReport {...commonProps} />;
+      case 'purchase-bills-summary':
+        return <PurchaseBillsSummary {...commonProps} />;
       case 'stock-report':
         return <StockReport {...commonProps} />;
-      case 'gst-summary':
-        return <GSTSummaryReport {...commonProps} />;
       case 'profit-loss':
         return <ProfitLossReport {...commonProps} />;
       case 'balance-sheet':

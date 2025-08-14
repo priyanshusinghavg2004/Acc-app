@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, orderBy, getDocs } from 'firebase/firestore';
+import { collection, query, where, orderBy, getDocs, doc, getDoc } from 'firebase/firestore';
 import { formatCurrency, formatDate } from './CommonComponents';
 
-const PartywiseSalesReport = ({ db, userId, dateRange, selectedParty, parties, loading, setLoading }) => {
+const PartywiseSalesReport = ({ db, userId, appId, dateRange, selectedParty, parties, loading, setLoading, companyDetails }) => {
   const [reportData, setReportData] = useState([]);
   const [totalSummary, setTotalSummary] = useState({
     totalInvoices: 0,
@@ -17,7 +17,8 @@ const PartywiseSalesReport = ({ db, userId, dateRange, selectedParty, parties, l
   const [showQuickSummary, setShowQuickSummary] = useState(false);
   const [quickSummaryInvoice, setQuickSummaryInvoice] = useState(null);
   const [itemNames, setItemNames] = useState({});
-  const [companyDetails, setCompanyDetails] = useState(null);
+  const [localCompanyDetails, setLocalCompanyDetails] = useState(null);
+  const [itemMap, setItemMap] = useState({});
 
   // ESC key handler for closing modals
   useEffect(() => {
@@ -45,25 +46,52 @@ const PartywiseSalesReport = ({ db, userId, dateRange, selectedParty, parties, l
     };
   }, [showQuickSummary, showModal]);
 
-  // Function to calculate GST based on company registration status
-  const calculateGST = (rows, companyDetails) => {
+  // Function to calculate GST for an invoice using rows and item master
+  const calculateGST = (rows, effectiveCompanyDetails, effectiveItemMap) => {
     console.log('🧮 GST CALCULATION START 🧮');
     console.log('Rows to process:', rows?.length || 0);
-    console.log('Company Details:', companyDetails);
+    console.log('Company Details:', effectiveCompanyDetails);
     
     // Always calculate GST from rows first (regardless of company status)
     let totalSGST = 0, totalCGST = 0, totalIGST = 0;
     
     if (Array.isArray(rows)) {
       rows.forEach((row, index) => {
-        const sgst = Number(row.sgst || 0);
-        const cgst = Number(row.cgst || 0);
-        const igst = Number(row.igst || 0);
-        
+        const itemId = row.item || row.id || row.itemId || row.productId;
+        const itemDef = effectiveItemMap[itemId] || {};
+        const qty = Number(row.qty || row.quantity || 0);
+        const rate = Number(row.rate || row.price || 0);
+        const taxable = Number(row.amount || row.total || (qty && rate ? qty * rate : 0) || 0);
+
+        // Determine company GST mode
+        const gstType = (effectiveCompanyDetails?.gstinType || effectiveCompanyDetails?.gstType || 'regular').toLowerCase();
+
+        let sgst = 0, cgst = 0, igst = 0;
+
+        if (gstType === 'composition') {
+          const itemType = (itemDef.itemType || itemDef.type || '').toLowerCase();
+          const compRate = Number(itemDef.compositionGstRate ?? (itemType === 'services' ? 6 : itemType === 'restaurant' || itemType === 'restaurants' ? 5 : 1));
+          const tax = taxable * (compRate / 100);
+          sgst = tax / 2;
+          cgst = tax / 2;
+          igst = 0;
+        } else {
+          // Regular mode: derive rate from row percents or item master
+          const rowRateFromPercents = Number(row.sgst || 0) + Number(row.cgst || 0) + Number(row.igst || 0);
+          const effectiveRate = rowRateFromPercents > 0 ? rowRateFromPercents : Number(row.gstPercent ?? itemDef.gstPercentage ?? 0);
+          const tax = taxable * (effectiveRate / 100);
+          if (Number(row.igst || 0) > 0) {
+            igst = tax;
+          } else {
+            sgst = tax / 2;
+            cgst = tax / 2;
+          }
+        }
+
         totalSGST += sgst;
         totalCGST += cgst;
         totalIGST += igst;
-        
+
         console.log(`Row ${index}: SGST=${sgst}, CGST=${cgst}, IGST=${igst}, Row Total=${sgst + cgst + igst}`);
       });
     }
@@ -73,9 +101,9 @@ const PartywiseSalesReport = ({ db, userId, dateRange, selectedParty, parties, l
     console.log('Final Result:', { totalSGST, totalCGST, totalIGST, totalGST });
     
     // If company details are available, apply business rules
-    if (companyDetails) {
-      const gstStatus = companyDetails.gstStatus || 'unregistered';
-      const gstType = companyDetails.gstType || 'regular';
+    if (effectiveCompanyDetails) {
+      const gstStatus = effectiveCompanyDetails.gstStatus || effectiveCompanyDetails.registrationStatus || 'registered';
+      const gstType = (effectiveCompanyDetails.gstinType || effectiveCompanyDetails.gstType || 'regular').toLowerCase();
 
       // Not registered or unregistered - no GST
       if (gstStatus === 'unregistered' || gstStatus === 'not_registered') {
@@ -85,8 +113,23 @@ const PartywiseSalesReport = ({ db, userId, dateRange, selectedParty, parties, l
 
       // Composition scheme - no GST collection on individual items
       if (gstType === 'composition') {
-        console.log('Company composition - GST set to 0');
-        return { totalSGST: 0, totalCGST: 0, totalIGST: 0, totalGST: 0 };
+        // Compute composition tax based on item-wise composition rate
+        let compTax = 0;
+        if (Array.isArray(rows)) {
+          rows.forEach((row) => {
+            const taxable = Number(row.amount || row.total || (row.qty || row.quantity || 0) * (row.rate || row.price || 0) || 0);
+            const itemId = row.item || row.id || row.itemId || row.productId;
+            const itemDef = effectiveItemMap[itemId] || {};
+            const itemType = (itemDef.itemType || itemDef.type || '').toLowerCase();
+            const rateFromItem = Number(itemDef.compositionGstRate ?? (
+              itemType === 'services' ? 6 : itemType === 'restaurant' || itemType === 'restaurants' ? 5 : 1
+            ));
+            const lineTax = taxable * (rateFromItem / 100);
+            compTax += lineTax;
+          });
+        }
+        const half = compTax / 2;
+        return { totalSGST: half, totalCGST: half, totalIGST: 0, totalGST: compTax };
       }
     }
     
@@ -99,7 +142,7 @@ const PartywiseSalesReport = ({ db, userId, dateRange, selectedParty, parties, l
     if (!itemIds || itemIds.length === 0) return {};
     
     try {
-      const basePath = `artifacts/acc-app-e5316/users/${userId}`;
+      const basePath = `artifacts/${appId}/users/${userId}`;
       const itemsQuery = query(
         collection(db, `${basePath}/items`),
         where('__name__', 'in', itemIds)
@@ -118,30 +161,44 @@ const PartywiseSalesReport = ({ db, userId, dateRange, selectedParty, parties, l
   };
 
   useEffect(() => {
-    if (!db || !userId) return;
+    if (!db || !userId || !appId) return;
     setLoading(true);
     const fetchData = async () => {
       // Fetch company details for GST calculation
-      let fetchedCompanyDetails = null;
+      let fetchedCompanyDetails = companyDetails || localCompanyDetails || null;
       try {
-        const companyDoc = await getDocs(collection(db, `artifacts/acc-app-e5316/users/${userId}/companyDetails`));
-        if (!companyDoc.empty) {
-          fetchedCompanyDetails = companyDoc.docs[0].data();
-          setCompanyDetails(fetchedCompanyDetails);
-          console.log('Company Details Fetched:', {
-            gstStatus: fetchedCompanyDetails.gstStatus,
-            gstType: fetchedCompanyDetails.gstType,
-            compositionRate: fetchedCompanyDetails.compositionRate
-          });
-        } else {
-          console.log('No company details found, using default GST calculation');
+        if (!fetchedCompanyDetails) {
+          const ref = doc(db, `artifacts/${appId}/users/${userId}/companyDetails`, 'myCompany');
+          const snap = await getDoc(ref);
+          if (snap.exists()) {
+            fetchedCompanyDetails = snap.data();
+            setLocalCompanyDetails(fetchedCompanyDetails);
+          }
         }
       } catch (error) {
         console.error('Error fetching company details:', error);
       }
+
+      // Fetch items map for GST rates and names
+      try {
+        const itemsSnap = await getDocs(collection(db, `artifacts/${appId}/users/${userId}/items`));
+        const map = {};
+        itemsSnap.forEach(docSnap => {
+          const data = docSnap.data();
+          map[docSnap.id] = {
+            name: data.name || data.itemName || data.productName,
+            gstPercentage: Number(data.gstPercentage ?? data.taxRate ?? 0),
+            compositionGstRate: Number(data.compositionGstRate ?? data.compGstRate ?? undefined),
+            itemType: data.itemType || data.type || ''
+          };
+        });
+        setItemMap(map);
+      } catch (error) {
+        console.error('Error fetching items for GST map:', error);
+      }
       
       try {
-        const basePath = `artifacts/acc-app-e5316/users/${userId}`;
+        const basePath = `artifacts/${appId}/users/${userId}`;
         // Fetch sales
         const salesQuery = query(
           collection(db, `${basePath}/salesBills`),
@@ -174,7 +231,7 @@ const PartywiseSalesReport = ({ db, userId, dateRange, selectedParty, parties, l
           let totalAmount = isAdvanceInvoice ? -baseAmount : baseAmount; // Negative for advance invoices
           
           // GST calculation based on company registration status
-          const { totalSGST, totalCGST, totalIGST, totalGST } = calculateGST(data.rows, fetchedCompanyDetails);
+           const { totalSGST, totalCGST, totalIGST, totalGST } = calculateGST(data.rows, fetchedCompanyDetails, itemMap);
           
           console.log('GST Calculation Debug:', {
             invoiceId: doc.id,
@@ -435,7 +492,7 @@ const PartywiseSalesReport = ({ db, userId, dateRange, selectedParty, parties, l
       }
     };
     fetchData();
-  }, [db, userId, dateRange, selectedParty, parties, setLoading]);
+  }, [db, userId, appId, dateRange, selectedParty, parties, setLoading, companyDetails]);
 
   // Find selected party object
   const selectedPartyObj = parties.find(p => p.id === selectedParty);

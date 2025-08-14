@@ -100,6 +100,17 @@ export const exportTableAsPDF = async (options) => {
   } catch (e) {
     console.warn('jspdf-autotable not available:', e);
   }
+  // Footer with promotion
+  try {
+    const pageCount = typeof doc.getNumberOfPages === 'function' ? doc.getNumberOfPages() : (doc.internal && doc.internal.getNumberOfPages ? doc.internal.getNumberOfPages() : 1);
+    const pageHeight = doc.internal.pageSize.height;
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(9);
+      doc.setTextColor(120);
+      doc.text('Use www.acctoo.com, lets Accouting Togeather', pageWidth / 2, pageHeight - 8, { align: 'center' });
+    }
+  } catch {}
   
   doc.save(filename);
 };
@@ -233,6 +244,7 @@ export const exportTableAsImage = async (options) => {
         `).join('')}
       </tbody>
     </table>
+    <div style="text-align:center; color:#777; font-size:12px; margin-top:16px;">Use www.acctoo.com, lets Accouting Togeather</div>
   `;
   
   container.innerHTML = htmlContent;

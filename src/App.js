@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { HashRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
+import { HashRouter as Router, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import Dashboard from './components/Dashboard';
 import Items from './components/Items';
 import Parties from './components/Parties';
@@ -571,6 +571,7 @@ function AppContent({
   setShowSettings
 }) {
   const currentLocation = useLocation();
+  const navigate = useNavigate();
   
   // Dropdown state for desktop/mobile
   const [openDropdown, setOpenDropdown] = useState(null);
@@ -671,6 +672,13 @@ function AppContent({
     document.addEventListener('mousedown', handleAvatarClickOutside);
     return () => document.removeEventListener('mousedown', handleAvatarClickOutside);
   }, [avatarDropdownOpen]);
+
+  // Redirect away from /login when authenticated
+  useEffect(() => {
+    if (user && currentLocation.pathname === '/login') {
+      navigate('/', { replace: true });
+    }
+  }, [user, currentLocation.pathname, navigate]);
 
   return (
     <>
@@ -805,7 +813,7 @@ function AppContent({
               {/* Logo and Brand */}
               <div className="col-span-3 flex items-center justify-start">
                 <Link to="/" className="flex items-center" style={{ gap: '30px' }}>
-                  <img src={process.env.PUBLIC_URL + '/logoacctoo.png'} alt="ACCTOO Logo" style={{ height: 40 }} />
+                  <img src={process.env.PUBLIC_URL + '/Logoacctoo.png'} alt="ACCTOO Logo" style={{ height: 40 }} />
                   <div className="flex flex-col">
                     <span className="text-2xl font-bold" style={{ color: '#003399' }}>
                       ACC<span style={{ color: '#ff8800' }}>TOO</span>
@@ -1065,7 +1073,7 @@ function AppContent({
               {/* Mobile Logo and Brand */}
               <div className="flex items-center">
                 <Link to="/" className="flex items-center">
-                  <img src={process.env.PUBLIC_URL + '/logoacctoo.png'} alt="ACCTOO Logo" style={{ height: 32 }} />
+                  <img src={process.env.PUBLIC_URL + '/Logoacctoo.png'} alt="ACCTOO Logo" style={{ height: 32 }} />
                   <div className="flex flex-col ml-2">
                     <span className="text-lg font-bold" style={{ color: '#003399' }}>
                       ACC<span style={{ color: '#ff8800' }}>TOO</span>

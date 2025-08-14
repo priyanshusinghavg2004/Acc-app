@@ -139,7 +139,8 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
     head: '', 
     amount: '', 
     description: '', 
-    receipt: null 
+    receipt: null,
+    paymentMode: 'Cash'
   });
   const [expenses, setExpenses] = useState([]);
   const [editingExpenseId, setEditingExpenseId] = useState(null);
@@ -1211,6 +1212,7 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
       head: expenseForm.head,
       amount: Number(expenseForm.amount),
       description: expenseForm.description,
+      paymentMode: expenseForm.paymentMode,
       receiptUrl,
       createdAt: serverTimestamp(),
     });
@@ -1219,7 +1221,8 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
       head: '', 
       amount: '', 
       description: '', 
-      receipt: null 
+      receipt: null,
+      paymentMode: 'Cash' 
     });
   };
   const handleEditExpense = exp => {

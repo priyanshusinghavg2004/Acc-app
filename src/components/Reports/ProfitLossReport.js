@@ -4,7 +4,7 @@ import { useTableSort, SortableHeader } from '../../utils/tableSort';
 import { useTablePagination } from '../../utils/tablePagination';
 import PaginationControls from '../../utils/PaginationControls';
 
-const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selectedParty, parties, loading, setLoading }) => {
+const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selectedParty, parties, loading, setLoading, companyDetails }) => {
   const [plData, setPlData] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [drillDownData, setDrillDownData] = useState([]);
@@ -13,7 +13,10 @@ const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selecte
     totalIncome: 0,
     totalExpenses: 0,
     netProfit: 0,
-    grossProfit: 0
+    grossProfit: 0,
+    taxPayable: 0,
+    paymentsIn: 0,
+    paymentsOut: 0
   });
 
   // Table sorting and pagination
@@ -27,24 +30,41 @@ const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selecte
       
       setLoading(true);
       try {
+        const startStr = new Date(dateRange.start).toISOString().split('T')[0];
+        const endStr = new Date(dateRange.end).toISOString().split('T')[0];
+
         // Get all sales in date range
         const salesQuery = query(
           collection(db, `artifacts/${appId}/users/${userId}/salesBills`),
-          where('invoiceDate', '>=', dateRange.start),
-          where('invoiceDate', '<=', dateRange.end),
+          where('invoiceDate', '>=', startStr),
+          where('invoiceDate', '<=', endStr),
           orderBy('invoiceDate', 'desc')
         );
 
         const salesSnapshot = await getDocs(salesQuery);
+        // resolve helpers
+        const resolvePartyId = (docData) => {
+          const raw = docData.customFields?.party || docData.party || docData.partyId;
+          if (raw && parties?.some(p => p.id === raw)) return raw;
+          const byName = docData.partyName || docData.firmName || '';
+          const match = (parties || []).find(p => (p.firmName || p.partyName) === byName);
+          return match?.id || raw || '';
+        };
+        const resolvePartyName = (pid, docData) => {
+          const p = (parties || []).find(pp => pp.id === pid);
+          return docData.partyName || p?.firmName || p?.partyName || p?.name || pid || '';
+        };
+
         let sales = salesSnapshot.docs.map(doc => {
           const d = doc.data();
+          const pid = resolvePartyId(d);
           return {
             id: doc.id,
             date: d.invoiceDate || d.date,
             totalAmount: parseFloat(d.totalAmount || d.amount || 0),
-            partyId: d.customFields?.party || d.party || d.partyId,
+            partyId: pid,
             invoiceNumber: d.invoiceNumber || d.number || doc.id,
-            partyName: d.partyName || ''
+            partyName: resolvePartyName(pid, d)
           };
         });
 
@@ -56,21 +76,22 @@ const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selecte
         // Get all purchases in date range
         const purchasesQuery = query(
           collection(db, `artifacts/${appId}/users/${userId}/purchaseBills`),
-          where('billDate', '>=', dateRange.start),
-          where('billDate', '<=', dateRange.end),
+          where('billDate', '>=', startStr),
+          where('billDate', '<=', endStr),
           orderBy('billDate', 'desc')
         );
 
         const purchasesSnapshot = await getDocs(purchasesQuery);
         let purchases = purchasesSnapshot.docs.map(doc => {
           const d = doc.data();
+          const pid = resolvePartyId(d);
           return {
             id: doc.id,
             date: d.billDate || d.date,
             totalAmount: parseFloat(d.totalAmount || d.amount || 0),
-            partyId: d.customFields?.party || d.party || d.partyId,
+            partyId: pid,
             billNumber: d.billNumber || d.number || doc.id,
-            partyName: d.partyName || ''
+            partyName: resolvePartyName(pid, d)
           };
         });
 
@@ -79,25 +100,59 @@ const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selecte
           purchases = purchases.filter(purchase => purchase.partyId === selectedParty);
         }
 
+        // Fetch items for GST meta (to exactly match Taxes GSTR-3B)
+        const itemsSnap = await getDocs(collection(db, `artifacts/${appId}/users/${userId}/items`));
+        const itemMeta = {};
+        itemsSnap.forEach(d => {
+          const it = d.data() || {};
+          itemMeta[d.id] = {
+            gstPercentage: parseFloat(it.gstPercentage) || 0,
+            compositionGstRate: parseFloat(it.compositionGstRate) || 0,
+            itemType: it.itemType || 'Goods'
+          };
+        });
+
         // Get all expenses in date range
         const expensesQuery = query(
           collection(db, `artifacts/${appId}/users/${userId}/expenses`),
-          where('date', '>=', dateRange.start),
-          where('date', '<=', dateRange.end),
+          where('date', '>=', startStr),
+          where('date', '<=', endStr),
           orderBy('date', 'desc')
         );
 
         const expensesSnapshot = await getDocs(expensesQuery);
         let expenses = expensesSnapshot.docs.map(doc => {
           const d = doc.data();
+          const pid = d.partyId || d.party || d.customFields?.party || '';
+          const p = (parties || []).find(pp => pp.id === pid);
+          const docName = d.expenseNumber || d.voucherNumber || d.voucherNo || d.referenceNo || d.number || d.head || d.category || d.description || doc.id;
           return {
             id: doc.id,
             date: d.date,
             amount: parseFloat(d.amount || 0),
-            partyId: d.partyId || d.party,
-            expenseNumber: d.expenseNumber || d.number || doc.id,
-            partyName: d.partyName || '',
-            head: d.head || d.category || d.expenseHead || 'Operating Expenses',
+            partyId: pid,
+            expenseNumber: docName,
+            partyName: d.partyName || p?.firmName || p?.partyName || p?.name || '',
+            head: d.head || d.category || d.expenseHead || (d.group === 'salaries' ? 'Salaries' : 'Operating Expenses'),
+            group: d.group || ''
+          };
+        });
+
+        // Salary payments collection
+        const salarySnap = await getDocs(query(
+          collection(db, `artifacts/${appId}/users/${userId}/salaryPayments`),
+          where('date', '>=', startStr), where('date', '<=', endStr), orderBy('date', 'asc')
+        ));
+        const salaryPaymentsRows = salarySnap.docs.map(doc => {
+          const d = doc.data();
+          return {
+            id: doc.id,
+            date: d.date,
+            amount: parseFloat(d.netAmount || d.totalEarnings || d.total || 0),
+            partyId: d.employeeId || '',
+            partyName: d.employeeName || 'Employee',
+            head: 'Salaries',
+            expenseNumber: d.month ? `${d.month}` : doc.id
           };
         });
 
@@ -106,11 +161,21 @@ const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selecte
           expenses = expenses.filter(expense => expense.partyId === selectedParty);
         }
 
+        // Fetch payments in the period (for info cards)
+        const paymentsQueryRef = query(
+          collection(db, `artifacts/${appId}/users/${userId}/payments`),
+          where('paymentDate', '>=', startStr),
+          where('paymentDate', '<=', endStr),
+          orderBy('paymentDate', 'asc')
+        );
+        const paymentsSnapshot = await getDocs(paymentsQueryRef);
+        const payments = paymentsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
         // Calculate P&L categories
         const plCategories = [];
 
-        // Income categories
-        const totalSales = sales.reduce((sum, sale) => sum + sale.totalAmount, 0);
+        // Income categories (gross invoice values)
+        const totalSales = sales.reduce((sum, sale) => sum + (parseFloat(sale.totalAmount) || 0), 0);
         plCategories.push({
           category: 'Sales',
           amount: totalSales,
@@ -119,8 +184,8 @@ const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selecte
           description: 'Revenue from sales of goods/services'
         });
 
-        // Cost of goods sold
-        const totalPurchases = purchases.reduce((sum, purchase) => sum + purchase.totalAmount, 0);
+        // Cost of goods sold (gross purchase bill values)
+        const totalPurchases = purchases.reduce((sum, purchase) => sum + (parseFloat(purchase.totalAmount) || 0), 0);
         plCategories.push({
           category: 'Cost of Goods Sold',
           amount: totalPurchases,
@@ -129,8 +194,12 @@ const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selecte
           description: 'Direct costs of goods sold'
         });
 
-        // Operating expenses grouped by head/category
-        const expensesByHead = expenses.reduce((acc, e) => {
+        // Operating expenses grouped by head/category; include salary payments
+        const allExpenseEntries = [
+          ...expenses,
+          ...salaryPaymentsRows
+        ];
+        const expensesByHead = allExpenseEntries.reduce((acc, e) => {
           const key = e.head || 'Operating Expenses';
           if (!acc[key]) acc[key] = { amount: 0, items: [] };
           acc[key].amount += e.amount;
@@ -147,20 +216,88 @@ const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selecte
           });
         });
 
+        // Instead of recalculating, trace the exact GSTR-3B summary from Taxes (saved in localStorage)
+        const gstMode = (companyDetails?.gstinType || companyDetails?.gstType || 'regular').toLowerCase();
+        const cacheKey = `gstr3b:${appId}:${userId}:${startStr}:${endStr}:${gstMode}`;
+        let traced = null;
+        try {
+          const raw = localStorage.getItem(cacheKey);
+          if (raw) traced = JSON.parse(raw);
+        } catch {}
+
+        let outward = { taxable: 0, cgst: 0, sgst: 0, igst: 0, compTax: 0 };
+        let inward = { taxable: 0, cgst: 0, sgst: 0, igst: 0, compTax: 0 };
+        if (traced && traced.summary) {
+          outward = traced.summary.outward || outward;
+          inward = traced.summary.inward || inward;
+        }
+
+        let taxPayable = 0;
+        if (gstMode === 'regular') {
+          const cg = outward.cgst - inward.cgst;
+          const sg = outward.sgst - inward.sgst;
+          const ig = outward.igst - inward.igst;
+          taxPayable = Math.max(0, cg) + Math.max(0, sg) + Math.max(0, ig);
+        } else {
+          // Composition: payable equals outward composition tax; no ITC
+          taxPayable = outward.compTax;
+        }
+
+        // Taxes category with drill-down
+        const taxesDrillDown = [];
+        if (gstMode === 'regular') {
+          taxesDrillDown.push(
+            { date: null, invoiceNumber: 'Outward GST (CGST+SGST+IGST)', partyName: '', amount: (outward.cgst + outward.sgst + outward.igst) },
+            { date: null, invoiceNumber: 'Less: Inward ITC', partyName: '', amount: (inward.cgst + inward.sgst + inward.igst) },
+            { date: null, invoiceNumber: 'Net GST Payable', partyName: '', amount: taxPayable }
+          );
+        } else {
+          taxesDrillDown.push(
+            { date: null, invoiceNumber: 'Outward Composition Tax', partyName: '', amount: outward.compTax },
+            { date: null, invoiceNumber: 'Net Composition Payable', partyName: '', amount: taxPayable }
+          );
+        }
+
+        plCategories.push({
+          category: 'Taxes (GST Payable)',
+          amount: taxPayable,
+          type: 'expense',
+          drillDownData: taxesDrillDown,
+          description: gstMode === 'regular' ? 'GST payable = Outward tax − Inward ITC' : 'Composition tax on turnover (no ITC)'
+        });
+
+        // Payments info (does not affect P&L totals, informational)
+        const paymentsIn = payments.filter(p => (p.type || '').toLowerCase() === 'receipt').reduce((s, p) => s + (parseFloat(p.amount || p.totalAmount || 0)), 0);
+        const paymentsOut = payments.filter(p => (p.type || '').toLowerCase() === 'payment').reduce((s, p) => s + (parseFloat(p.amount || p.totalAmount || 0)), 0);
+
         setPlData(plCategories);
 
         // Calculate totals
         const income = plCategories.filter(cat => cat.type === 'income').reduce((sum, cat) => sum + cat.amount, 0);
         const totalExpenses = plCategories.filter(cat => cat.type === 'expense').reduce((sum, cat) => sum + cat.amount, 0);
         const grossProfit = income - totalPurchases;
-        const netProfit = income - totalExpenses;
+        const netProfit = income - totalExpenses - taxPayable;
 
         setTotalSummary({
           totalIncome: income,
           totalExpenses: totalExpenses,
           grossProfit: grossProfit,
-          netProfit: netProfit
+          netProfit: netProfit,
+          taxPayable,
+          paymentsIn,
+          paymentsOut
         });
+
+        // Persist lightweight P&L summary for other modules (e.g., Balance Sheet)
+        try {
+          const cacheKeyPl = `pl:${appId}:${userId}:${startStr}:${endStr}`;
+          localStorage.setItem(cacheKeyPl, JSON.stringify({
+            totals: { income, purchases: totalPurchases, expenses: totalExpenses, taxPayable, netProfit },
+            period: { start: startStr, end: endStr },
+            savedAt: Date.now()
+          }));
+          try { window.dispatchEvent(new CustomEvent('pl-updated', { detail: { key: cacheKeyPl } })); } catch {}
+        } catch {}
 
       } catch (error) {
         console.error('Error fetching P&L report data:', error);
@@ -170,7 +307,11 @@ const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selecte
     };
 
     fetchPLReport();
-  }, [db, userId, appId, dateRange, selectedParty]);
+    // Listen for GSTR-3B updates and refetch totals automatically
+    const onGstr3bUpdated = () => fetchPLReport();
+    window.addEventListener('gstr3b-updated', onGstr3bUpdated);
+    return () => window.removeEventListener('gstr3b-updated', onGstr3bUpdated);
+  }, [db, userId, appId, dateRange, selectedParty, companyDetails]);
 
   // Format currency
   const formatCurrency = (amount) => {
@@ -201,60 +342,24 @@ const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selecte
     setDrillDownData([]);
   };
 
+  // ESC to close drill-down (LIFO if extended later)
+  useEffect(() => {
+    const onEsc = (e) => {
+      if (e.key === 'Escape' && showDrillDown) {
+        handleBackFromDrillDown();
+      }
+    };
+    window.addEventListener('keydown', onEsc);
+    return () => window.removeEventListener('keydown', onEsc);
+  }, [showDrillDown]);
+
   // Handle drill-down row click
   const handleDrillDownRowClick = (item) => {
     console.log('Open document:', item.id, item.invoiceNumber || item.billNumber || item.expenseNumber);
     // You can implement navigation logic here
   };
 
-  // Sample data for testing
-  const sampleData = [
-    {
-      category: 'Sales',
-      amount: 500000,
-      type: 'income',
-      drillDownData: [],
-      description: 'Revenue from sales of goods/services'
-    },
-    {
-      category: 'Other Income',
-      amount: 20000,
-      type: 'income',
-      drillDownData: [],
-      description: 'Other income sources'
-    },
-    {
-      category: 'Cost of Goods Sold',
-      amount: 300000,
-      type: 'expense',
-      drillDownData: [],
-      description: 'Direct costs of goods sold'
-    },
-    {
-      category: 'Salaries',
-      amount: 50000,
-      type: 'expense',
-      drillDownData: [],
-      description: 'Employee salaries and wages'
-    },
-    {
-      category: 'Rent',
-      amount: 20000,
-      type: 'expense',
-      drillDownData: [],
-      description: 'Office and warehouse rent'
-    },
-    {
-      category: 'Utilities',
-      amount: 15000,
-      type: 'expense',
-      drillDownData: [],
-      description: 'Electricity, water, internet, etc.'
-    }
-  ];
-
-  // Use sample data if no real data
-  const displayData = plData.length > 0 ? plData : sampleData;
+  const displayData = plData;
 
   return (
     <div className="p-6">
@@ -284,6 +389,14 @@ const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selecte
         <div className="bg-purple-50 p-4 rounded-lg">
           <div className="text-sm text-purple-600 font-medium">Net Profit</div>
           <div className="text-2xl font-bold text-purple-800">{formatCurrency(totalSummary.netProfit)}</div>
+        </div>
+        <div className="bg-yellow-50 p-4 rounded-lg">
+          <div className="text-sm text-yellow-600 font-medium">Tax Payable (GST)</div>
+          <div className="text-2xl font-bold text-yellow-800">{formatCurrency(totalSummary.taxPayable)}</div>
+        </div>
+        <div className="bg-gray-50 p-4 rounded-lg">
+          <div className="text-sm text-gray-600 font-medium">Payments In / Out</div>
+          <div className="text-lg font-bold text-gray-800">{formatCurrency(totalSummary.paymentsIn)} / {formatCurrency(totalSummary.paymentsOut)}</div>
         </div>
       </div>
 
@@ -427,7 +540,7 @@ const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selecte
                     onClick={() => handleDrillDownRowClick(item)}
                   >
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {formatDate(item.date)}
+                      {item.date ? formatDate(item.date) : '-'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm font-medium text-blue-600 hover:underline">

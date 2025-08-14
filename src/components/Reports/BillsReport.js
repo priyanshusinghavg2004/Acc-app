@@ -4,106 +4,73 @@ import { useTableSort, SortableHeader } from '../../utils/tableSort';
 import { useTablePagination } from '../../utils/tablePagination';
 import PaginationControls from '../../utils/PaginationControls';
 
-const BillsReport = ({ db, userId, appId, dateRange, financialYear, selectedParty, parties, loading, setLoading }) => {
+const PurchaseBillsSummary = ({ db, userId, appId, dateRange, financialYear, selectedParty, parties, loading, setLoading, companyDetails }) => {
   const [billsData, setBillsData] = useState([]);
   const [totalSummary, setTotalSummary] = useState({
-    totalBills: 0,
+    totalInvoices: 0,
     totalAmount: 0,
     totalGST: 0,
-    paidBills: 0
+    totalPaid: 0,
+    totalOutstanding: 0
   });
+  const [itemNameMap, setItemNameMap] = useState({});
 
   // Table sorting and pagination
-  const { sortedData, sortConfig, handleSort } = useTableSort(billsData, { key: 'date', direction: 'desc' });
+  const { sortedData, sortConfig, handleSort } = useTableSort(billsData, { key: 'partyName', direction: 'asc' });
   const pagination = useTablePagination(sortedData, 25);
 
-  // Fetch bills data
+  // Modal states (match sales summary behavior)
+  const [showModal, setShowModal] = useState(false);
+  const [modalParty, setModalParty] = useState(null);
+  const [modalInvoices, setModalInvoices] = useState([]);
+  const [showQuickSummary, setShowQuickSummary] = useState(false);
+  const [quickSummaryInvoice, setQuickSummaryInvoice] = useState(null);
+
+  // Fetch purchase bills data only
   useEffect(() => {
     const fetchBillsReport = async () => {
       if (!db || !userId || !appId) return;
       
       setLoading(true);
       try {
-        // Get all sales in date range
-        const salesQuery = query(
-          collection(db, `artifacts/${appId}/users/${userId}/salesBills`),
-          where('invoiceDate', '>=', dateRange.start),
-          where('invoiceDate', '<=', dateRange.end),
-          orderBy('invoiceDate', 'desc')
-        );
-
-        const salesSnapshot = await getDocs(salesQuery);
-        let sales = salesSnapshot.docs.map(doc => {
-          const d = doc.data();
-          return {
-            id: doc.id,
-            date: d.invoiceDate || d.date,
-            totalAmount: parseFloat(d.totalAmount || d.amount || 0),
-            partyId: d.customFields?.party || d.party || d.partyId,
-            partyName: d.partyName || '',
-            docType: 'Invoice',
-            invoiceNumber: d.invoiceNumber || d.number || doc.id
-          };
-        });
-
-        // Filter by selected party in JavaScript if needed
-        if (selectedParty) {
-          sales = sales.filter(sale => sale.partyId === selectedParty);
-        }
+        const startStr = new Date(dateRange.start).toISOString().split('T')[0];
+        const endStr = new Date(dateRange.end).toISOString().split('T')[0];
 
         // Get all purchases in date range
         const purchasesQuery = query(
           collection(db, `artifacts/${appId}/users/${userId}/purchaseBills`),
-          where('billDate', '>=', dateRange.start),
-          where('billDate', '<=', dateRange.end),
+          where('billDate', '>=', startStr),
+          where('billDate', '<=', endStr),
           orderBy('billDate', 'desc')
         );
 
         const purchasesSnapshot = await getDocs(purchasesQuery);
-        let purchases = purchasesSnapshot.docs.map(doc => {
-          const d = doc.data();
-          return {
-            id: doc.id,
-            date: d.billDate || d.date,
-            totalAmount: parseFloat(d.totalAmount || d.amount || 0),
-            partyId: d.customFields?.party || d.party || d.partyId,
-            partyName: d.partyName || '',
-            docType: 'Purchase',
-            billNumber: d.billNumber || d.number || doc.id
+        const purchaseDocs = purchasesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // Fetch items for GST rate fallback
+        const itemsSnapshot = await getDocs(collection(db, `artifacts/${appId}/users/${userId}/items`));
+        const itemMeta = {};
+        const nameMap = {};
+        itemsSnapshot.forEach(d => {
+          const it = d.data() || {};
+          itemMeta[d.id] = {
+            gstPercentage: parseFloat(it.gstPercentage) || 0,
+            itemType: it.itemType || 'Goods'
           };
+          nameMap[d.id] = it.itemName || it.name || it.title || '';
         });
+        setItemNameMap(nameMap);
 
         // Filter by selected party in JavaScript if needed
-        if (selectedParty) {
-          purchases = purchases.filter(purchase => purchase.partyId === selectedParty);
-        }
-
-        // Get all challans in date range
-        const challansQuery = query(
-          collection(db, `artifacts/${appId}/users/${userId}/challans`),
-          where('date', '>=', dateRange.start),
-          where('date', '<=', dateRange.end),
-          orderBy('date', 'desc')
-        );
-
-        const challansSnapshot = await getDocs(challansQuery);
-        let challans = challansSnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }));
-
-        // Filter by selected party in JavaScript if needed
-        if (selectedParty) {
-          challans = challans.filter(challan => challan.partyId === selectedParty);
-        }
+        let purchases = purchaseDocs.filter(p => !selectedParty || (p.party || p.partyId) === selectedParty);
 
         // Get all payments for status calculation
-        const paymentsQuery = query(
+        const paymentsQueryRef = query(
           collection(db, `artifacts/${appId}/users/${userId}/payments`),
-          where('paymentDate', '<=', dateRange.end),
+          where('paymentDate', '<=', endStr),
           orderBy('paymentDate', 'asc')
         );
-        const paymentsSnapshot = await getDocs(paymentsQuery);
+        const paymentsSnapshot = await getDocs(paymentsQueryRef);
         const payments = paymentsSnapshot.docs.map(doc => {
           const d = doc.data();
           return {
@@ -117,57 +84,106 @@ const BillsReport = ({ db, userId, appId, dateRange, financialYear, selectedPart
           };
         });
 
-        // Combine all bills
-        const allBills = [...sales, ...purchases, ...challans];
+        // Helpers to resolve party id/name
+        const resolvePartyId = (docData) => {
+          const raw = docData.customFields?.party || docData.party || docData.partyId;
+          if (raw && parties.some(p => p.id === raw)) return raw;
+          const name = docData.partyName || docData.firmName || '';
+          const match = parties.find(p => (p.firmName || p.partyName) === name);
+          return match?.id || raw || '';
+        };
+        const resolvePartyName = (partyId, docData) => {
+          const p = parties.find(pp => pp.id === partyId);
+          return docData.partyName || p?.firmName || p?.partyName || p?.name || partyId || '';
+        };
 
-        // Apply FIFO payment logic to determine status
-        const billsWithStatus = allBills.map(bill => {
-          const partyPayments = payments
-            .filter(p => p.partyId === bill.partyId)
-            .filter(p => bill.docType === 'Invoice' ? (p.type === 'invoice' || p.receiptNumber?.startsWith('PRI') || (p.allocations || []).some(a => a.billType === 'invoice')) : (p.type === 'purchase' || p.receiptNumber?.startsWith('PRP') || (p.allocations || []).some(a => a.billType === 'purchase')))
-            .sort((a, b) => new Date(a.date) - new Date(b.date));
-
-          let totalPaid = 0;
-          let remainingAmount = bill.totalAmount;
-
-          // Apply payments using FIFO
-          for (const payment of partyPayments) {
-            if (remainingAmount <= 0) break;
-            
-            const amountToApply = Math.min(payment.amount, remainingAmount);
-            totalPaid += amountToApply;
-            remainingAmount -= amountToApply;
+        // Group purchases by party and compute FIFO-paid amounts (partywise summary)
+        const partyBills = {};
+        purchases.forEach(billDoc => {
+          const rows = billDoc.rows || billDoc.items || [];
+          let cgst = 0, sgst = 0, igst = 0, taxable = 0;
+          for (const r of rows) {
+            const base = parseFloat(r.amount) || 0;
+            const meta = itemMeta[r.item] || {};
+            const rateSum = (parseFloat(r.sgst) || 0) + (parseFloat(r.cgst) || 0) + (parseFloat(r.igst) || 0) || meta.gstPercentage || 0;
+            // If IGST present, take full to IGST; else split equally across CGST/SGST
+            if ((parseFloat(r.igst) || 0) > 0) {
+              igst += (base * rateSum) / 100;
+            } else {
+              const tax = (base * rateSum) / 100;
+              cgst += tax / 2; sgst += tax / 2;
+            }
+            taxable += base;
           }
-
-          const status = totalPaid >= bill.totalAmount ? 'Paid' : 
-                        totalPaid > 0 ? 'Partially Paid' : 'Pending';
-
-          return {
-            date: bill.date,
-            docType: bill.docType,
-            docNo: bill.invoiceNumber || bill.billNumber || bill.challanNumber || bill.number,
-            partyName: bill.partyName,
-            amount: bill.totalAmount,
-            gst: bill.totalGST || 0,
-            status: status,
-            billId: bill.id
+          const totalAmount = parseFloat(billDoc.totalAmount || billDoc.amount || taxable + cgst + sgst + igst || 0);
+          const partyId = resolvePartyId(billDoc);
+          const partyName = resolvePartyName(partyId, billDoc);
+          const bill = {
+            id: billDoc.id,
+            partyId,
+            partyName,
+            totalAmount,
+            gst: cgst + sgst + igst,
+            date: billDoc.billDate || billDoc.date,
+            number: billDoc.billNumber || billDoc.number || billDoc.id,
+            rows: billDoc.rows || billDoc.items || []
           };
+          if (!partyBills[partyId]) partyBills[partyId] = [];
+          partyBills[partyId].push(bill);
         });
 
-        setBillsData(billsWithStatus);
-
-        // Calculate totals
-        const totals = billsWithStatus.reduce((acc, bill) => ({
-          totalBills: acc.totalBills + 1,
-          totalAmount: acc.totalAmount + bill.amount,
-          totalGST: acc.totalGST + bill.gst,
-          paidBills: acc.paidBills + (bill.status === 'Paid' ? 1 : 0)
-        }), {
-          totalBills: 0,
-          totalAmount: 0,
-          totalGST: 0,
-          paidBills: 0
+        // Group payments by party (purchase receipts PRP)
+        const partyPayments = {};
+        payments.filter(p => p.receiptNumber?.startsWith('PRP')).forEach(p => {
+          if (!partyPayments[p.partyId]) partyPayments[p.partyId] = [];
+          partyPayments[p.partyId].push(p);
         });
+
+        // Build party summaries with FIFO allocation
+        const summaries = [];
+        Object.entries(partyBills).forEach(([partyId, bills]) => {
+          const sorted = bills.sort((a, b) => new Date(a.date) - new Date(b.date));
+          const pays = (partyPayments[partyId] || []).sort((a, b) => new Date(a.paymentDate || a.date) - new Date(b.paymentDate || b.date));
+          let totalPaid = 0; let i = 0; let j = 0;
+          while (i < sorted.length && j < pays.length) {
+            const inv = sorted[i];
+            const pay = pays[j];
+            let outstanding = Number(inv.totalAmount) - (inv.paidAmount || 0);
+            let remaining = Number(pay.totalAmount || pay.amount || 0) - (pay.usedAmount || 0);
+            if (outstanding <= 0) { i++; continue; }
+            if (remaining <= 0) { j++; continue; }
+            const apply = Math.min(outstanding, remaining);
+            inv.paidAmount = (inv.paidAmount || 0) + apply;
+            pay.usedAmount = (pay.usedAmount || 0) + apply;
+            totalPaid += apply;
+          }
+          let totalAmount = 0, totalGST = 0, lastDate = null;
+          sorted.forEach(b => { totalAmount += Number(b.totalAmount); totalGST += b.gst || 0; lastDate = b.date || lastDate; });
+          let outstanding = totalAmount - totalPaid; if (outstanding < 0) outstanding = 0;
+          const partyObj = parties.find(p => p.id === partyId) || {};
+          summaries.push({
+            partyId,
+            partyName: partyObj.firmName || partyObj.partyName || partyObj.name || partyId,
+            totalInvoices: sorted.length,
+            totalAmount,
+            totalGST,
+            totalPaid,
+            totalOutstanding: outstanding,
+            lastInvoiceDate: lastDate ? new Date(lastDate) : null,
+            invoices: sorted.map(s => ({ id: s.id, invoiceNumber: s.number, date: s.date ? new Date(s.date) : null, totalAmount: s.totalAmount, paidAmount: s.paidAmount || 0, items: s.rows }))
+          });
+        });
+
+        const reportRows = selectedParty ? summaries.filter(r => r.partyId === selectedParty) : summaries;
+        setBillsData(reportRows);
+
+        const totals = reportRows.reduce((acc, row) => ({
+          totalInvoices: acc.totalInvoices + row.totalInvoices,
+          totalAmount: acc.totalAmount + row.totalAmount,
+          totalGST: acc.totalGST + row.totalGST,
+          totalPaid: acc.totalPaid + row.totalPaid,
+          totalOutstanding: acc.totalOutstanding + row.totalOutstanding
+        }), { totalInvoices:0, totalAmount:0, totalGST:0, totalPaid:0, totalOutstanding:0 });
 
         setTotalSummary(totals);
 
@@ -179,7 +195,22 @@ const BillsReport = ({ db, userId, appId, dateRange, financialYear, selectedPart
     };
 
     fetchBillsReport();
-  }, [db, userId, appId, dateRange, selectedParty]);
+  }, [db, userId, appId, dateRange, selectedParty, parties]);
+
+  // ESC key handling for LIFO modal closing
+  useEffect(() => {
+    const handleEsc = (e) => {
+      if (e.key === 'Escape') {
+        if (showQuickSummary) {
+          setShowQuickSummary(false);
+        } else if (showModal) {
+          setShowModal(false);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [showQuickSummary, showModal]);
 
   // Format currency
   const formatCurrency = (amount) => {
@@ -196,65 +227,24 @@ const BillsReport = ({ db, userId, appId, dateRange, financialYear, selectedPart
     return new Date(date).toLocaleDateString('en-IN');
   };
 
-  // Handle row click - open document
-  const handleRowClick = (bill) => {
-    console.log('Open document:', bill.billId, bill.docType);
-    // You can implement navigation logic here
-  };
-
-  // Sample data for testing
-  const sampleData = [
-    {
-      date: '2025-04-01',
-      docType: 'Invoice',
-      docNo: 'INV25-26/1',
-      partyName: 'ABC Traders',
-      amount: 25000,
-      gst: 2250,
-      status: 'Paid',
-      billId: 'sample1'
-    },
-    {
-      date: '2025-04-02',
-      docType: 'Challan',
-      docNo: 'CHA25-26/1',
-      partyName: 'XYZ Ltd',
-      amount: 15000,
-      gst: 1350,
-      status: 'Pending',
-      billId: 'sample2'
-    },
-    {
-      date: '2025-04-03',
-      docType: 'Purchase',
-      docNo: 'PRB25-26/1',
-      partyName: 'Supplier Corp',
-      amount: 30000,
-      gst: 2700,
-      status: 'Partially Paid',
-      billId: 'sample3'
-    }
-  ];
-
-  // Use sample data if no real data
-  const displayData = billsData.length > 0 ? billsData : sampleData;
+  const displayData = billsData;
 
   return (
     <div className="p-6">
       {/* Report Header */}
       <div className="mb-6">
-        <h2 className="text-xl font-bold text-gray-800 mb-2">Bills Report (Grouped View)</h2>
+        <h2 className="text-xl font-bold text-gray-800 mb-2">Purchase Bill Summary</h2>
         <p className="text-gray-600">
           Period: {formatDate(dateRange.start)} to {formatDate(dateRange.end)}
-          {selectedParty && ` | Party: ${parties.find(p => p.id === selectedParty)?.partyName || selectedParty}`}
+          {selectedParty && (() => { const p = parties.find(pp => pp.id === selectedParty); return ` | Party: ${p?.firmName || p?.partyName || p?.name || selectedParty}`; })()}
         </p>
       </div>
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <div className="bg-blue-50 p-4 rounded-lg">
-          <div className="text-sm text-blue-600 font-medium">Total Bills</div>
-          <div className="text-2xl font-bold text-blue-800">{totalSummary.totalBills}</div>
+          <div className="text-sm text-blue-600 font-medium">Total Invoices</div>
+          <div className="text-2xl font-bold text-blue-800">{totalSummary.totalInvoices}</div>
         </div>
         <div className="bg-green-50 p-4 rounded-lg">
           <div className="text-sm text-green-600 font-medium">Total Amount</div>
@@ -265,112 +255,105 @@ const BillsReport = ({ db, userId, appId, dateRange, financialYear, selectedPart
           <div className="text-2xl font-bold text-purple-800">{formatCurrency(totalSummary.totalGST)}</div>
         </div>
         <div className="bg-yellow-50 p-4 rounded-lg">
-          <div className="text-sm text-yellow-600 font-medium">Paid Bills</div>
-          <div className="text-2xl font-bold text-yellow-800">{totalSummary.paidBills}</div>
+          <div className="text-sm text-yellow-600 font-medium">Total Paid</div>
+          <div className="text-2xl font-bold text-yellow-800">{formatCurrency(totalSummary.totalPaid)}</div>
         </div>
       </div>
 
       {/* Bills Table */}
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <SortableHeader 
-                  columnKey="date" 
-                  label="Date" 
-                  onSort={handleSort} 
-                  sortConfig={sortConfig} 
-                />
-                <SortableHeader 
-                  columnKey="docType" 
-                  label="Doc Type" 
-                  onSort={handleSort} 
-                  sortConfig={sortConfig} 
-                />
-                <SortableHeader 
-                  columnKey="docNo" 
-                  label="Doc No" 
-                  onSort={handleSort} 
-                  sortConfig={sortConfig} 
-                />
-                <SortableHeader 
-                  columnKey="partyName" 
-                  label="Party" 
-                  onSort={handleSort} 
-                  sortConfig={sortConfig} 
-                />
-                <SortableHeader 
-                  columnKey="amount" 
-                  label="Amount" 
-                  onSort={handleSort} 
-                  sortConfig={sortConfig} 
-                />
-                <SortableHeader 
-                  columnKey="gst" 
-                  label="GST" 
-                  onSort={handleSort} 
-                  sortConfig={sortConfig} 
-                />
-                <SortableHeader 
-                  columnKey="status" 
-                  label="Status" 
-                  onSort={handleSort} 
-                  sortConfig={sortConfig} 
-                />
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50"><tr><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Party Name</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Invoices</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Amount</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total GST</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Paid</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Outstanding</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Invoice Date</th></tr></thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {pagination.currentData.map((row, idx) => (
+              <tr key={row.partyId || idx} className="cursor-pointer hover:bg-blue-50" onClick={() => { setModalParty(row); setModalInvoices(row.invoices || []); setShowModal(true); }}>
+                <td className="px-6 py-4 whitespace-nowrap">{row.partyName}</td>
+                <td className="px-6 py-4 whitespace-nowrap">{row.totalInvoices}</td>
+                <td className="px-6 py-4 whitespace-nowrap">{formatCurrency(row.totalAmount)}</td>
+                <td className="px-6 py-4 whitespace-nowrap">{formatCurrency(row.totalGST)}</td>
+                <td className="px-6 py-4 whitespace-nowrap">{formatCurrency(row.totalPaid)}</td>
+                <td className="px-6 py-4 whitespace-nowrap">{formatCurrency(row.totalOutstanding)}</td>
+                <td className="px-6 py-4 whitespace-nowrap">{row.lastInvoiceDate ? formatDate(row.lastInvoiceDate) : '-'}</td>
               </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {pagination.currentData.map((bill, index) => (
-                <tr 
-                  key={bill.billId || index} 
-                  className="hover:bg-gray-50 cursor-pointer transition-colors"
-                  onClick={() => handleRowClick(bill)}
-                >
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {formatDate(bill.date)}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`px-2 py-1 rounded text-xs font-medium ${
-                      bill.docType === 'Invoice' ? 'bg-blue-100 text-blue-800' :
-                      bill.docType === 'Purchase' ? 'bg-purple-100 text-purple-800' :
-                      'bg-green-100 text-green-800'
-                    }`}>
-                      {bill.docType}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm font-medium text-blue-600 hover:underline">
-                      {bill.docNo}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {bill.partyName}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
-                    {formatCurrency(bill.amount)}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
-                    {formatCurrency(bill.gst)}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`px-2 py-1 rounded text-xs font-medium ${
-                      bill.status === 'Paid' ? 'bg-green-100 text-green-800' :
-                      bill.status === 'Partially Paid' ? 'bg-yellow-100 text-yellow-800' :
-                      'bg-red-100 text-red-800'
-                    }`}>
-                      {bill.status}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+            ))}
+          </tbody>
+        </table>
 
         {/* Pagination */}
         <PaginationControls {...pagination} />
       </div>
+
+      {/* Modal + Quick Summary like sales */}
+      {showModal && modalParty && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+          <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-xl relative">
+            <button className="absolute top-2 right-2 text-gray-500 hover:text-gray-800 text-xl" onClick={() => setShowModal(false)}>&times;</button>
+            <h3 className="text-lg font-bold mb-2">{modalParty.partyName} - Purchase Bills</h3>
+            <div className="mb-2 text-sm text-gray-600">Total Invoices: {modalParty.totalInvoices}</div>
+            <div className="mb-4 text-sm text-gray-600">Total Amount: {formatCurrency(modalParty.totalAmount)}</div>
+            <div className="max-h-72 overflow-y-auto">
+              <table className="min-w-full divide-y divide-gray-200 text-sm">
+                <thead className="bg-gray-50"><tr><th className="px-4 py-2 text-left">Bill No</th><th className="px-4 py-2 text-left">Date</th><th className="px-4 py-2 text-left">Amount</th><th className="px-4 py-2 text-left">Paid Amount</th></tr></thead>
+                <tbody>
+                  {modalInvoices.map((inv, i) => (
+                    <tr key={inv.id || i}>
+                      <td className="px-4 py-2"><button className="text-blue-600 hover:text-blue-800 underline" onClick={(e)=>{e.stopPropagation(); setQuickSummaryInvoice(inv); setShowQuickSummary(true);}}> {inv.invoiceNumber} </button></td>
+                      <td className="px-4 py-2">{inv.date ? formatDate(inv.date) : ''}</td>
+                      <td className="px-4 py-2">{formatCurrency(inv.totalAmount)}</td>
+                      <td className="px-4 py-2">{formatCurrency(inv.paidAmount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showQuickSummary && quickSummaryInvoice && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+          <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-md relative">
+            <button className="absolute top-2 right-2 text-gray-500 hover:text-gray-800 text-xl" onClick={() => setShowQuickSummary(false)}>&times;</button>
+            <h3 className="text-lg font-bold mb-4 text-center">Purchase Bill Summary</h3>
+            <div className="space-y-3">
+              <div><strong>Bill Number:</strong> {quickSummaryInvoice.invoiceNumber}</div>
+              <div><strong>Date:</strong> {quickSummaryInvoice.date ? formatDate(quickSummaryInvoice.date) : ''}</div>
+              <div><strong>Amount:</strong> {formatCurrency(quickSummaryInvoice.totalAmount)}</div>
+            </div>
+            <div className="mt-4">
+              <div className="font-semibold mb-2">Items</div>
+              <div className="max-h-64 overflow-y-auto border border-gray-200 rounded">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Item</th>
+                      <th className="px-3 py-2 text-right">Qty</th>
+                      <th className="px-3 py-2 text-right">Rate</th>
+                      <th className="px-3 py-2 text-right">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(quickSummaryInvoice.items || []).map((r, idx) => {
+                      const name = r.itemName || r.name || itemNameMap[r.item] || r.item || '-';
+                      const qty = r.qty || r.quantity || r.nos || 0;
+                      const rate = r.rate || r.price || 0;
+                      const amount = r.amount || (Number(qty) * Number(rate));
+                      return (
+                        <tr key={idx} className="border-t">
+                          <td className="px-3 py-2">{name}</td>
+                          <td className="px-3 py-2 text-right">{qty}</td>
+                          <td className="px-3 py-2 text-right">{formatCurrency(rate)}</td>
+                          <td className="px-3 py-2 text-right">{formatCurrency(amount)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* No Data Message */}
       {displayData.length === 0 && !loading && (
@@ -383,4 +366,4 @@ const BillsReport = ({ db, userId, appId, dateRange, financialYear, selectedPart
   );
 };
 
-export default BillsReport; 
+export default PurchaseBillsSummary; 

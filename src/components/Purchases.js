@@ -36,6 +36,10 @@ const initialItemRow = {
   length: 0,
   height: 0,
   qty: 0,
+  qtyExpr: '',
+  qtyDisplay: '',
+  lineDiscountType: 'amount',
+  lineDiscountValue: 0,
   rate: 0,
   amount: 0,
   sgst: 0,
@@ -47,6 +51,26 @@ const initialItemRow = {
 const areaUnits = [
   'Sq. Ft.', 'Sq. Inch', 'Sq. Yard', 'Square Meter', 'Cubic Feet', 'Cubic Meter', 'Cu. Inch', 'Cu. Yard'
 ];
+
+// Utility for rounding to 2 decimal places
+function round2(val) {
+  return Math.round((parseFloat(val) + Number.EPSILON) * 100) / 100;
+}
+
+// Parse a quantity expression like "5x3x2" or "10*2" into a numeric product and a normalized display string
+function parseQtyExpression(input) {
+  const s = String(input || '').trim().replace(/\s+/g, '');
+  if (!s) return { ok: false, value: 0, display: '' };
+  const parts = s.split(/[xX\*]/).filter(Boolean);
+  if (parts.length === 0) return { ok: false, value: 0, display: '' };
+  let product = 1;
+  for (const p of parts) {
+    const n = Number(p);
+    if (!isFinite(n) || n <= 0) return { ok: false, value: 0, display: '' };
+    product *= n;
+  }
+  return { ok: true, value: product, display: parts.join('×') };
+}
 
 // ESC Key Functionality: Press ESC key to close modals in LIFO order (Last In, First Out)
 // Order: Receipt Modal → Payment Details Modal → Payment Modal → Invoice Modal → View Modal → Success Modal → Image Manager
@@ -461,16 +485,34 @@ function Purchases({ db, userId, isAuthReady, appId }) {
           }
         }
 
-        // QTY calculation for area/calculative units
+        // Quantity calculation: prefer qty expression; fallback to Nos×Length×Height
         let itemObj = items.find(it => it.id === (field === 'item' ? value : row.item));
         const unit = itemObj ? itemObj.quantityMeasurement : '';
-        if (areaUnits.includes(unit)) {
-          updated.qty = (parseFloat(updated.nos) || 0) * (parseFloat(updated.length) || 1) * (parseFloat(updated.height) || 1);
-          updated.amount = (parseFloat(updated.qty) || 0) * (parseFloat(updated.rate) || 0);
+        const parsed = parseQtyExpression(updated.qtyExpr);
+        let computedQty;
+        if (parsed.ok) {
+          computedQty = parsed.value;
+          updated.qtyDisplay = parsed.display;
         } else {
-          updated.qty = (parseFloat(updated.nos) || 0) * (parseFloat(updated.length) || 1) * (parseFloat(updated.height) || 1);
-          updated.amount = (parseFloat(updated.qty) || 0) * (parseFloat(updated.rate) || 0);
+          computedQty = (parseFloat(updated.nos) || 0) * (parseFloat(updated.length) || 1) * (parseFloat(updated.height) || 1);
+          if (!updated.qtyExpr) {
+            const a = parseFloat(updated.nos) || 0; const b = parseFloat(updated.length) || 1; const c = parseFloat(updated.height) || 1;
+            updated.qtyDisplay = `${a}×${b}×${c}`;
+          }
         }
+        updated.qty = computedQty;
+        // Keep nos in sync for legacy logic
+        updated.nos = computedQty;
+        // Apply per-line discount to amount
+        const rawAmount = (parseFloat(updated.qty) || 0) * (parseFloat(updated.rate) || 0);
+        let lineDiscAmt = 0;
+        if ((updated.lineDiscountType || 'amount') === 'percent') {
+          lineDiscAmt = rawAmount * ((parseFloat(updated.lineDiscountValue) || 0) / 100);
+        } else {
+          lineDiscAmt = parseFloat(updated.lineDiscountValue) || 0;
+        }
+        lineDiscAmt = Math.min(Math.max(lineDiscAmt, 0), rawAmount);
+        updated.amount = round2(rawAmount - lineDiscAmt);
         // GST and total calculation
         const sgstAmt = (parseFloat(updated.amount) || 0) * (parseFloat(updated.sgst) || 0) / 100;
         const cgstAmt = (parseFloat(updated.amount) || 0) * (parseFloat(updated.cgst) || 0) / 100;
@@ -480,7 +522,7 @@ function Purchases({ db, userId, isAuthReady, appId }) {
       });
 
       // Auto-add trailing row logic
-      const isRowNonEmpty = (r) => !!(r.item || (parseFloat(r.rate) || 0) || (parseFloat(r.nos) || 0) > 1 || (parseFloat(r.length) || 0) || (parseFloat(r.height) || 0));
+      const isRowNonEmpty = (r) => !!(r.item || (parseFloat(r.rate) || 0) || (r.qtyExpr && String(r.qtyExpr).trim()) || (parseFloat(r.qty) || 0) > 0 || (parseFloat(r.lineDiscountValue) || 0));
       const last = updatedRows[updatedRows.length - 1];
       if (isRowNonEmpty(last)) {
         updatedRows.push({ ...initialItemRow });
@@ -504,11 +546,11 @@ function Purchases({ db, userId, isAuthReady, appId }) {
     const selected = docTypeOptions.find(opt => opt.value === docType);
     if (!selected) return;
     const collectionRef = collection(db, `artifacts/${appId}/users/${userId}/${selected.collection}`);
-    const subtotal = rows.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0);
-    const totalSGST = rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.sgst) || 0) / 100), 0);
-    const totalCGST = rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0) / 100), 0);
-    const totalIGST = rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0) / 100), 0);
-    const grandTotal = subtotal + totalSGST + totalCGST + totalIGST;
+  const subtotal = rows.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0);
+  const totalSGST = rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.sgst) || 0) / 100), 0);
+  const totalCGST = rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.cgst) || 0) / 100), 0);
+  const totalIGST = rows.reduce((sum, row) => sum + ((parseFloat(row.amount) || 0) * (parseFloat(row.igst) || 0) / 100), 0);
+  const grandTotal = subtotal + totalSGST + totalCGST + totalIGST;
     const billData = {
       number: billNumber,
       billDate,
@@ -1236,11 +1278,10 @@ function Purchases({ db, userId, isAuthReady, appId }) {
                                 <thead className="bg-gray-50">
                                     <tr>
                 <th className="px-2 py-1">ITEM</th>
-                <th className="px-2 py-1">NOS</th>
-                <th className="px-2 py-1">LENGTH</th>
-                <th className="px-2 py-1">HEIGHT</th>
+                <th className="px-2 py-1">MEASUREMENT / NUMBERS</th>
                 <th className="px-2 py-1">QTY</th>
                 <th className="px-2 py-1">RATE</th>
+                <th className="px-2 py-1">DISCOUNT</th>
                 <th className="px-2 py-1">AMOUNT</th>
                 <th className="px-2 py-1">SGST</th>
                 <th className="px-2 py-1">CGST</th>
@@ -1300,16 +1341,18 @@ function Purchases({ db, userId, isAuthReady, appId }) {
                       </div>
                   </td>
                   <td className="px-2 py-1">
-                    <input type="number" value={row.nos} min={1} onChange={e => handleRowChange(idx, 'nos', e.target.value)}
-                      className="border border-gray-300 rounded-md p-1 w-16" />
-                  </td>
-                  <td className="px-2 py-1">
-                    <input type="number" value={row.length} min={0} onChange={e => handleRowChange(idx, 'length', e.target.value)}
-                      className="border border-gray-300 rounded-md p-1 w-16" />
-                  </td>
-                  <td className="px-2 py-1">
-                    <input type="number" value={row.height} min={0} onChange={e => handleRowChange(idx, 'height', e.target.value)}
-                      className="border border-gray-300 rounded-md p-1 w-16" />
+                    <div className="flex flex-col">
+                      <input
+                        type="text"
+                        value={row.qtyExpr}
+                        onChange={e => handleRowChange(idx, 'qtyExpr', e.target.value)}
+                        placeholder="e.g. 5x3x2 or 10*2"
+                        className="border border-gray-300 rounded-md p-1 w-40"
+                      />
+                      {row.qtyDisplay && (
+                        <span className="text-xs text-gray-500 mt-1">= {row.qty} ({row.qtyDisplay})</span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-2 py-1">
                     <input type="number" value={row.qty} min={0} readOnly
@@ -1318,6 +1361,26 @@ function Purchases({ db, userId, isAuthReady, appId }) {
                   <td className="px-2 py-1">
                     <input type="number" value={row.rate} min={0} onChange={e => handleRowChange(idx, 'rate', e.target.value)}
                       className="border border-gray-300 rounded-md p-1 w-16" />
+                  </td>
+                  <td className="px-2 py-1">
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={0}
+                        value={row.lineDiscountValue}
+                        onChange={e => handleRowChange(idx, 'lineDiscountValue', e.target.value)}
+                        className="border border-gray-300 rounded-md p-1 w-20"
+                        placeholder={row.lineDiscountType === 'percent' ? 'Percent' : 'Amount'}
+                      />
+                      <select
+                        value={row.lineDiscountType || 'amount'}
+                        onChange={e => handleRowChange(idx, 'lineDiscountType', e.target.value)}
+                        className="border border-gray-300 rounded-md p-1"
+                      >
+                        <option value="amount">₹</option>
+                        <option value="percent">%</option>
+                      </select>
+                    </div>
                   </td>
                   <td className="px-2 py-1">
                     <input type="number" value={row.amount} min={0} readOnly

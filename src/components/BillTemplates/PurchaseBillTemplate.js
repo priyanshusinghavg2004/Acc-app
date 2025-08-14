@@ -119,7 +119,11 @@ function PurchaseBillTemplate({ billData = {}, companyDetails = {}, partyDetails
             {items.map((row, idx) => (
               <tr key={idx}>
                 <td className="border px-2 py-1 text-center">{idx + 1}</td>
-                <td className="border px-2 py-1">{row.description || row.itemName || ''}</td>
+                <td className="border px-2 py-1">{row.description || row.itemName || ''}
+                  <div style={{ fontSize: '0.85em', fontStyle: 'italic', color: '#555' }}>
+                    {row.qtyDisplay ? row.qtyDisplay : `${row.nos || row.qty || 1}x${row.length || 1}x${row.height || 1}`}
+                  </div>
+                </td>
                 <td className="border px-2 py-1 text-center">{row.hsn || ''}</td>
                 <td className="border px-2 py-1 text-right">{row.qty || row.nos || ''}</td>
                 <td className="border px-2 py-1 text-right">₹{formatINR(row.rate)}</td>

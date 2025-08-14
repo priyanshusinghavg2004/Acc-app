@@ -19,146 +19,133 @@ const BalanceSheetReport = ({ db, userId, appId, dateRange, financialYear, selec
   const { sortedData, sortConfig, handleSort } = useTableSort(balanceSheetData.assets, { key: 'category', direction: 'asc' });
   const pagination = useTablePagination(sortedData, 25);
 
-  // Fetch Balance Sheet data
+  // Fetch Balance Sheet data (Lite): Cash, Bank, Debtors, Creditors, GST Payable, Capital, Current Profit
   useEffect(() => {
     const fetchBalanceSheetReport = async () => {
       if (!db || !userId || !appId) return;
       
       setLoading(true);
       try {
-        // Get all sales for debtors calculation
-        let salesQuery = query(
-          collection(db, `artifacts/${appId}/users/${userId}/salesBills`),
-          where('invoiceDate', '<=', dateRange.end),
-          orderBy('invoiceDate', 'desc')
-        );
-
-        const salesSnapshot = await getDocs(salesQuery);
+        const startStr = new Date(dateRange.start).toISOString().split('T')[0];
+        const endStr = new Date(dateRange.end).toISOString().split('T')[0];
+        // Get sales (JS filter by date range)
+        const salesSnapshot = await getDocs(collection(db, `artifacts/${appId}/users/${userId}/salesBills`));
         const sales = salesSnapshot.docs.map(doc => {
           const d = doc.data();
           return {
             id: doc.id,
             date: d.invoiceDate || d.date,
-            totalAmount: parseFloat(d.totalAmount || d.amount || 0)
+            totalAmount: parseFloat(d.totalAmount || d.amount || 0),
+            number: d.number || d.invoiceNumber,
+            partyName: d.partyName || ''
           };
+        }).filter(s => {
+          const dt = new Date(s.date);
+          return (!dateRange?.start || dt >= new Date(dateRange.start)) && (!dateRange?.end || dt <= new Date(dateRange.end));
         });
 
-        // Get all purchases for creditors calculation
-        let purchasesQuery = query(
-          collection(db, `artifacts/${appId}/users/${userId}/purchaseBills`),
-          where('billDate', '<=', dateRange.end),
-          orderBy('billDate', 'desc')
-        );
-
-        const purchasesSnapshot = await getDocs(purchasesQuery);
+        // Get purchases (JS filter by date range)
+        const purchasesSnapshot = await getDocs(collection(db, `artifacts/${appId}/users/${userId}/purchaseBills`));
         const purchases = purchasesSnapshot.docs.map(doc => {
           const d = doc.data();
           return {
             id: doc.id,
             date: d.billDate || d.date,
-            totalAmount: parseFloat(d.totalAmount || d.amount || 0)
+            totalAmount: parseFloat(d.totalAmount || d.amount || 0),
+            billNumber: d.billNumber || d.number,
+            partyName: d.partyName || ''
           };
+        }).filter(p => {
+          const dt = new Date(p.date);
+          return (!dateRange?.start || dt >= new Date(dateRange.start)) && (!dateRange?.end || dt <= new Date(dateRange.end));
         });
 
         // Get all payments for cash/bank balance calculation
-        let paymentsQuery = query(
-          collection(db, `artifacts/${appId}/users/${userId}/payments`),
-          where('paymentDate', '<=', dateRange.end),
-          orderBy('paymentDate', 'desc')
-        );
-
-        const paymentsSnapshot = await getDocs(paymentsQuery);
-        const payments = paymentsSnapshot.docs.map(doc => {
-          const d = doc.data();
-          return {
-            id: doc.id,
-            date: d.paymentDate || d.date,
-            amount: parseFloat(d.totalAmount || d.amount || 0),
-            paymentType: (d.paymentMode || '').toLowerCase().includes('cash') ? 'cash' : 'bank',
-            type: d.type || (d.receiptNumber?.startsWith('PRP') ? 'payment' : 'receipt'),
-            documentType: d.documentType || (d.receiptNumber?.startsWith('PRI') ? 'sale' : d.receiptNumber?.startsWith('PRP') ? 'purchase' : 'expense')
-          };
+        const paymentsSnapshot = await getDocs(collection(db, `artifacts/${appId}/users/${userId}/payments`));
+        const payments = paymentsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(p => {
+          const dt = new Date(p.paymentDate || p.date);
+          return (!dateRange?.start || dt >= new Date(dateRange.start)) && (!dateRange?.end || dt <= new Date(dateRange.end));
         });
 
         // Get all expenses for outstanding expenses calculation
-        let expensesQuery = query(
-          collection(db, `artifacts/${appId}/users/${userId}/expenses`),
-          where('date', '<=', dateRange.end),
-          orderBy('date', 'desc')
-        );
+        const expensesSnapshot = await getDocs(collection(db, `artifacts/${appId}/users/${userId}/expenses`));
+        const expenses = expensesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(e => {
+          const dt = new Date(e.date);
+          return (!dateRange?.start || dt >= new Date(dateRange.start)) && (!dateRange?.end || dt <= new Date(dateRange.end));
+        });
 
-        const expensesSnapshot = await getDocs(expensesQuery);
-        const expenses = expensesSnapshot.docs.map(doc => {
-          const d = doc.data();
-          return { id: doc.id, date: d.date, amount: parseFloat(d.amount || 0) };
+        // Salaries (from salaryPayments)
+        const salariesSnap = await getDocs(collection(db, `artifacts/${appId}/users/${userId}/salaryPayments`));
+        const salaryRows = salariesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(s => {
+          const dt = new Date(s.date || s.paymentDate);
+          return (!dateRange?.start || dt >= new Date(dateRange.start)) && (!dateRange?.end || dt <= new Date(dateRange.end));
         });
 
         // Calculate Assets
         const assets = [];
 
-        // Cash in Hand (from payments)
-        const cashInflow = payments.filter(p => p.paymentType === 'cash' && p.type === 'receipt').reduce((s, p) => s + p.amount, 0);
-        const cashOutflow = payments.filter(p => p.paymentType === 'cash' && p.type === 'payment').reduce((s, p) => s + p.amount, 0);
-        const cashInHand = cashInflow - cashOutflow;
+        // Build Payment Mode-style mapping from raw payments
+        const isCashMode = (mode) => String(mode || '').toLowerCase().includes('cash');
+        const recNoUpper = (r) => (r.receiptNumber || r.number || '').toString().toUpperCase();
+        const isSalesReceipt = (r) => recNoUpper(r).startsWith('PRI') || (String(r.type||'').toLowerCase()==='receipt' && ((r.documentType||'').toString().toLowerCase()==='sale'));
+        const normalizedPayments = payments.map(p => ({ id:p.id, date:p.paymentDate || p.date, amount:Number(p.totalAmount || p.amount || 0), mode:p.paymentMode || '', partyName:p.partyName || p.partyFirmName || '', receiptNumber:p.receiptNumber || p.number || '', type:p.type, documentType:p.documentType }));
+        const salesReceipts = normalizedPayments.filter(isSalesReceipt);
+        const cashSales = salesReceipts.filter(r => isCashMode(r.mode));
+        const bankSales = salesReceipts.filter(r => !isCashMode(r.mode));
+        const cashInHand = cashSales.reduce((s,r)=>s+(r.amount||0),0);
+        const cashInBank = bankSales.reduce((s,r)=>s+(r.amount||0),0);
 
         assets.push({
           category: 'Cash in Hand',
           amount: Math.max(0, cashInHand),
           type: 'current',
-          drillDownData: payments.filter(p => p.paymentType === 'cash'),
-          description: 'Cash balance in hand'
+          drillDownData: cashSales.map(r => ({ id:r.id, date:r.date, amount:r.amount, partyName:r.partyName, paymentNumber:r.receiptNumber })),
+          description: 'Total cash receipts from sales'
         });
 
         // Bank Balance
-        const bankInflow = payments.filter(p => p.paymentType === 'bank' && p.type === 'receipt').reduce((s, p) => s + p.amount, 0);
-        const bankOutflow = payments.filter(p => p.paymentType === 'bank' && p.type === 'payment').reduce((s, p) => s + p.amount, 0);
-        const bankBalance = bankInflow - bankOutflow;
-
         assets.push({
-          category: 'Bank Balance',
-          amount: Math.max(0, bankBalance),
+          category: 'Cash in Bank',
+          amount: Math.max(0, cashInBank),
           type: 'current',
-          drillDownData: payments.filter(p => p.paymentType === 'bank'),
-          description: 'Bank account balance'
+          drillDownData: bankSales.map(r => ({ id:r.id, date:r.date, amount:r.amount, partyName:r.partyName, paymentNumber:r.receiptNumber })),
+          description: 'Total bank/UPI/cheque receipts from sales'
         });
 
         // Debtors (accounts receivable)
         const totalSales = sales.reduce((sum, sale) => sum + sale.totalAmount, 0);
-        const salesPayments = payments.filter(p => p.type === 'receipt' && p.documentType === 'sale').reduce((s, p) => s + p.amount, 0);
+        const salesPayments = salesReceipts.reduce((s, p) => s + (p.amount||0), 0);
         const debtors = totalSales - salesPayments;
 
         assets.push({
           category: 'Debtors',
           amount: Math.max(0, debtors),
           type: 'current',
-          drillDownData: sales,
+          drillDownData: sales.map(s => ({ id:s.id, date:s.date, amount:s.totalAmount, invoiceNumber:s.number || s.invoiceNumber, partyName:s.partyName })),
           description: 'Amount receivable from customers'
         });
 
-        // Fixed Assets (sample data)
-        assets.push({
-          category: 'Fixed Assets',
-          amount: 200000,
-          type: 'fixed',
-          drillDownData: [],
-          description: 'Property, plant, and equipment'
-        });
+        // No fixed assets in Lite
 
         // Calculate Liabilities
         const liabilities = [];
 
-        // Capital Account (sample - you can make this configurable)
+        // Capital Account from simple opening (optional)
+        const openingBalancesDoc = { openingCapital: 0, openingCash: 0, openingBank: 0 };
         liabilities.push({
-          category: 'Capital Account',
-          amount: 400000,
+          category: 'Capital (Opening)',
+          amount: openingBalancesDoc.openingCapital || 0,
           type: 'equity',
           drillDownData: [],
-          description: 'Owner\'s capital investment'
+          description: 'Opening capital (settings)'
         });
 
         // Creditors (accounts payable)
         const totalPurchases = purchases.reduce((sum, purchase) => sum + purchase.totalAmount, 0);
-        const purchasePayments = payments.filter(p => p.type === 'payment' && p.documentType === 'purchase').reduce((s, p) => s + p.amount, 0);
+        const purchasePaymentRows = payments
+          .filter(p => (p.receiptNumber || '').toString().toUpperCase().startsWith('PRP') || ((p.type||'').toString().toLowerCase()==='payment' && ((p.documentType||'').toString().toLowerCase()==='purchase')) )
+          .map(p => ({ id:p.id, date:p.paymentDate || p.date, amount:Number(p.totalAmount || p.amount || 0), receiptNumber:p.receiptNumber || p.number || '', partyName:p.partyName || p.partyFirmName || '' }));
+        const purchasePayments = purchasePaymentRows.reduce((s, p) => s + Number(p.amount || 0), 0);
         const creditors = totalPurchases - purchasePayments;
 
         liabilities.push({
@@ -169,14 +156,18 @@ const BalanceSheetReport = ({ db, userId, appId, dateRange, financialYear, selec
           description: 'Amount payable to suppliers'
         });
 
-        // Loans (sample data)
-        liabilities.push({
-          category: 'Loans',
-          amount: 100000,
-          type: 'long-term',
-          drillDownData: [],
-          description: 'Long-term borrowings'
-        });
+        // Payments made against purchase bills (allocation summary)
+        if (purchasePayments > 0) {
+          liabilities.push({
+            category: 'Payments Made (Purchase)',
+            amount: purchasePayments,
+            type: 'current',
+            drillDownData: purchasePaymentRows,
+            description: 'Payment receipts allocated to purchase bills'
+          });
+        }
+
+        // No loans in Lite
 
         // Outstanding Expenses
         const totalExpenses = expenses.reduce((sum, expense) => sum + expense.amount, 0);
@@ -185,13 +176,71 @@ const BalanceSheetReport = ({ db, userId, appId, dateRange, financialYear, selec
           .reduce((sum, p) => sum + p.amount, 0);
         const outstandingExpenses = totalExpenses - expensePayments;
 
-        liabilities.push({
-          category: 'Outstanding Expenses',
-          amount: Math.max(0, outstandingExpenses),
-          type: 'current',
-          drillDownData: expenses,
-          description: 'Unpaid expenses'
-        });
+        // Expenses (excluding salaries)
+        const expTotal = expenses.reduce((s,e)=>s+Number(e.amount||0),0);
+        if (expTotal > 0) {
+          liabilities.push({
+            category: 'Expenses',
+            amount: expTotal,
+            type: 'current',
+            drillDownData: expenses.map(e => ({ id:e.id, date:e.date, amount:Number(e.amount||0), receiptNumber:e.head || e.description || '', partyName:e.head || '' })),
+            description: 'Expenses excluding salaries'
+          });
+        }
+
+        // Salaries
+        const salTotal = salaryRows.reduce((s,e)=>s+Number(e.netAmount || e.total || 0),0);
+        if (salTotal > 0) {
+          liabilities.push({
+            category: 'Salaries',
+            amount: salTotal,
+            type: 'current',
+            drillDownData: salaryRows.map(s => ({ id:s.id, date:s.date || s.paymentDate, amount:Number(s.netAmount || s.total || 0), receiptNumber:s.employeeName || 'Salary', partyName:s.employeeName || '' })),
+            description: 'Salary payments'
+          });
+        }
+
+        // GST Payable traced from Taxes GSTR-3B cache
+        const gstType = 'regular';
+        const cacheKey = `gstr3b:${appId}:${userId}:${startStr}:${endStr}:${gstType}`;
+        let gstrCache = null;
+        try { const raw = localStorage.getItem(cacheKey); if (raw) gstrCache = JSON.parse(raw); } catch {}
+        let gstPayable = 0;
+        if (gstrCache?.summary) {
+          const out = gstrCache.summary.outward || { cgst:0, sgst:0, igst:0 };
+          const inn = gstrCache.summary.inward || { cgst:0, sgst:0, igst:0 };
+          gstPayable = Math.max(0, (out.cgst - inn.cgst)) + Math.max(0, (out.sgst - inn.sgst)) + Math.max(0, (out.igst - inn.igst));
+        }
+        if (gstPayable > 0) {
+          liabilities.push({
+            category: 'GST Payable',
+            amount: gstPayable,
+            type: 'current',
+            drillDownData: [],
+            description: 'Net GST payable (from Taxes)'
+          });
+        }
+
+        // Pull Net Profit from P&L cache for equity side
+        let netProfit = 0;
+        try {
+          const plKey = `pl:${appId}:${userId}:${startStr}:${endStr}`;
+          const plRaw = localStorage.getItem(plKey);
+          if (plRaw) {
+            const plObj = JSON.parse(plRaw);
+            netProfit = plObj?.totals?.netProfit || 0;
+          }
+        } catch {}
+
+        if (netProfit !== 0) {
+          liabilities.push({
+            category: netProfit >= 0 ? 'Current Profit' : 'Current Loss',
+            amount: Math.abs(netProfit),
+            type: 'equity',
+            drillDownData: [],
+            description: 'From Profit & Loss'
+          });
+        }
 
         setBalanceSheetData({ assets, liabilities });
 
@@ -214,6 +263,11 @@ const BalanceSheetReport = ({ db, userId, appId, dateRange, financialYear, selec
     };
 
     fetchBalanceSheetReport();
+    const onGstrUpdate = () => fetchBalanceSheetReport();
+    const onPlUpdate = () => fetchBalanceSheetReport();
+    window.addEventListener('gstr3b-updated', onGstrUpdate);
+    window.addEventListener('pl-updated', onPlUpdate);
+    return () => { window.removeEventListener('gstr3b-updated', onGstrUpdate); window.removeEventListener('pl-updated', onPlUpdate); };
   }, [db, userId, appId, dateRange, selectedParty]);
 
   // Format currency
