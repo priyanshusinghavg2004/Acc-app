@@ -25,7 +25,6 @@ export const REPORT_CONSTANTS = {
     // GST reports moved to Taxes module
     { value: 'profit-loss', label: 'Profit & Loss Report', icon: '💹' },
     { value: 'balance-sheet', label: 'Balance Sheet Report', icon: '⚖️' },
-    { value: 'trial-balance', label: 'Trial Balance Report', icon: '🔍' },
     { value: 'cash-flow', label: 'Cash Flow / Daybook Report', icon: '💸' }
   ],
 

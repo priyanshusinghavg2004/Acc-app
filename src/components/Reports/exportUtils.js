@@ -297,3 +297,40 @@ export const shareLink = (options) => {
     window.open(shareUrl, '_blank');
   }
 };
+
+// --- Filename helpers ---
+export const formatCompactDate = (dateStr) => {
+  if (!dateStr) return '';
+  try {
+    const d = new Date(dateStr);
+    const day = String(d.getDate());
+    const month = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
+    const year = d.getFullYear();
+    return `${day}${month}${year}`;
+  } catch {
+    return String(dateStr).replace(/[^0-9A-Za-z]/g, '');
+  }
+};
+
+export const computeFinancialYear = (dateStr) => {
+  try {
+    const d = new Date(dateStr);
+    let fyStartYear = d.getFullYear();
+    // Indian FY: Apr (3) to Mar (2)
+    if (d.getMonth() < 3) fyStartYear -= 1;
+    const yy1 = String(fyStartYear).slice(-2);
+    const yy2 = String(fyStartYear + 1).slice(-2);
+    return `${yy1}-${yy2}`;
+  } catch {
+    return '';
+  }
+};
+
+export const buildReportFilename = ({ prefix, companyDetails, dateRange, dateStr, extraParts = [] }) => {
+  const company = (companyDetails?.firmName || '').trim().replace(/\s+/g, '_');
+  const baseDate = dateStr || (dateRange?.end || dateRange?.start) || new Date().toISOString().slice(0,10);
+  const fy = computeFinancialYear(baseDate);
+  const compact = formatCompactDate(baseDate);
+  const parts = [prefix, company, fy, compact, ...extraParts].filter(Boolean);
+  return parts.join('_');
+};

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { collection, doc, onSnapshot, orderBy, query } from 'firebase/firestore';
 import GSTSummaryReport from './Reports/GSTSummaryReport';
 import HsnGstSummaryReport from './Reports/HsnGstSummaryReport';
@@ -11,7 +12,16 @@ function getCurrentFinancialYearRange() {
 }
 
 const Taxes = ({ db, userId, appId, isAuthReady }) => {
-  const [selectedReport, setSelectedReport] = useState('tax-payments');
+  const location = useLocation();
+  const [selectedReport, setSelectedReport] = useState(() => {
+    try {
+      const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+      const tab = params.get('tab');
+      return tab || 'tax-payments';
+    } catch {
+      return 'tax-payments';
+    }
+  });
   const [dateRange, setDateRange] = useState(() => {
     const r = getCurrentFinancialYearRange();
     return { start: new Date(r.start), end: new Date(r.end) };
@@ -21,6 +31,7 @@ const Taxes = ({ db, userId, appId, isAuthReady }) => {
   const [parties, setParties] = useState([]);
   const [loading, setLoading] = useState(false);
   const [companyDetails, setCompanyDetails] = useState(null);
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     if (!isAuthReady || !userId || !appId) return;
@@ -71,6 +82,69 @@ const Taxes = ({ db, userId, appId, isAuthReady }) => {
     if (!exists) setSelectedReport(reportTypes[0].value);
   }, [reportTypes]);
 
+  // Keep tab and basic filters in URL
+  useEffect(() => {
+    if (!hydrated) return;
+    const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+    if (params.get('tab') !== selectedReport) params.set('tab', selectedReport);
+    if (dateRange?.start) params.set('start', new Date(dateRange.start).toISOString().slice(0,10));
+    if (dateRange?.end) params.set('end', new Date(dateRange.end).toISOString().slice(0,10));
+    params.set('fy', String(financialYear));
+    if (selectedParty) params.set('party', selectedParty); else params.delete('party');
+    const base = window.location.hash.split('?')[0] || '#/taxes';
+    const next = `${base}?${params.toString()}`;
+    if (window.location.hash !== next) window.location.hash = next;
+  }, [hydrated, selectedReport, dateRange, financialYear, selectedParty]);
+
+  // Read URL -> state (supports direct links and navigation)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+    const tab = params.get('tab');
+    if (tab && tab !== selectedReport) setSelectedReport(tab);
+    const s = params.get('start');
+    const e = params.get('end');
+    const fy = params.get('fy');
+    const party = params.get('party') || '';
+    if (s && e) {
+      const sd = new Date(s); const ed = new Date(e);
+      if (!isNaN(sd.getTime()) && !isNaN(ed.getTime())) setDateRange({ start: sd, end: ed });
+    }
+    if (fy && !isNaN(parseInt(fy,10))) setFinancialYear(parseInt(fy,10));
+    setSelectedParty(party);
+    if (!hydrated) setHydrated(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Listen for hash changes to update selected tab and filters during active session
+  useEffect(() => {
+    const onHashChange = () => {
+      const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+      const tab = params.get('tab');
+      if (tab && tab !== selectedReport) setSelectedReport(tab);
+      const s = params.get('start');
+      const e = params.get('end');
+      const fy = params.get('fy');
+      const party = params.get('party') || '';
+      if (s && e) {
+        const sd = new Date(s); const ed = new Date(e);
+        if (!isNaN(sd.getTime()) && !isNaN(ed.getTime())) {
+          if (
+            !dateRange ||
+            new Date(dateRange.start).toDateString() !== sd.toDateString() ||
+            new Date(dateRange.end).toDateString() !== ed.toDateString()
+          ) {
+            setDateRange({ start: sd, end: ed });
+          }
+        }
+      }
+      const fyNum = parseInt(fy || '', 10);
+      if (!isNaN(fyNum) && fyNum !== financialYear) setFinancialYear(fyNum);
+      if (party !== selectedParty) setSelectedParty(party);
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, [selectedReport, dateRange, financialYear, selectedParty]);
+
   const commonProps = useMemo(() => ({ db, userId, appId, dateRange, financialYear, selectedParty, parties, loading, setLoading, isAuthReady, companyDetails }), [db, userId, appId, dateRange, financialYear, selectedParty, parties, loading, isAuthReady, companyDetails]);
 
   const renderReport = () => {
@@ -94,7 +168,7 @@ const Taxes = ({ db, userId, appId, isAuthReady }) => {
 
   return (
     <div className="p-6">
-      <div className="bg-white rounded-lg shadow-lg p-6">
+        <div className="bg-white rounded-lg shadow-lg p-6" id="taxes-container">
         {/* Header */}
         <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6">
           <h1 className="text-2xl font-bold text-gray-800 mb-4 lg:mb-0">Taxes Dashboard</h1>

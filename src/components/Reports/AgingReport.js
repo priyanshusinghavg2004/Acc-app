@@ -3,7 +3,8 @@ import { collection, query, getDocs, orderBy } from 'firebase/firestore';
 import { useTableSort, SortableHeader } from '../../utils/tableSort';
 import { useTablePagination } from '../../utils/tablePagination';
 import PaginationControls from '../../utils/PaginationControls';
-import ShareButton from './ShareButton';
+import GlobalExportButtons from '../GlobalExportButtons';
+import { buildReportFilename, exportTableAsImage } from './exportUtils';
 
 const AgingReport = ({ db, userId, appId, dateRange, selectedParty, parties, loading, setLoading }) => {
   const [rows, setRows] = useState([]);
@@ -228,64 +229,29 @@ const AgingReport = ({ db, userId, appId, dateRange, selectedParty, parties, loa
     URL.revokeObjectURL(url);
   };
 
-  const exportPDF = async () => {
-    try {
-      const { default: jsPDF } = await import('jspdf');
-      const { default: autoTable } = await import('jspdf-autotable');
-      const doc = new jsPDF();
-      const pageWidth = doc.internal.pageSize.width;
+  // Prepare export data for GlobalExportButtons
+  const getExportData = () => sortedData.map(r => ({
+    partyName: r.partyName,
+    totalOutstanding: r.totalOutstanding,
+    outstandingCount: r.outstandingCount || 0,
+    ageFromLastPaid: typeof diffDays(r.lastPaidDateParty) === 'number' ? diffDays(r.lastPaidDateParty) : '-',
+    ageFromOldestPending: typeof diffDays(r.pendingRefDate) === 'number' ? diffDays(r.pendingRefDate) : '-'
+  }));
 
-      // Letterhead
-      const formatCurrencyPdf = (amount) => `Rs ${Number(amount || 0).toLocaleString('en-IN')}`;
-      doc.setFontSize(20);
-      doc.setFont(undefined, 'bold');
-      doc.text(companyDetails?.firmName || 'Company Name', pageWidth / 2, 20, { align: 'center' });
-      doc.setFontSize(9);
-      doc.setFont(undefined, 'normal');
-      let y = 30;
-      let line1 = '';
-      if (companyDetails?.address) line1 += companyDetails.address;
-      if (companyDetails?.city && companyDetails?.state) {
-        if (line1) line1 += ', ';
-        line1 += `${companyDetails.city}, ${companyDetails.state} ${companyDetails?.pincode || ''}`;
-      }
-      if (line1) { doc.text(line1, pageWidth / 2, y, { align: 'center' }); y += 5; }
-      let line2 = '';
-      if (companyDetails?.gstin) line2 += `GSTIN: ${companyDetails.gstin}`;
-      if (companyDetails?.contactNumber) { if (line2) line2 += ' | '; line2 += `Phone: ${companyDetails.contactNumber}`; }
-      if (line2) { doc.text(line2, pageWidth / 2, y, { align: 'center' }); y += 5; }
-      y += 8;
-      doc.setFontSize(14);
-      doc.setFont(undefined, 'bold');
-      doc.text('AGING REPORT (SUMMARY)', pageWidth / 2, y, { align: 'center' });
-      y += 8;
-      doc.setFontSize(10);
-      doc.setFont(undefined, 'normal');
-      doc.text(`As on: ${new Date(dateRange.end).toLocaleDateString('en-IN')}`, 14, y);
-      y += 6;
-      doc.text(`Total Outstanding: ${formatCurrencyPdf(totals.totalOutstanding)} | Total Bills: ${rows.reduce((a,b)=>a+(b.outstandingCount||0),0)}`, 14, y);
-      y += 8;
+  const getExportColumns = () => [
+    { key: 'partyName', label: 'Party' },
+    { key: 'totalOutstanding', label: 'Outstanding' },
+    { key: 'outstandingCount', label: '# Outstanding Bills' },
+    { key: 'ageFromLastPaid', label: 'Age From Last Paid' },
+    { key: 'ageFromOldestPending', label: 'Age From Oldest Pending' }
+  ];
 
-      const data = sortedData.map(r => [
-        r.partyName,
-        formatCurrencyPdf(r.totalOutstanding),
-        r.outstandingCount || 0,
-        typeof diffDays(r.lastPaidDateParty) === 'number' ? diffDays(r.lastPaidDateParty) : '-',
-        typeof diffDays(r.pendingRefDate) === 'number' ? diffDays(r.pendingRefDate) : '-'
-      ]);
-      autoTable(doc, {
-        startY: y,
-        head: [['Party', 'Outstanding', '# Outstanding Bills', 'Age From Last Paid', 'Age From Oldest Pending']],
-        body: data,
-        styles: { fontSize: 9 },
-        theme: 'grid'
-      });
-      doc.save(`aging_summary_${new Date().toISOString().slice(0,10)}.pdf`);
-    } catch (e) {
-      console.error('PDF export error:', e);
-      alert('PDF export failed.');
-    }
-  };
+  const getReportDetails = () => ({
+    'As on': new Date(dateRange.end).toLocaleDateString('en-IN'),
+    'Total Outstanding': totals.totalOutstanding,
+    'Total Bills': rows.reduce((a,b)=>a+(b.outstandingCount||0),0),
+    dateRange
+  });
 
   const printReport = () => {
     const w = window.open('', '_blank');
@@ -320,6 +286,39 @@ const AgingReport = ({ db, userId, appId, dateRange, selectedParty, parties, loa
     setTimeout(() => { w.print(); w.close(); }, 300);
   };
 
+  const exportImage = async () => {
+    const filename = buildReportFilename({ prefix: 'AGING', dateRange });
+    const columns = [
+      { key: 'partyName', label: 'Party' },
+      { key: 'totalOutstanding', label: 'Outstanding' },
+      { key: 'outstandingCount', label: '# Outstanding Bills' },
+      { key: 'lastPaidAge', label: 'Age From Last Paid' },
+      { key: 'oldestPendingAge', label: 'Age From Oldest Pending' }
+    ];
+    
+    const data = sortedData.map(r => ({
+      partyName: r.partyName,
+      totalOutstanding: r.totalOutstanding,
+      outstandingCount: r.outstandingCount || 0,
+      lastPaidAge: typeof diffDays(r.lastPaidDateParty) === 'number' ? diffDays(r.lastPaidDateParty) : '-',
+      oldestPendingAge: typeof diffDays(r.pendingRefDate) === 'number' ? diffDays(r.pendingRefDate) : '-'
+    }));
+    
+    await exportTableAsImage({
+      data,
+      columns,
+      filename,
+      companyDetails,
+      reportDetails: {
+        'As on': new Date(dateRange.end).toLocaleDateString('en-IN'),
+        'Total Outstanding': formatCurrency(totals.totalOutstanding),
+        'Total Bills': totalOutstandingBills,
+        'Avg Age From Last Paid': typeof avgAgeFromLastPaid === 'number' ? `${avgAgeFromLastPaid} days` : '—',
+        'Avg Age From Oldest Pending': typeof avgAgeFromOldestPending === 'number' ? `${avgAgeFromOldestPending} days` : '—'
+      }
+    });
+  };
+
   const shareLink = () => {
     const shareData = {
       title: 'Aging Report (Summary)',
@@ -341,12 +340,16 @@ const AgingReport = ({ db, userId, appId, dateRange, selectedParty, parties, loa
           <h2 className="text-xl font-bold text-gray-800 mb-2">Aging Report (Summary)</h2>
           <p className="text-gray-600">As on: {new Date(dateRange.end).toLocaleDateString('en-IN')}</p>
         </div>
-        <div className="flex gap-2">
-          <button onClick={exportPDF} className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md text-sm">📄 Export PDF</button>
-          <button onClick={exportCSV} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm">📊 Export Excel</button>
-          <button onClick={printReport} className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-md text-sm">🖨️ Print</button>
-          <ShareButton onExportPDF={exportPDF} onExportExcel={exportCSV} onShareLink={shareLink} />
-        </div>
+        {/* Global Export/Print/Share Buttons */}
+        <GlobalExportButtons
+          data={getExportData()}
+          columns={getExportColumns()}
+          filename="AGING"
+          title="Aging Report (Summary)"
+          companyDetails={companyDetails}
+          reportDetails={getReportDetails()}
+          disabled={rows.length === 0}
+        />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">

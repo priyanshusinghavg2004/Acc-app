@@ -3,6 +3,7 @@ import { collection, query, where, orderBy, getDocs } from 'firebase/firestore';
 import { useTableSort, SortableHeader } from '../../utils/tableSort';
 import { useTablePagination } from '../../utils/tablePagination';
 import PaginationControls from '../../utils/PaginationControls';
+import GlobalExportButtons from '../GlobalExportButtons';
 
 const BalanceSheetReport = ({ db, userId, appId, dateRange, financialYear, selectedParty, parties, loading, setLoading }) => {
   const [balanceSheetData, setBalanceSheetData] = useState({ assets: [], liabilities: [] });
@@ -78,6 +79,13 @@ const BalanceSheetReport = ({ db, userId, appId, dateRange, financialYear, selec
         const salariesSnap = await getDocs(collection(db, `artifacts/${appId}/users/${userId}/salaryPayments`));
         const salaryRows = salariesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(s => {
           const dt = new Date(s.date || s.paymentDate);
+          return (!dateRange?.start || dt >= new Date(dateRange.start)) && (!dateRange?.end || dt <= new Date(dateRange.end));
+        });
+
+        // Irregular labour/freelancer payments
+        const irregularSnap = await getDocs(collection(db, `artifacts/${appId}/users/${userId}/irregularPayments`));
+        const irregularRows = irregularSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(r => {
+          const dt = new Date(r.date);
           return (!dateRange?.start || dt >= new Date(dateRange.start)) && (!dateRange?.end || dt <= new Date(dateRange.end));
         });
 
@@ -197,6 +205,18 @@ const BalanceSheetReport = ({ db, userId, appId, dateRange, financialYear, selec
             type: 'current',
             drillDownData: salaryRows.map(s => ({ id:s.id, date:s.date || s.paymentDate, amount:Number(s.netAmount || s.total || 0), receiptNumber:s.employeeName || 'Salary', partyName:s.employeeName || '' })),
             description: 'Salary payments'
+          });
+        }
+
+        // Labour/Advances (Irregular payments)
+        const irrTotal = irregularRows.reduce((s,e)=>s+Number(e.amount || 0),0);
+        if (irrTotal > 0) {
+          liabilities.push({
+            category: 'Labour/Advances',
+            amount: irrTotal,
+            type: 'current',
+            drillDownData: irregularRows.map(r => ({ id:r.id, date:r.date, amount:Number(r.amount||0), receiptNumber:r.paymentType || 'Irregular', partyName: r.personType==='Employee' ? (r.employeeName||'Employee') : (r.personName||r.personType||'') })),
+            description: 'Irregular labour/freelancer payments (advance, bonus, incentive)'
           });
         }
 
@@ -372,15 +392,52 @@ const BalanceSheetReport = ({ db, userId, appId, dateRange, financialYear, selec
   const displayAssets = balanceSheetData.assets.length > 0 ? balanceSheetData.assets : sampleAssets;
   const displayLiabilities = balanceSheetData.liabilities.length > 0 ? balanceSheetData.liabilities : sampleLiabilities;
 
+    // Prepare export data for GlobalExportButtons
+  const getExportData = () => {
+    // Combine assets and liabilities for export
+    return [
+      ...displayAssets.map(asset => ({ category: `ASSET: ${asset.category}`, amount: asset.amount })),
+      ...displayLiabilities.map(liability => ({ category: `LIABILITY: ${liability.category}`, amount: liability.amount }))
+    ];
+  };
+
+  const getExportColumns = () => [
+    { key: 'category', label: 'Category' },
+    { key: 'amount', label: 'Amount (INR)' }
+  ];
+
+  const getReportDetails = () => ({
+    'As on': formatDate(dateRange.end),
+    'Total Assets': totalSummary.totalAssets,
+    'Total Liabilities': totalSummary.totalLiabilities,
+    'Net Worth': totalSummary.netWorth,
+    dateRange
+  });
+
   return (
     <div className="p-6">
       {/* Report Header */}
       <div className="mb-6">
-        <h2 className="text-xl font-bold text-gray-800 mb-2">Balance Sheet Report</h2>
-        <p className="text-gray-600">
-          As on: {formatDate(dateRange.end)}
-          {selectedParty && ` | Party: ${parties.find(p => p.id === selectedParty)?.partyName || selectedParty}`}
-        </p>
+        <div className="flex justify-between items-start">
+          <div>
+            <h2 className="text-xl font-bold text-gray-800 mb-2">Balance Sheet Report</h2>
+            <p className="text-gray-600">
+              As on: {formatDate(dateRange.end)}
+              {selectedParty && ` | Party: ${parties.find(p => p.id === selectedParty)?.partyName || selectedParty}`}
+            </p>
+          </div>
+          
+          {/* Global Export/Print/Share Buttons */}
+          <GlobalExportButtons
+            data={getExportData()}
+            columns={getExportColumns()}
+            filename="BALANCE_SHEET"
+            title="Balance Sheet Report"
+            companyDetails={null}
+            reportDetails={getReportDetails()}
+            disabled={displayAssets.length === 0 && displayLiabilities.length === 0}
+          />
+        </div>
       </div>
 
       {/* Summary Cards */}

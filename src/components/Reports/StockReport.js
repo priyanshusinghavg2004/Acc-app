@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, where, orderBy, getDocs } from 'firebase/firestore';
 import { formatCurrency } from './CommonComponents';
+import GlobalExportButtons from '../GlobalExportButtons';
 
-const StockReport = ({ db, userId, appId, dateRange, setLoading }) => {
+const StockReport = ({ db, userId, appId, dateRange, setLoading, companyDetails }) => {
   const [stockData, setStockData] = useState([]);
   const [totalSummary, setTotalSummary] = useState({
     totalItems: 0,
@@ -168,13 +169,141 @@ const StockReport = ({ db, userId, appId, dateRange, setLoading }) => {
     { key: 'status', label: 'Status' }
   ];
 
+  // Prepare export data for GlobalExportButtons
+  const getExportData = () => stockData;
+
+  const getExportColumns = () => [
+    { key: 'itemName', label: 'Item Name' },
+    { key: 'openingStock', label: 'Opening Stock' },
+    { key: 'purchased', label: 'Purchased' },
+    { key: 'sold', label: 'Sold' },
+    { key: 'inHand', label: 'In Hand' },
+    { key: 'reorderLevel', label: 'Reorder Level' },
+    { key: 'status', label: 'Status' }
+  ];
+
+  const getReportDetails = () => ({
+    'Period': `${new Date(dateRange.start).toLocaleDateString('en-IN')} to ${new Date(dateRange.end).toLocaleDateString('en-IN')}`,
+    'Total Items': totalSummary.totalItems,
+    'Total Value': totalSummary.totalValue,
+    'Negative Stock': totalSummary.negativeStock,
+    'Low Stock': totalSummary.lowStock,
+    dateRange
+  });
+
+
+
+  const printReport = () => {
+    const printWindow = window.open('', '_blank');
+    
+    const printContent = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Stock Report</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            .letterhead { text-align: center; margin-bottom: 30px; border-bottom: 2px solid #333; padding-bottom: 20px; }
+            .company-name { font-size: 24px; font-weight: bold; margin-bottom: 10px; }
+            .company-details { font-size: 12px; color: #666; }
+            .report-title { font-size: 20px; font-weight: bold; text-align: center; margin: 20px 0; }
+            .report-details { margin: 20px 0; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 12px; }
+            th { background-color: #f2f2f2; font-weight: bold; }
+            .text-green-600 { color: #059669; }
+            .text-red-600 { color: #dc2626; }
+            .bg-gray-50 { background-color: #f9fafb; }
+            .font-bold { font-weight: bold; }
+            @media print { body { margin: 0; } }
+          </style>
+        </head>
+        <body>
+          <div class="letterhead">
+            <div class="company-name">${companyDetails?.firmName || 'Company Name'}</div>
+            <div class="company-details">
+              ${companyDetails?.address ? `<div>${companyDetails.address}</div>` : ''}
+              ${companyDetails?.city && companyDetails?.state ? `<div>${companyDetails.city}, ${companyDetails.state} ${companyDetails?.pincode || ''}</div>` : ''}
+              ${companyDetails?.gstin ? `<div>GSTIN: ${companyDetails.gstin}</div>` : ''}
+              ${companyDetails?.contactNumber ? `<div>Phone: ${companyDetails.contactNumber}</div>` : ''}
+              ${companyDetails?.email ? `<div>Email: ${companyDetails.email}</div>` : ''}
+            </div>
+          </div>
+          
+          <div class="report-title">STOCK REPORT</div>
+          
+          <div class="report-details">
+            <div><strong>Period:</strong> ${new Date(dateRange.start).toLocaleDateString('en-IN')} to ${new Date(dateRange.end).toLocaleDateString('en-IN')}</div>
+            <div><strong>Total Items:</strong> ${totalSummary.totalItems}</div>
+            <div><strong>Total Value:</strong> ${formatCurrency(totalSummary.totalValue)}</div>
+            <div><strong>Negative Stock:</strong> ${totalSummary.negativeStock}</div>
+            <div><strong>Low Stock:</strong> ${totalSummary.lowStock}</div>
+          </div>
+          
+          <table>
+            <thead>
+              <tr>
+                <th>Item Name</th>
+                <th>Opening Stock</th>
+                <th>Purchased</th>
+                <th>Sold</th>
+                <th>In Hand</th>
+                <th>Reorder Level</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${stockData.map(row => `
+                <tr>
+                  <td>${row.itemName || ''}</td>
+                  <td>${row.openingStock || 0}</td>
+                  <td>${row.purchased || 0}</td>
+                  <td>${row.sold || 0}</td>
+                  <td class="${row.inHand < 0 ? 'text-red-600' : row.inHand > 0 ? 'text-green-600' : ''}">${row.inHand || 0}</td>
+                  <td>${row.reorderLevel || 0}</td>
+                  <td>
+                    <span class="${row.status === 'Normal' ? 'text-green-600' : row.status === 'Low Stock' ? 'text-yellow-600' : 'text-red-600'}">
+                      ${row.status || ''}
+                    </span>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </body>
+      </html>
+    `;
+    
+    printWindow.document.write(printContent);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+    printWindow.close();
+  };
+
+
+
   return (
     <div className="p-6">
       <div className="mb-6">
-        <h2 className="text-xl font-bold text-gray-800 mb-2">Stock Report (Auto Calculated)</h2>
-        <p className="text-gray-600">
-          Period: {new Date(dateRange.start).toLocaleDateString('en-IN')} to {new Date(dateRange.end).toLocaleDateString('en-IN')}
-        </p>
+        <div className="flex justify-between items-start">
+          <div>
+            <h2 className="text-xl font-bold text-gray-800 mb-2">Stock Report (Auto Calculated)</h2>
+            <p className="text-gray-600">
+              Period: {new Date(dateRange.start).toLocaleDateString('en-IN')} to {new Date(dateRange.end).toLocaleDateString('en-IN')}
+            </p>
+          </div>
+          {/* Global Export/Print/Share Buttons */}
+          <GlobalExportButtons
+            data={getExportData()}
+            columns={getExportColumns()}
+            filename="STOCK"
+            title="Stock Report"
+            companyDetails={companyDetails}
+            reportDetails={getReportDetails()}
+            disabled={stockData.length === 0}
+          />
+        </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <div className="bg-blue-50 p-4 rounded-lg">
@@ -225,6 +354,11 @@ const StockReport = ({ db, userId, appId, dateRange, setLoading }) => {
         </table>
       </div>
       
+      {/* Totals */}
+      <div className="mt-3 text-sm text-gray-700">
+        <div><strong>Total Items:</strong> {totalSummary.totalItems}</div>
+        <div><strong>Total Value:</strong> {formatCurrency(totalSummary.totalValue)}</div>
+      </div>
       {/* Quick Summary Modal */}
       {showQuickSummary && quickSummaryItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import { doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { getAuth } from 'firebase/auth';
@@ -24,6 +25,7 @@ const stateCodeMap = {
 };
 
 const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId, onOpenWizard }) => {
+    const location = useLocation();
     const [firmName, setFirmName] = useState('');
     const [gstin, setGstin] = useState('');
     const [address, setAddress] = useState('');
@@ -44,6 +46,10 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId, onOpe
     const [signUrl, setSignUrl] = useState('');
     const [sealUrl, setSealUrl] = useState('');
     const [message, setMessage] = useState('');
+    const [section, setSection] = useState(() => {
+        const p = new URLSearchParams(location.search).get('section');
+        return p || 'profile';
+    });
     const [logoPreview, setLogoPreview] = useState('');
     const [signPreview, setSignPreview] = useState('');
     const [sealPreview, setSealPreview] = useState('');
@@ -115,6 +121,15 @@ const CompanyDetails = ({ db, userId, isAuthReady, setActiveModule, appId, onOpe
             return () => unsubscribe();
         }
     }, [db, userId, isAuthReady, appId]);
+
+    // Sync section and optional wizard trigger to URL
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+        if (params.get('section') !== section) params.set('section', section);
+        const base = window.location.hash.split('?')[0] || '#/company';
+        const next = `${base}?${params.toString()}`;
+        if (window.location.hash !== next) window.location.hash = next;
+    }, [section]);
 
     useEffect(() => {
         prevGstinType.current = gstinType;

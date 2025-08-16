@@ -46,6 +46,15 @@ const Dashboard = ({ db, userId, isAuthReady, appId }) => {
 
     const [receivableList, setReceivableList] = useState([]);
     const [payableList, setPayableList] = useState([]);
+  // Privacy: collapse toggles for outstanding tables
+  const [hideReceivable, setHideReceivable] = useState(() => {
+    try { return localStorage.getItem('dash_hide_receivable') === 'true'; } catch (_) { return false; }
+  });
+  const [hidePayable, setHidePayable] = useState(() => {
+    try { return localStorage.getItem('dash_hide_payable') === 'true'; } catch (_) { return false; }
+  });
+  useEffect(() => { try { localStorage.setItem('dash_hide_receivable', String(hideReceivable)); } catch (_) {} }, [hideReceivable]);
+  useEffect(() => { try { localStorage.setItem('dash_hide_payable', String(hidePayable)); } catch (_) {} }, [hidePayable]);
 
     // Load todos from Firebase
     useEffect(() => {
@@ -652,17 +661,18 @@ useEffect(() => {
             <div className="p-4 sm:p-6">
                 {/* Header */}
                 <div className="mb-6 sm:mb-8">
-                    <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 mb-2">Dashboard</h1>
+                    <h1 id="dashboard-title" className="text-2xl sm:text-3xl font-bold text-gray-800 mb-2">Dashboard</h1>
                     <p className="text-sm sm:text-base text-gray-600">Welcome back! Here's your business overview.</p>
                 </div>
 
                 {/* Quick Action Buttons */}
-                <div className="mb-6 sm:mb-8">
+                <div className="mb-6 sm:mb-8" id="quick-actions">
                     <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 border border-gray-100 quick-actions-section">
                         <h2 className="text-lg sm:text-xl font-semibold text-gray-800 mb-4">Quick Actions</h2>
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-4 sm:mb-6">
                             <Link 
                                 to="/sales"
+                                id="qa-sales"
                                 className="flex items-center justify-center p-4 sm:p-6 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg hover:from-green-600 hover:to-green-700 transition-all duration-200 transform hover:scale-105 shadow-lg min-h-[120px] sm:min-h-[140px]"
                             >
                                 <div className="text-center">
@@ -678,6 +688,7 @@ useEffect(() => {
                             
                             <Link 
                                 to="/purchases"
+                                id="qa-purchases"
                                 className="flex items-center justify-center p-4 sm:p-6 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg hover:from-blue-600 hover:to-blue-700 transition-all duration-200 transform hover:scale-105 shadow-lg min-h-[120px] sm:min-h-[140px]"
                             >
                                 <div className="text-center">
@@ -693,6 +704,7 @@ useEffect(() => {
 
                             <Link 
                                 to="/payments"
+                                id="qa-payments"
                                 className="flex items-center justify-center p-4 sm:p-6 bg-gradient-to-r from-purple-500 to-purple-600 text-white rounded-lg hover:from-purple-600 hover:to-purple-700 transition-all duration-200 transform hover:scale-105 shadow-lg min-h-[120px] sm:min-h-[140px]"
                             >
                                 <div className="text-center">
@@ -708,6 +720,7 @@ useEffect(() => {
 
                             <Link 
                                 to="/parties"
+                                id="qa-parties"
                                 className="flex items-center justify-center p-4 sm:p-6 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-lg hover:from-orange-600 hover:to-orange-700 transition-all duration-200 transform hover:scale-105 shadow-lg min-h-[120px] sm:min-h-[140px]"
                             >
                                 <div className="text-center">
@@ -723,9 +736,10 @@ useEffect(() => {
                         </div>
                         
                         {/* Secondary Quick Actions */}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
                             <Link 
                                 to="/items"
+                                id="qa-items"
                                 className="flex items-center justify-center p-3 sm:p-4 bg-gradient-to-r from-teal-500 to-teal-600 text-white rounded-lg hover:from-teal-600 hover:to-teal-700 transition-all duration-200 transform hover:scale-105 shadow-lg min-h-[100px] sm:min-h-[120px]"
                             >
                                 <div className="text-center">
@@ -740,23 +754,24 @@ useEffect(() => {
                             </Link>
 
                             <Link 
-                                to="/manufacturing"
-                                className="flex items-center justify-center p-3 sm:p-4 bg-gradient-to-r from-indigo-500 to-indigo-600 text-white rounded-lg hover:from-indigo-600 hover:to-indigo-700 transition-all duration-200 transform hover:scale-105 shadow-lg min-h-[100px] sm:min-h-[120px]"
+                                to="/expenses"
+                                id="qa-expenses"
+                                className="flex items-center justify-center p-3 sm:p-4 bg-gradient-to-r from-red-500 to-red-600 text-white rounded-lg hover:from-red-600 hover:to-red-700 transition-all duration-200 transform hover:scale-105 shadow-lg min-h-[100px] sm:min-h-[120px]"
                             >
                                 <div className="text-center">
                                     <div className="mb-2">
                                         <svg className="w-6 h-6 sm:w-8 sm:h-8 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2m7-5H7" />
                                         </svg>
                                     </div>
-                                    <h3 className="text-xs sm:text-sm font-bold mb-1">Manufacturing</h3>
-                                    <p className="text-indigo-100 text-xs">Production management</p>
+                                    <h3 className="text-xs sm:text-sm font-bold mb-1">Expenses</h3>
+                                    <p className="text-red-100 text-xs">Record daily expenses</p>
                                 </div>
                             </Link>
 
                             <Link 
                                 to="/reports"
+                                id="qa-reports"
                                 className="flex items-center justify-center p-3 sm:p-4 bg-gradient-to-r from-pink-500 to-pink-600 text-white rounded-lg hover:from-pink-600 hover:to-pink-700 transition-all duration-200 transform hover:scale-105 shadow-lg min-h-[100px] sm:min-h-[120px]"
                             >
                                 <div className="text-center">
@@ -769,8 +784,151 @@ useEffect(() => {
                                     <p className="text-pink-100 text-xs">Business analytics</p>
                                 </div>
                             </Link>
+
+                            <Link 
+                                to="/taxes"
+                                id="qa-taxes"
+                                className="flex items-center justify-center p-3 sm:p-4 bg-gradient-to-r from-yellow-500 to-yellow-600 text-white rounded-lg hover:from-yellow-600 hover:to-yellow-700 transition-all duration-200 transform hover:scale-105 shadow-lg min-h-[100px] sm:min-h-[120px]"
+                            >
+                                <div className="text-center">
+                                    <div className="mb-2">
+                                        <svg className="w-6 h-6 sm:w-8 sm:h-8 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6M9 16h6M7 4h10a2 2 0 012 2v12a2 2 0 01-2 2H7a2 2 0 01-2-2V6a2 2 0 012-2z" />
+                                        </svg>
+                                    </div>
+                                    <h3 className="text-xs sm:text-sm font-bold mb-1">Taxes</h3>
+                                    <p className="text-yellow-100 text-xs">View and manage taxes</p>
+                                </div>
+                            </Link>
                         </div>
                     </div>
+                </div>
+
+                {/* Your To Do List (moved under Quick Actions) */}
+                <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-100 mb-6 sm:mb-8">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold text-gray-800 todo-list-section">Your To Do List</h3>
+                    <button
+                      onClick={() => setShowAddTodo(!showAddTodo)}
+                      className="bg-blue-600 text-white px-3 py-1 rounded-lg text-sm hover:bg-blue-700 transition-colors"
+                    >
+                      {showAddTodo ? 'Cancel' : '+ Add Item'}
+                    </button>
+                  </div>
+
+                  {showAddTodo && (
+                    <div className="mb-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                      <div className="space-y-3">
+                        <input
+                          type="text"
+                          value={newTodoText}
+                          onChange={(e) => setNewTodoText(e.target.value)}
+                          placeholder="What do you want to get done?"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          onKeyPress={(e) => e.key === 'Enter' && addTodo()}
+                        />
+                        <div className="flex gap-3">
+                          <select
+                            value={newTodoPriority}
+                            onChange={(e) => setNewTodoPriority(e.target.value)}
+                            className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          >
+                            <option value="high">High Priority</option>
+                            <option value="medium">Medium Priority</option>
+                            <option value="low">Low Priority</option>
+                          </select>
+                          <select
+                            value={newTodoCategory}
+                            onChange={(e) => setNewTodoCategory(e.target.value)}
+                            className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          >
+                            <option value="personal">Personal</option>
+                            <option value="meeting">Meeting</option>
+                            <option value="urgent">Urgent Work</option>
+                            <option value="followup">Follow Up</option>
+                            <option value="business">Business</option>
+                            <option value="reminder">Reminder</option>
+                            <option value="project">Project</option>
+                            <option value="other">Other</option>
+                          </select>
+                          <button
+                            onClick={addTodo}
+                            className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors"
+                          >
+                            Add
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mb-4">
+                    <select
+                      value={filterCategory}
+                      onChange={(e) => setFilterCategory(e.target.value)}
+                      className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    >
+                      <option value="all">All Categories</option>
+                      <option value="personal">Personal</option>
+                      <option value="meeting">Meeting</option>
+                      <option value="urgent">Urgent Work</option>
+                      <option value="followup">Follow Up</option>
+                      <option value="business">Business</option>
+                      <option value="reminder">Reminder</option>
+                      <option value="project">Project</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+
+                  <div className="mb-4 p-3 bg-blue-50 rounded-lg">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-blue-800">Completed: {todos.filter(t => t.completed).length} / {todos.length}</span>
+                      <span className="text-blue-800">{Math.round((todos.filter(t => t.completed).length / (todos.length || 1)) * 100)}% Complete</span>
+                    </div>
+                    <div className="w-full bg-blue-200 rounded-full h-2 mt-2">
+                      <div
+                        className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                        style={{ width: `${(todos.filter(t => t.completed).length / (todos.length || 1)) * 100}%` }}
+                      ></div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 max-h-96 overflow-y-auto">
+                    {filteredTodos.map((todo) => (
+                      <div key={todo.id} className="flex items-center space-x-3 p-3 rounded-lg border border-gray-100 hover:bg-gray-50">
+                        <input
+                          type="checkbox"
+                          checked={todo.completed}
+                          onChange={() => toggleTodo(todo.id)}
+                          className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                        />
+                        <span className={`flex-1 ${todo.completed ? 'line-through text-gray-500' : 'text-gray-800'}`}>
+                          {todo.text}
+                        </span>
+                        <div className="flex items-center space-x-2">
+                          <span className={`px-2 py-1 text-xs font-medium rounded-full ${getCategoryColor(todo.category)}`}>
+                            {getCategoryLabel(todo.category)}
+                          </span>
+                          <span className={`px-2 py-1 text-xs font-medium rounded-full ${getPriorityColor(todo.priority)}`}>
+                            {todo.priority}
+                          </span>
+                          <button
+                            onClick={() => removeTodo(todo.id)}
+                            className="text-red-500 hover:text-red-700 text-sm"
+                            title="Remove item"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {filteredTodos.length === 0 && (
+                    <div className="text-center py-8 text-gray-500">
+                      {filterCategory === 'all' ? 'No todo items found.' : `No items in ${getCategoryLabel(filterCategory)} category.`}
+                    </div>
+                  )}
                 </div>
 
             {message && (
@@ -779,8 +937,23 @@ useEffect(() => {
                 </div>
             )}
 
-                {/* Stats Cards */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-6 sm:mb-8">
+                {/* Stats Cards with privacy toggle */}
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-base font-semibold text-gray-800">Quick Summary</h3>
+                  <button
+                    id="quick-summary-toggle"
+                    onClick={() => {
+                      const next = document.getElementById('dash-stats-cards')?.style?.display === 'none' ? 'block' : 'none';
+                      const el = document.getElementById('dash-stats-cards');
+                      if (el) el.style.display = next;
+                      try { localStorage.setItem('dash_hide_stats', String(next === 'none')); } catch (_) {}
+                    }}
+                    className="px-3 py-1 text-sm rounded border border-gray-300 hover:bg-gray-50"
+                  >
+                    {(() => { try { return localStorage.getItem('dash_hide_stats') === 'true' ? 'Show' : 'Hide'; } catch (_) { return 'Hide'; } })()}
+                  </button>
+                </div>
+                <div id="dash-stats-cards" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-6 sm:mb-8" style={{ display: (typeof window !== 'undefined' && localStorage.getItem('dash_hide_stats') === 'true') ? 'none' : 'grid' }}>
                     <div className="bg-white rounded-xl shadow-lg p-4 sm:p-6 border border-gray-100">
                         <div className="flex items-center justify-between">
                             <div>
@@ -843,19 +1016,29 @@ useEffect(() => {
                 {/* Charts Section */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
                     {/* Outstanding Receivable */}
-                    <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-100">
+                    <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-100" id="outstanding-receivable-section">
                         <div className="flex justify-between items-center mb-4">
                             <h3 className="text-lg font-semibold text-gray-800">Outstanding Receivable</h3>
-                            <Link 
+                            <div className="flex items-center gap-2">
+                              <button
+                                id="outstanding-receivable-toggle"
+                                onClick={() => setHideReceivable(v => !v)}
+                                className="px-3 py-1 text-sm rounded border border-gray-300 hover:bg-gray-50"
+                              >
+                                {hideReceivable ? 'Show' : 'Hide'}
+                              </button>
+                              <Link 
                                 to="/payments?tab=invoice" 
                                 className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors duration-200 flex items-center space-x-2"
-                            >
+                              >
                                 <span>View More</span>
                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                                 </svg>
-                            </Link>
+                              </Link>
+                            </div>
                         </div>
+                        <div style={{ display: hideReceivable ? 'none' : 'block' }}>
                         <table className="min-w-full bg-white rounded-lg shadow border">
                             <thead>
                                 <tr>
@@ -874,21 +1057,32 @@ useEffect(() => {
                                 ))}
                             </tbody>
                         </table>
+                        </div>
                     </div>
                     {/* Outstanding Payable */}
-                    <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-100">
+                    <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-100" id="outstanding-payable-section">
                         <div className="flex justify-between items-center mb-4">
                             <h3 className="text-lg font-semibold text-gray-800">Outstanding Payable</h3>
-                            <Link 
+                            <div className="flex items-center gap-2">
+                              <button
+                                id="outstanding-payable-toggle"
+                                onClick={() => setHidePayable(v => !v)}
+                                className="px-3 py-1 text-sm rounded border border-gray-300 hover:bg-gray-50"
+                              >
+                                {hidePayable ? 'Show' : 'Hide'}
+                              </button>
+                              <Link 
                                 to="/payments?tab=purchase" 
                                 className="px-4 py-2 bg-orange-600 text-white text-sm font-medium rounded-lg hover:bg-orange-700 transition-colors duration-200 flex items-center space-x-2"
-                            >
+                              >
                                 <span>View More</span>
                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                                 </svg>
-                            </Link>
+                              </Link>
+                            </div>
                         </div>
+                        <div style={{ display: hidePayable ? 'none' : 'block' }}>
                         <table className="min-w-full bg-white rounded-lg shadow border">
                             <thead>
                                 <tr>
@@ -907,263 +1101,46 @@ useEffect(() => {
                                 ))}
                             </tbody>
                         </table>
+                        </div>
                     </div>
                 </div>
 
-                {/* Additional Info and Todo Section */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                    {/* Company Info */}
-                    <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-100">
-                        <h3 className="text-lg font-semibold text-gray-800 mb-4">Company Information</h3>
-                        
-                        {/* Company Logo and Basic Info */}
-                        <div className="flex items-center space-x-4 mb-6 p-4 bg-gray-50 rounded-lg">
-                            <div className="flex-shrink-0">
-                                {companyDetails.logoUrl ? (
-                                    <img 
-                                        src={companyDetails.logoUrl} 
-                                        alt="Company Logo" 
-                                        className="w-16 h-16 rounded-lg object-cover border-2 border-gray-200"
-                                    />
-                                ) : (
-                                    <div className="w-16 h-16 bg-blue-100 rounded-lg flex items-center justify-center border-2 border-gray-200">
-                                        <span className="text-2xl font-bold text-blue-600">
-                                            {companyDetails.firmName ? companyDetails.firmName[0].toUpperCase() : 'A'}
-                                        </span>
-                                    </div>
-                                )}
-                            </div>
-                            <div className="flex-1">
-                                <h4 className="text-lg font-semibold text-gray-900">
-                                    {companyDetails.firmName || 'Company Name Not Set'}
-                                </h4>
-                                <p className="text-sm text-gray-600">
-                                    {companyDetails.gstinType || 'Business Type Not Set'}
-                                </p>
-                            </div>
-                        </div>
+                {/* Company Information (full-width, centered, compact) */}
+                <div className="bg-white rounded-lg shadow p-4 border border-gray-100 mb-6" id="company-info">
+                  <div className="flex flex-col items-center text-center gap-1">
+                    {companyDetails.logoUrl ? (
+                      <img src={companyDetails.logoUrl} alt="Company Logo" className="w-12 h-12 rounded object-cover border border-gray-200" />
+                    ) : (
+                      <div className="w-12 h-12 bg-gray-100 rounded flex items-center justify-center border border-gray-200">
+                        <span className="text-lg font-bold text-gray-600">{companyDetails.firmName ? companyDetails.firmName[0].toUpperCase() : 'A'}</span>
+                      </div>
+                    )}
+                    <div className="text-base font-semibold text-gray-900">{companyDetails.firmName || 'Company Name Not Set'}</div>
+                    <div className="text-xs text-gray-500">{companyDetails.gstinType || 'Business Type Not Set'}</div>
+                  </div>
 
-                        {/* Company Details Grid */}
-                        <div className="space-y-4 mb-6">
-                            {/* Company ID Row */}
-                            {companyInfo && (
-                                <div className="flex flex-col space-y-2 p-3 bg-indigo-50 rounded-lg">
-                                    <span className="text-xs font-medium text-indigo-600 uppercase tracking-wide">Company ID</span>
-                                    <div className="flex items-center space-x-2">
-                                        <span className="text-sm font-semibold text-gray-800 font-mono">
-                                            {companyInfo.companyId}
-                                        </span>
-                                        <span className="px-2 py-1 text-xs font-medium bg-indigo-100 text-indigo-800 rounded-full">
-                                            {userInfo?.companyRole === 'owner' ? 'Owner' : userInfo?.companyRole || 'Member'}
-                                        </span>
-                                    </div>
-                                    <span className="text-xs text-gray-500">
-                                        {getCompanyTypeLabel(companyInfo.companyType, companyInfo.companyTypeOther)}
-                                    </span>
-                                </div>
-                            )}
-                            
-                            {/* First Row - GSTIN and Contact */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div className="flex flex-col space-y-2 p-3 bg-blue-50 rounded-lg">
-                                    <span className="text-xs font-medium text-blue-600 uppercase tracking-wide">GSTIN</span>
-                                    <span className="text-sm font-semibold text-gray-800">
-                                        {companyDetails.gstin || 'Not set'}
-                                    </span>
-                                </div>
-                                
-                                <div className="flex flex-col space-y-2 p-3 bg-green-50 rounded-lg">
-                                    <span className="text-xs font-medium text-green-600 uppercase tracking-wide">Contact</span>
-                                    <span className="text-sm font-semibold text-gray-800">
-                                        {companyDetails.contactNumber || 'Not set'}
-                                    </span>
-                                </div>
-                            </div>
-                            
-                            {/* Second Row - Email (Full Width) */}
-                            <div className="flex flex-col space-y-2 p-3 bg-purple-50 rounded-lg">
-                                <span className="text-xs font-medium text-purple-600 uppercase tracking-wide">Email</span>
-                                <span className="text-sm font-semibold text-gray-800">
-                                    {companyDetails.email || 'Not set'}
-                                </span>
-                            </div>
-                            
-                            {/* Third Row - Address (Full Width) */}
-                            <div className="flex flex-col space-y-2 p-3 bg-orange-50 rounded-lg">
-                                <span className="text-xs font-medium text-orange-600 uppercase tracking-wide">Address</span>
-                                <span className="text-sm font-semibold text-gray-800 break-words leading-relaxed">
-                                    {companyDetails.address ? 
-                                        `${companyDetails.address}${companyDetails.city ? `, ${companyDetails.city}` : ''}${companyDetails.state ? `, ${companyDetails.state}` : ''}${companyDetails.pincode ? ` - ${companyDetails.pincode}` : ''}` 
-                                        : 'Not set'
-                                    }
-                                </span>
-                            </div>
-                        </div>
+                  <div className="mt-3 text-sm text-gray-800 flex flex-wrap items-center justify-center gap-x-6 gap-y-1">
+                    {companyInfo && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] uppercase text-gray-500">Company ID</span>
+                        <span className="font-mono break-all">{companyInfo.companyId}</span>
+                      </div>
+                    )}
+                    <div><span className="text-[10px] uppercase text-gray-500 mr-1">GSTIN</span>{companyDetails.gstin || '—'}</div>
+                    <div><span className="text-[10px] uppercase text-gray-500 mr-1">Contact</span>{companyDetails.contactNumber || '—'}</div>
+                    <div><span className="text-[10px] uppercase text-gray-500 mr-1">Email</span>{companyDetails.email || '—'}</div>
+                  </div>
 
-                        {/* Business Statistics */}
-                        <div className="border-t border-gray-200 pt-4">
-                            <h5 className="text-sm font-medium text-gray-700 mb-3">Business Statistics</h5>
-                            <div className="flex flex-wrap gap-3">
-                                <div className="flex items-center space-x-2 px-3 py-2 bg-blue-100 rounded-full">
-                                    <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
-                                    <span className="text-sm font-medium text-blue-800">
-                                        {totalCustomers} Customers
-                                    </span>
-                                </div>
-                                <div className="flex items-center space-x-2 px-3 py-2 bg-green-100 rounded-full">
-                                    <span className="w-2 h-2 bg-green-500 rounded-full"></span>
-                                    <span className="text-sm font-medium text-green-800">
-                                        {totalSuppliers} Suppliers
-                                    </span>
-                                </div>
-                                <div className="flex items-center space-x-2 px-3 py-2 bg-purple-100 rounded-full">
-                                    <span className="w-2 h-2 bg-purple-500 rounded-full"></span>
-                                    <span className="text-sm font-medium text-purple-800">
-                                        {totalItems} Items
-                                    </span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+                  <div className="mt-2 text-sm text-center text-gray-800">
+                    <span className="text-[10px] uppercase text-gray-500 mr-1">Address</span>
+                    {companyDetails.address ? `${companyDetails.address}${companyDetails.city ? `, ${companyDetails.city}` : ''}${companyDetails.state ? `, ${companyDetails.state}` : ''}${companyDetails.pincode ? ` - ${companyDetails.pincode}` : ''}` : '—'}
+                  </div>
 
-                    {/* Todo List */}
-                    <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-100 lg:col-span-2">
-                        <div className="flex items-center justify-between mb-4">
-                            <h3 className="text-lg font-semibold text-gray-800">To Do List</h3>
-                            <button
-                                onClick={() => setShowAddTodo(!showAddTodo)}
-                                className="bg-blue-600 text-white px-3 py-1 rounded-lg text-sm hover:bg-blue-700 transition-colors"
-                            >
-                                {showAddTodo ? 'Cancel' : '+ Add Item'}
-                            </button>
-                        </div>
-
-                        {/* Add New Todo Form */}
-                        {showAddTodo && (
-                            <div className="mb-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
-                                <div className="space-y-3">
-                                    <input
-                                        type="text"
-                                        value={newTodoText}
-                                        onChange={(e) => setNewTodoText(e.target.value)}
-                                        placeholder="Enter new todo item..."
-                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                        onKeyPress={(e) => e.key === 'Enter' && addTodo()}
-                                    />
-                                    <div className="flex gap-3">
-                                        <select
-                                            value={newTodoPriority}
-                                            onChange={(e) => setNewTodoPriority(e.target.value)}
-                                            className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                        >
-                                            <option value="high">High Priority</option>
-                                            <option value="medium">Medium Priority</option>
-                                            <option value="low">Low Priority</option>
-                                        </select>
-                                        <select
-                                            value={newTodoCategory}
-                                            onChange={(e) => setNewTodoCategory(e.target.value)}
-                                            className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                        >
-                                            <option value="personal">Personal</option>
-                                            <option value="meeting">Meeting</option>
-                                            <option value="urgent">Urgent Work</option>
-                                            <option value="followup">Follow Up</option>
-                                            <option value="business">Business</option>
-                                            <option value="reminder">Reminder</option>
-                                            <option value="project">Project</option>
-                                            <option value="other">Other</option>
-                                        </select>
-                                        <button
-                                            onClick={addTodo}
-                                            className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors"
-                                        >
-                                            Add
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Category Filter */}
-                        <div className="mb-4">
-                            <select
-                                value={filterCategory}
-                                onChange={(e) => setFilterCategory(e.target.value)}
-                                className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            >
-                                <option value="all">All Categories</option>
-                                <option value="personal">Personal</option>
-                                <option value="meeting">Meeting</option>
-                                <option value="urgent">Urgent Work</option>
-                                <option value="followup">Follow Up</option>
-                                <option value="business">Business</option>
-                                <option value="reminder">Reminder</option>
-                                <option value="project">Project</option>
-                                <option value="other">Other</option>
-                            </select>
-                        </div>
-
-                        {/* Progress Summary */}
-                        <div className="mb-4 p-3 bg-blue-50 rounded-lg">
-                            <div className="flex justify-between text-sm">
-                                <span className="text-blue-800">
-                                    Completed: {todos.filter(t => t.completed).length} / {todos.length}
-                                </span>
-                                <span className="text-blue-800">
-                                    {Math.round((todos.filter(t => t.completed).length / todos.length) * 100)}% Complete
-                                </span>
-                            </div>
-                            <div className="w-full bg-blue-200 rounded-full h-2 mt-2">
-                                <div 
-                                    className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                                    style={{ width: `${(todos.filter(t => t.completed).length / todos.length) * 100}%` }}
-                                ></div>
-                            </div>
-                        </div>
-
-                        {/* Todo Items */}
-                        <div className="space-y-3 max-h-96 overflow-y-auto">
-                            {filteredTodos.map((todo) => (
-                                <div key={todo.id} className="flex items-center space-x-3 p-3 rounded-lg border border-gray-100 hover:bg-gray-50">
-                                    <input
-                                        type="checkbox"
-                                        checked={todo.completed}
-                                        onChange={() => toggleTodo(todo.id)}
-                                        className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
-                                    />
-                                    <span className={`flex-1 ${todo.completed ? 'line-through text-gray-500' : 'text-gray-800'}`}>
-                                        {todo.text}
-                                    </span>
-                                    <div className="flex items-center space-x-2">
-                                        <span className={`px-2 py-1 text-xs font-medium rounded-full ${getCategoryColor(todo.category)}`}>
-                                            {getCategoryLabel(todo.category)}
-                                        </span>
-                                        <span className={`px-2 py-1 text-xs font-medium rounded-full ${getPriorityColor(todo.priority)}`}>
-                                            {todo.priority}
-                                        </span>
-                                        <button
-                                            onClick={() => removeTodo(todo.id)}
-                                            className="text-red-500 hover:text-red-700 text-sm"
-                                            title="Remove item"
-                                        >
-                                            ✕
-                                        </button>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                        
-                        {filteredTodos.length === 0 && (
-                            <div className="text-center py-8 text-gray-500">
-                                {filterCategory === 'all' ? 'No todo items found.' : `No items in ${getCategoryLabel(filterCategory)} category.`}
-                            </div>
-                        )}
-
-                        <p className="text-sm text-gray-500 mt-4">
-                            These features are planned for future development. Check them off as they're completed! Later we'll convert this to a full WMS system.
-                        </p>
-                    </div>
+                  <div className="mt-2 flex justify-center gap-4 text-xs text-gray-600">
+                    <div>{totalCustomers} Customers</div>
+                    <div>{totalSuppliers} Suppliers</div>
+                    <div>{totalItems} Items</div>
+                  </div>
                 </div>
 
 

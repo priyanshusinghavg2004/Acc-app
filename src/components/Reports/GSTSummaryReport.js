@@ -3,8 +3,7 @@ import { collection, query, where, orderBy, getDocs, doc, getDoc } from 'firebas
 import { useTableSort, SortableHeader } from '../../utils/tableSort';
 import { useTablePagination } from '../../utils/tablePagination';
 import PaginationControls from '../../utils/PaginationControls';
-import ShareButton from './ShareButton';
-import { exportTableAsPDF, exportTableAsExcel, exportTableAsImage, shareLink } from './exportUtils';
+import GlobalExportButtons from '../GlobalExportButtons';
 
 const GSTSummaryReport = ({ db, userId, appId, dateRange, financialYear, selectedParty, parties, loading, setLoading, companyDetails, forcedGstType, reportTypeDefault }) => {
   const [gstData, setGstData] = useState([]);
@@ -204,62 +203,17 @@ const GSTSummaryReport = ({ db, userId, appId, dateRange, financialYear, selecte
     return rows;
   };
 
-  const exportPDF = () => {
-    const columns = getExportColumns();
-    exportTableAsPDF({
-      data: buildExportRows(),
-      columns,
-      filename: `GST-${reportType}-${gstType}-${new Date().toISOString().slice(0,10)}`,
-      title: reportType === 'gstr1' ? 'GSTR-1' : (gstType==='regular' ? 'GSTR-3B' : 'Composition Summary'),
-      companyDetails,
-      reportDetails: { Period: `${formatDate(dateRange.start)} to ${formatDate(dateRange.end)}` }
-    });
-  };
+  // Prepare export data for GlobalExportButtons
+  const getExportData = () => buildExportRows();
 
-  const exportExcel = () => {
-    const columns = getExportColumns();
-    exportTableAsExcel({
-      data: buildExportRows(),
-      columns,
-      filename: `GST-${reportType}-${gstType}-${new Date().toISOString().slice(0,10)}`,
-      companyDetails,
-      reportDetails: { Period: `${formatDate(dateRange.start)} to ${formatDate(dateRange.end)}` }
-    });
-  };
+  const getExportColumnsForExport = () => getExportColumns();
 
-  const exportImage = () => {
-    const columns = getExportColumns();
-    exportTableAsImage({
-      data: buildExportRows(),
-      columns,
-      filename: `GST-${reportType}-${gstType}-${new Date().toISOString().slice(0,10)}`,
-      companyDetails,
-      reportDetails: { Period: `${formatDate(dateRange.start)} to ${formatDate(dateRange.end)}` }
-    });
-  };
-
-  // Print with letterhead and table
-  const printReport = () => {
-    const cols = getExportColumns();
-    const rows = buildExportRows();
-    const w = window.open('', 'PRINT', 'height=700,width=900');
-    const headerHtml = `
-      <div style="text-align:center;margin-bottom:8px;border-bottom:2px solid #333;padding-bottom:8px;">
-        <div style="font-size:20px;font-weight:bold;">${companyDetails?.firmName || 'Company Name'}</div>
-        <div style="font-size:12px;color:#555;">${companyDetails?.address || ''}</div>
-        <div style="font-size:12px;color:#555;">${companyDetails?.gstin ? `GSTIN: ${companyDetails.gstin}` : ''}${companyDetails?.contactNumber ? ` | Phone: ${companyDetails.contactNumber}` : ''}</div>
-      </div>`;
-    const title = reportType === 'gstr1' ? 'GSTR-1' : (gstType==='regular' ? 'GSTR-3B' : 'Composition Summary');
-    const tableHead = `<tr>${cols.map(c=>`<th style=\"border:1px solid #ddd;padding:6px;text-align:${c.key==='type'||c.key==='partyName'||c.key==='docNo'?'left':'right'};\">${c.label}</th>`).join('')}</tr>`;
-    const bodyRows = rows.map(r=>`<tr style=\"${r._isSub ? 'font-size:12px;background:#fafafa;' : ''}\">${cols.map(c=>{
-      const v = r[c.key];
-      const isNum = typeof v === 'number';
-      const display = isNum ? v.toLocaleString('en-IN') : (v||'');
-      return `<td style=\"border:1px solid #ddd;padding:6px;text-align:${isNum?'right':'left'};${r._isSub && (c.key==='date' || c.key==='docNo' || c.key==='partyName' || c.key==='invoiceType') ? 'color:#888;' : ''}\">${display}</td>`;
-    }).join('')}</tr>`).join('');
-    w.document.write(`<html><head><title>${title}</title><style>body{font-family:Arial;padding:16px} table{width:100%;border-collapse:collapse} th,td{border:1px solid #ddd;padding:6px} th{background:#f6f6f6}</style></head><body>${headerHtml}<h3 style="text-align:center;margin:0 0 12px;">${title}</h3><div style="margin-bottom:8px;">Period: ${formatDate(dateRange.start)} to ${formatDate(dateRange.end)}</div><table><thead>${tableHead}</thead><tbody>${bodyRows}</tbody></table></body></html>`);
-    w.document.close(); w.focus(); setTimeout(()=>{ w.print(); w.close(); }, 300);
-  };
+  const getReportDetails = () => ({
+    'Period': `${formatDate(dateRange.start)} to ${formatDate(dateRange.end)}`,
+    'Report Type': reportType === 'gstr1' ? 'GSTR-1' : (gstType==='regular' ? 'GSTR-3B' : 'Composition Summary'),
+    'GST Type': gstType,
+    dateRange
+  });
 
   // Invoice summary modal
   const [billModal, setBillModal] = useState(null); // { id, type: 'outward'|'inward' }
@@ -583,9 +537,34 @@ const GSTSummaryReport = ({ db, userId, appId, dateRange, financialYear, selecte
       else if (viewMode === 'purchases') base = base.filter(r => r.recordType === 'inward');
     }
     const invoices = base.length;
-    const taxable = base.reduce((s, r) => s + (parseFloat(r.taxable) || 0), 0);
-    const totalGST = base.reduce((s, r) => s + (parseFloat(r.totalGST) || 0), 0);
-    const totalAmount = base.reduce((s, r) => s + (parseFloat(gstType === 'regular' ? r.total : r.taxable) || 0), 0);
+    const taxable = base.reduce((s, r) => s + (Number(r.taxable) || 0), 0);
+
+    // Compute Total GST per business rules
+    const outward = base.filter(r => r.recordType === 'outward');
+    const inward = base.filter(r => r.recordType === 'inward');
+
+    const sumGSTRegular = (list) => list.reduce((s, r) => s + ((Number(r.cgst) || 0) + (Number(r.sgst) || 0) + (Number(r.igst) || 0)), 0);
+    const sumGSTCompositionOutward = (list) => list.reduce((s, r) => {
+      if (Array.isArray(r.children) && r.children.length > 0) {
+        const itemTax = r.children.reduce((acc, c) => acc + (((Number(c.taxable) || 0) * (Number(c.rate) || 0)) / 100), 0);
+        return s + itemTax;
+      }
+      if (r.gstPercent != null) {
+        return s + (((Number(r.taxable) || 0) * (Number(r.gstPercent) || 0)) / 100);
+      }
+      return s + (Number(r.totalGST) || 0);
+    }, 0);
+
+    let totalGST = 0;
+    if (gstType === 'regular') {
+      // Outward GST minus Inward GST (ITC)
+      totalGST = sumGSTRegular(outward) - sumGSTRegular(inward);
+    } else {
+      // Composition: Total GST from sales only (rate-wise item calculation)
+      totalGST = sumGSTCompositionOutward(outward);
+    }
+
+    const totalAmount = base.reduce((s, r) => s + (Number(gstType === 'regular' ? r.total : r.taxable) || 0), 0);
     return { invoices, taxable, totalGST, totalAmount };
   }, [reportType, filteredForTable, sortedData, selectedParty, invoiceType, viewMode, gstType]);
 
@@ -704,12 +683,16 @@ const GSTSummaryReport = ({ db, userId, appId, dateRange, financialYear, selecte
           Period: {formatDate(dateRange.start)} to {formatDate(dateRange.end)}
           {selectedParty && ` | Party: ${parties.find(p => p.id === selectedParty)?.partyName || selectedParty}`}
         </p>
-        <div className="mt-3 flex gap-2">
-          <button onClick={exportPDF} className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md text-sm">📄 Export PDF</button>
-          <button onClick={exportExcel} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm">📊 Export Excel</button>
-          <button onClick={printReport} className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-md text-sm">🖨️ Print</button>
-          <ShareButton onExportPDF={exportPDF} onExportExcel={exportExcel} onExportImage={exportImage} onShareLink={() => shareLink({ title: 'GST Report', text: 'GST report link', url: window.location.href })} />
-        </div>
+        {/* Global Export/Print/Share Buttons */}
+        <GlobalExportButtons
+          data={getExportData()}
+          columns={getExportColumnsForExport()}
+          filename={`GST-${reportType}-${gstType}`.toUpperCase()}
+          title={reportType === 'gstr1' ? 'GSTR-1' : (gstType==='regular' ? 'GSTR-3B' : 'Composition Summary')}
+          companyDetails={companyDetails}
+          reportDetails={getReportDetails()}
+          disabled={gstData.length === 0}
+        />
       </div>
 
       {/* Filters (without internal Report Type to avoid duplication with Taxes dashboard) */}
@@ -790,7 +773,7 @@ const GSTSummaryReport = ({ db, userId, appId, dateRange, financialYear, selecte
             <h3 className="text-lg font-semibold text-gray-800">{gstType === 'regular' ? 'GSTR-3B Summary' : 'Composition Summary'}</h3>
           </div>
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
+            <table id="report-table" className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>

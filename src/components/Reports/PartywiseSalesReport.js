@@ -46,6 +46,29 @@ const PartywiseSalesReport = ({ db, userId, appId, dateRange, selectedParty, par
     };
   }, [showQuickSummary, showModal]);
 
+  // Normalize party id that may be saved as a path like "parties/{id}" or a document ref-like string
+  const normalizePartyId = (raw) => {
+    if (!raw) return '';
+    let val = raw;
+    if (typeof val === 'object') {
+      // Some systems store references; try common shapes
+      val = val.id || val._key || val._path || String(val);
+    }
+    if (typeof val === 'string' && val.includes('/')) {
+      const parts = val.split('/');
+      return parts[parts.length - 1];
+    }
+    return String(val);
+  };
+
+  const partyIdToName = React.useMemo(() => {
+    const map = {};
+    (parties || []).forEach(p => {
+      map[p.id] = p.firmName || p.name || p.partyName || p.displayName || p.id;
+    });
+    return map;
+  }, [parties]);
+
   // Function to calculate GST for an invoice using rows and item master
   const calculateGST = (rows, effectiveCompanyDetails, effectiveItemMap) => {
     console.log('🧮 GST CALCULATION START 🧮');
@@ -212,15 +235,11 @@ const PartywiseSalesReport = ({ db, userId, appId, dateRange, selectedParty, par
           let saleDate = data.invoiceDate;
           let saleDateObj = saleDate ? new Date(saleDate) : null;
           
-          // Try to get partyId from customFields or party field
-          let partyId = data.customFields?.party || data.party || data.partyId || undefined;
+          // Try to get partyId from customFields or party field and normalize
+          let partyId = normalizePartyId(data.customFields?.party || data.party || data.partyId || '');
           
-          // Find partyName from parties array
-          let partyName = undefined;
-          if (partyId) {
-            const partyObj = parties.find(p => p.id === partyId);
-            partyName = partyObj ? partyObj.firmName : partyId;
-          }
+          // Resolve party name using map with fallbacks
+          let partyName = partyIdToName[partyId] || data.partyName || data.customerName || partyId || 'Unknown';
           
           // Try to get invoice number from multiple fields
           let invoiceNumber = data.customFields?.number || data.invoiceNumber || data.billNumber || data.number || data.invoiceNo || doc.id;
@@ -320,7 +339,7 @@ const PartywiseSalesReport = ({ db, userId, appId, dateRange, selectedParty, par
         // Group sales by party
         const partyInvoices = {};
         sales.forEach(invoice => {
-          const partyId = invoice.partyId;
+          const partyId = normalizePartyId(invoice.partyId);
           if (!partyInvoices[partyId]) {
             partyInvoices[partyId] = [];
           }
@@ -329,7 +348,7 @@ const PartywiseSalesReport = ({ db, userId, appId, dateRange, selectedParty, par
         // Group payments by party
         const partyPayments = {};
         filteredPayments.forEach(payment => {
-          const partyId = payment.partyId;
+          const partyId = normalizePartyId(payment.partyId);
           if (!partyPayments[partyId]) {
             partyPayments[partyId] = [];
           }
@@ -432,7 +451,7 @@ const PartywiseSalesReport = ({ db, userId, appId, dateRange, selectedParty, par
           console.log(`Final for ${partyId}: totalAmount=${totalAmount}, totalPaid=${totalPaid}, outstanding=${outstanding}, advance=${advance}`);
           
           // Find party name
-          const partyName = parties.find(p => p.id === partyId)?.firmName || partyId;
+          const partyName = partyIdToName[partyId] || partyId;
           partySummary[partyId] = {
             partyId,
             partyName,
@@ -492,7 +511,7 @@ const PartywiseSalesReport = ({ db, userId, appId, dateRange, selectedParty, par
       }
     };
     fetchData();
-  }, [db, userId, appId, dateRange, selectedParty, parties, setLoading, companyDetails]);
+  }, [db, userId, appId, dateRange, selectedParty, parties, setLoading, companyDetails, partyIdToName]);
 
   // Find selected party object
   const selectedPartyObj = parties.find(p => p.id === selectedParty);
@@ -564,7 +583,7 @@ const PartywiseSalesReport = ({ db, userId, appId, dateRange, selectedParty, par
         </div>
       </div>
       <div className="bg-white border border-gray-200 rounded-lg overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
+          <table id="report-table" className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
               {columns.map(col => (

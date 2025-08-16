@@ -3,6 +3,7 @@ import { collection, query, where, orderBy, getDocs } from 'firebase/firestore';
 import { useTableSort, SortableHeader } from '../../utils/tableSort';
 import { useTablePagination } from '../../utils/tablePagination';
 import PaginationControls from '../../utils/PaginationControls';
+import GlobalExportButtons from '../GlobalExportButtons';
 
 const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selectedParty, parties, loading, setLoading, companyDetails }) => {
   const [plData, setPlData] = useState([]);
@@ -156,6 +157,25 @@ const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selecte
           };
         });
 
+        // Irregular labour/freelancer payments (Advances/Bonus/Incentive)
+        const irregularSnap = await getDocs(query(
+          collection(db, `artifacts/${appId}/users/${userId}/irregularPayments`),
+          where('date', '>=', startStr), where('date', '<=', endStr), orderBy('date', 'asc')
+        ));
+        const irregularRows = irregularSnap.docs.map(doc => {
+          const d = doc.data();
+          const partyName = d.personType === 'Employee' ? (d.employeeName || 'Employee') : (d.personName || d.personType || 'Labour/Freelancer');
+          return {
+            id: doc.id,
+            date: d.date,
+            amount: parseFloat(d.amount || 0),
+            partyId: d.employeeId || '',
+            partyName,
+            head: 'Labour/Advances',
+            expenseNumber: d.paymentType || 'Irregular Payment'
+          };
+        });
+
         // Filter by selected party in JavaScript if needed
         if (selectedParty) {
           expenses = expenses.filter(expense => expense.partyId === selectedParty);
@@ -184,20 +204,21 @@ const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selecte
           description: 'Revenue from sales of goods/services'
         });
 
-        // Cost of goods sold (gross purchase bill values)
+        // Cost of goods purchase (gross purchase bill values)
         const totalPurchases = purchases.reduce((sum, purchase) => sum + (parseFloat(purchase.totalAmount) || 0), 0);
         plCategories.push({
-          category: 'Cost of Goods Sold',
+          category: 'Cost of Goods Purchase',
           amount: totalPurchases,
           type: 'expense',
           drillDownData: purchases,
-          description: 'Direct costs of goods sold'
+          description: 'Direct costs of goods purchased'
         });
 
-        // Operating expenses grouped by head/category; include salary payments
+        // Operating expenses grouped by head/category; include salary payments and irregular payments
         const allExpenseEntries = [
           ...expenses,
-          ...salaryPaymentsRows
+          ...salaryPaymentsRows,
+          ...irregularRows
         ];
         const expensesByHead = allExpenseEntries.reduce((acc, e) => {
           const key = e.head || 'Operating Expenses';
@@ -276,7 +297,9 @@ const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selecte
         const income = plCategories.filter(cat => cat.type === 'income').reduce((sum, cat) => sum + cat.amount, 0);
         const totalExpenses = plCategories.filter(cat => cat.type === 'expense').reduce((sum, cat) => sum + cat.amount, 0);
         const grossProfit = income - totalPurchases;
-        const netProfit = income - totalExpenses - taxPayable;
+        // Net Profit should already include Taxes category within totalExpenses.
+        // Do NOT subtract taxPayable again, otherwise taxes are double-counted.
+        const netProfit = income - totalExpenses;
 
         setTotalSummary({
           totalIncome: income,
@@ -312,6 +335,51 @@ const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selecte
     window.addEventListener('gstr3b-updated', onGstr3bUpdated);
     return () => window.removeEventListener('gstr3b-updated', onGstr3bUpdated);
   }, [db, userId, appId, dateRange, selectedParty, companyDetails]);
+
+  // Prepare export data for GlobalExportButtons
+  const getExportData = () => {
+    const completeTableData = [
+      // Income Section Header
+      { category: 'INCOME', amount: '-' },
+      // Income items
+      ...displayData.filter(item => item.type === 'income').map(item => ({
+        category: `  ${item.category}`,
+        amount: item.amount
+      })),
+      // Total Income
+      { category: 'Total Income', amount: totalSummary.totalIncome },
+      // Empty row
+      { category: '', amount: '' },
+      // Expenses Section Header
+      { category: 'EXPENSES', amount: '-' },
+      // Expense items
+      ...displayData.filter(item => item.type === 'expense').map(item => ({
+        category: `  ${item.category}`,
+        amount: item.amount
+      })),
+      // Total Expenses
+      { category: 'Total Expenses', amount: totalSummary.totalExpenses },
+      // Empty row
+      { category: '', amount: '' },
+      // Net Profit
+      { category: 'Net Profit', amount: totalSummary.netProfit }
+    ];
+    return completeTableData;
+  };
+
+  const getExportColumns = () => [
+    { key: 'category', label: 'Particulars' },
+    { key: 'amount', label: 'Amount (INR)' }
+  ];
+
+  const getReportDetails = () => ({
+    'Period': `${formatDate(dateRange.start)} to ${formatDate(dateRange.end)}`,
+    'Total Income': totalSummary.totalIncome,
+    'Total Expenses': totalSummary.totalExpenses,
+    'Gross Profit': totalSummary.grossProfit,
+    'Net Profit': totalSummary.netProfit,
+    dateRange
+  });
 
   // Format currency
   const formatCurrency = (amount) => {
@@ -361,6 +429,8 @@ const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selecte
 
   const displayData = plData;
 
+
+
   return (
     <div className="p-6">
       {/* Report Header */}
@@ -370,6 +440,26 @@ const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selecte
           Period: {formatDate(dateRange.start)} to {formatDate(dateRange.end)}
           {selectedParty && ` | Party: ${parties.find(p => p.id === selectedParty)?.partyName || selectedParty}`}
         </p>
+        <div className="flex justify-between items-start">
+          <div>
+            <h2 className="text-xl font-bold text-gray-800 mb-2">Profit & Loss Report</h2>
+            <p className="text-gray-600">
+              Period: {formatDate(dateRange.start)} to {formatDate(dateRange.end)}
+              {selectedParty && ` | Party: ${parties.find(p => p.id === selectedParty)?.partyName || selectedParty}`}
+            </p>
+          </div>
+          
+                     {/* Global Export/Print/Share Buttons */}
+           <GlobalExportButtons
+             data={getExportData()}
+             columns={getExportColumns()}
+             filename="PROFIT_LOSS"
+             title="Profit & Loss Report"
+             companyDetails={companyDetails}
+             reportDetails={getReportDetails()}
+             disabled={displayData.length === 0}
+           />
+        </div>
       </div>
 
       {/* Summary Cards */}
@@ -416,15 +506,15 @@ const ProfitLossReport = ({ db, userId, appId, dateRange, financialYear, selecte
       {!showDrillDown && (
         <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
+            <table id="report-table" className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Particulars
                   </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Amount (₹)
-                  </th>
+                                     <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                     Amount (INR)
+                   </th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">

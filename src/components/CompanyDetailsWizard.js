@@ -189,7 +189,7 @@ const CompanyDetailsWizard = ({ isOpen, onClose, db, userId, appId, onComplete, 
         updatedAt: serverTimestamp()
       }, { merge: true });
       
-      onComplete();
+      onComplete && onComplete();
     } catch (error) {
       console.error('Error saving company details:', error);
     } finally {

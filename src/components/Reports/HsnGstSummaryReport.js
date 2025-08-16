@@ -4,8 +4,7 @@ import { useTableSort, SortableHeader } from '../../utils/tableSort';
 import { useTablePagination } from '../../utils/tablePagination';
 import PaginationControls from '../../utils/PaginationControls';
 import { formatCurrency } from './CommonComponents';
-import ShareButton from './ShareButton';
-import { exportTableAsPDF, exportTableAsExcel, exportTableAsImage, shareLink } from './exportUtils';
+import GlobalExportButtons from '../GlobalExportButtons';
 
 const HsnGstSummaryReport = ({ db, userId, appId, dateRange, selectedParty, parties, loading, setLoading, forcedGstType, companyDetails }) => {
   const [rows, setRows] = useState([]);
@@ -105,13 +104,7 @@ const HsnGstSummaryReport = ({ db, userId, appId, dateRange, selectedParty, part
     return { taxable, cgst, sgst, igst, totalGST, groups: base.length };
   }, [sortedData, gstType]);
 
-  // Helpers to build export/print dataset including sub-rows
-  const getExportColumns = () => {
-    const cols = [ {key:'hsn',label:'HSN'}, {key:'item',label:'Item'}, {key:'rate',label:'GST %'}, {key:'taxable',label:'Taxable'}, {key:'cgst',label:'CGST'}, {key:'sgst',label:'SGST'} ];
-    if (gstType === 'regular') cols.push({key:'igst',label:'IGST'});
-    cols.push({key:'total',label:'Total GST'});
-    return cols;
-  };
+
   const buildExportRows = () => {
     const rows = [];
     sortedData.forEach(g => {
@@ -135,29 +128,29 @@ const HsnGstSummaryReport = ({ db, userId, appId, dateRange, selectedParty, part
     return rows;
   };
 
-  const exportPDF = () => {
-    exportTableAsPDF({
-      data: buildExportRows(),
-      columns: getExportColumns(),
-      filename: `HSN-${new Date().toISOString().slice(0,10)}`,
-      title: 'HSN-wise GST Summary',
-      reportDetails: { Period: `${new Date(dateRange.start).toLocaleDateString('en-IN')} to ${new Date(dateRange.end).toLocaleDateString('en-IN')}` }
-    });
-  };
-  const exportExcel = () => {
-    exportTableAsExcel({
-      data: buildExportRows(),
-      columns: getExportColumns(),
-      filename: `HSN-${new Date().toISOString().slice(0,10)}`
-    });
-  };
-  const exportImage = () => {
-    exportTableAsImage({
-      data: buildExportRows(),
-      columns: getExportColumns(),
-      filename: `HSN-${new Date().toISOString().slice(0,10)}`
-    });
-  };
+  // Prepare export data for GlobalExportButtons
+  const getExportData = () => buildExportRows();
+
+  const getExportColumns = () => [
+    { key: 'hsn', label: 'HSN Code' },
+    { key: 'item', label: 'Item' },
+    { key: 'rate', label: 'GST Rate %' },
+    { key: 'taxable', label: 'Taxable Amount' },
+    { key: 'cgst', label: 'CGST' },
+    { key: 'sgst', label: 'SGST' },
+    { key: 'igst', label: 'IGST' },
+    { key: 'total', label: 'Total GST' }
+  ];
+
+  const getReportDetails = () => ({
+    'Period': `${new Date(dateRange.start).toLocaleDateString('en-IN')} to ${new Date(dateRange.end).toLocaleDateString('en-IN')}`,
+    'Total Taxable': quickTotals.taxable,
+    'Total CGST': quickTotals.cgst,
+    'Total SGST': quickTotals.sgst,
+    'Total IGST': quickTotals.igst,
+    'Total GST': quickTotals.totalGST,
+    dateRange
+  });
 
   return (
     <div className="p-6">
@@ -166,20 +159,16 @@ const HsnGstSummaryReport = ({ db, userId, appId, dateRange, selectedParty, part
           <h2 className="text-xl font-bold text-gray-800 mb-2">HSN-wise GST Summary ({gstType === 'regular' ? 'Regular' : 'Composition'})</h2>
           <p className="text-gray-600">Period: {new Date(dateRange.start).toLocaleDateString('en-IN')} to {new Date(dateRange.end).toLocaleDateString('en-IN')}</p>
         </div>
-        <div className="flex gap-2">
-          <button onClick={exportPDF} className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md text-sm">📄 Export PDF</button>
-          <button onClick={exportExcel} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm">📊 Export Excel</button>
-          <button onClick={() => {
-            const cols = getExportColumns();
-            const data = buildExportRows();
-            const w = window.open('', 'PRINT', 'height=700,width=900');
-            const head = `<tr>${cols.map(c=>`<th style=\\"border:1px solid #ddd;padding:6px;text-align:left;\\">${c.label}</th>`).join('')}</tr>`;
-            const body = data.map(r=>`<tr style=\\"${r._isSub ? 'font-size:12px;background:#fafafa;' : ''}\\">${cols.map(c=>`<td style=\\"border:1px solid #ddd;padding:6px;\\">${r[c.key]||''}</td>`).join('')}</tr>`).join('');
-            w.document.write(`<html><head><title>HSN-wise GST Summary</title><style>body{font-family:Arial;padding:16px} table{width:100%;border-collapse:collapse} th,td{border:1px solid #ddd;padding:6px} th{background:#f6f6f6}</style></head><body><h3 style=\"text-align:center;\">HSN-wise GST Summary</h3><div>Period: ${new Date(dateRange.start).toLocaleDateString('en-IN')} to ${new Date(dateRange.end).toLocaleDateString('en-IN')}</div><table><thead>${head}</thead><tbody>${body}</tbody></table></body></html>`);
-            w.document.close(); w.focus(); setTimeout(()=>{ w.print(); w.close(); }, 300);
-          }} className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-md text-sm">🖨️ Print</button>
-          <ShareButton onExportPDF={exportPDF} onExportExcel={exportExcel} onExportImage={exportImage} onShareLink={() => shareLink({ title: 'HSN Report', text: 'HSN-wise GST Summary', url: window.location.href })} />
-        </div>
+        {/* Global Export/Print/Share Buttons */}
+        <GlobalExportButtons
+          data={getExportData()}
+          columns={getExportColumns()}
+          filename="HSN_GST"
+          title="HSN-wise GST Summary"
+          companyDetails={companyDetails}
+          reportDetails={getReportDetails()}
+          disabled={rows.length === 0}
+        />
       </div>
 
       {/* Quick Totals */}

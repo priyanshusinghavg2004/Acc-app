@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { db, auth } from '../firebase.config';
-import { collection, addDoc, deleteDoc, doc, onSnapshot, query, where, serverTimestamp, updateDoc, getDoc } from 'firebase/firestore';
+import { collection, addDoc, deleteDoc, doc, onSnapshot, query, where, serverTimestamp, updateDoc, getDoc, getDocs } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
@@ -9,10 +9,11 @@ import { migrateExpenseData, checkMigrationNeeded } from '../utils/migrateExpens
 
 
 const GROUPS = [
-  { key: 'salaries', label: 'Salaries' },
   { key: 'fixed', label: 'Fixed' },
   { key: 'variable', label: 'Variable' },
-  { key: 'employee', label: 'Employee/KYC' },
+  { key: 'advances', label: 'Labour/Advances' },
+  { key: 'employee', label: 'Employees' },
+  { key: 'salaries', label: 'Salary' },
 ];
 
 const FIXED_HEADS = ['Rent', 'Electricity', 'Internet', 'Water', 'Other'];
@@ -73,7 +74,38 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
   }, []);
   
 
-  const [selectedGroup, setSelectedGroup] = useState(GROUPS[0].key);
+  const [selectedGroup, setSelectedGroup] = useState(() => {
+    try {
+      const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+      const tab = params.get('tab');
+      if (tab && GROUPS.some(g => g.key === tab)) return tab;
+    } catch {}
+    return GROUPS[0].key;
+  });
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+    if (params.get('tab') !== selectedGroup) {
+      params.set('tab', selectedGroup);
+      const base = window.location.hash.split('?')[0];
+      const next = `${base}?${params.toString()}`;
+      if (window.location.hash !== next) window.location.hash = next;
+    }
+  }, [selectedGroup]);
+
+  // Respond to hash changes (for deep-linking from tours)
+  useEffect(() => {
+    const handler = () => {
+      try {
+        const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+        const tab = params.get('tab');
+        if (tab && GROUPS.some(g => g.key === tab) && tab !== selectedGroup) {
+          setSelectedGroup(tab);
+        }
+      } catch {}
+    };
+    window.addEventListener('hashchange', handler);
+    return () => window.removeEventListener('hashchange', handler);
+  }, [selectedGroup]);
   const [filters, setFilters] = useState({ date: '', head: '', amount: '' });
   const [exportDropdownOpen, setExportDropdownOpen] = useState(false);
   const exportRef = useRef();
@@ -82,6 +114,7 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
   const [employees, setEmployees] = useState([]);
   const [employeeForm, setEmployeeForm] = useState({ 
     name: '', 
+    personType: 'Employee',
     designation: '', 
     basicSalary: '', 
     hra: '', 
@@ -164,6 +197,7 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
   const [salarySearch, setSalarySearch] = useState('');
   const [salaryError, setSalaryError] = useState('');
   const [salaryPayments, setSalaryPayments] = useState([]);
+  const [salaryPaymentMode, setSalaryPaymentMode] = useState('Cash');
   const [showEmployeeDropdown, setShowEmployeeDropdown] = useState(false);
   const [selectedEmployeeIndex, setSelectedEmployeeIndex] = useState(-1);
   const [selectedEmployeeDisplay, setSelectedEmployeeDisplay] = useState('');
@@ -171,12 +205,49 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
   const [showEditSalaryModal, setShowEditSalaryModal] = useState(false);
   const [isEditingSalary, setIsEditingSalary] = useState(false);
   
+  // Irregular payments (Labour/Advances)
+  const [irregularPayments, setIrregularPayments] = useState([]);
+  const [irregularForm, setIrregularForm] = useState({
+    date: new Date().toISOString().split('T')[0],
+    personType: 'Employee',
+    employeeId: '',
+    personName: '',
+    paymentType: 'Advance',
+    amount: '',
+    remark: '',
+    paymentMode: 'Cash'
+  });
+  // id -> 'Earning' | 'Deduction'
+  const [appliedIrregularSelections, setAppliedIrregularSelections] = useState({});
+  
   // Employee table sorting and pagination
   const [employeeFilters, setEmployeeFilters] = useState({ search: '', designation: '' });
   const [employeeSortKey, setEmployeeSortKey] = useState('name');
   const [employeeSortDir, setEmployeeSortDir] = useState('asc');
   const [employeeCurrentPage, setEmployeeCurrentPage] = useState(1);
   const [employeePageSize, setEmployeePageSize] = useState(10);
+  // Manual refresh triggers for rare cases where realtime listener lags
+  const reloadExpenses = async () => {
+    try {
+      if (!isAuthReady || !userId || !appId) return;
+      const q = query(collection(db, `artifacts/${appId}/users/${userId}/expenses`), where('group', '==', selectedGroup));
+      const snap = await getDocs(q);
+      const expenseData = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setExpenses(expenseData);
+    } catch (e) {
+      console.warn('reloadExpenses failed', e);
+    }
+  };
+  const reloadSalaryPayments = async () => {
+    try {
+      if (!isAuthReady || !userId || !appId) return;
+      const snap = await getDocs(collection(db, `artifacts/${appId}/users/${userId}/salaryPayments`));
+      const payments = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setSalaryPayments(payments);
+    } catch (e) {
+      console.warn('reloadSalaryPayments failed', e);
+    }
+  };
 
   // --- Firestore listeners ---
   useEffect(() => {
@@ -225,6 +296,18 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
       console.error('Error in salary payments listener:', error);
     });
     
+    return () => unsub();
+  }, [isAuthReady, userId, appId]);
+
+  useEffect(() => {
+    // Irregular Payments - Labour/Advances listener
+    if (!isAuthReady || !userId || !appId) return;
+    const unsub = onSnapshot(collection(db, `artifacts/${appId}/users/${userId}/irregularPayments`), snap => {
+      const rows = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setIrregularPayments(rows);
+    }, (error) => {
+      console.error('Error in irregular payments listener:', error);
+    });
     return () => unsub();
   }, [isAuthReady, userId, appId]);
 
@@ -795,6 +878,7 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
             // Reset form
         setEmployeeForm({
           name: '',
+          personType: 'Employee',
           designation: '',
           basicSalary: '',
           hra: '',
@@ -1102,6 +1186,7 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
     // Filter out undefined values to prevent Firebase errors
     const updateData = {
       name: editingEmployee.name,
+      personType: editingEmployee.personType || 'Employee',
       designation: editingEmployee.designation,
       basicSalary: editingEmployee.basicSalary,
       hra: editingEmployee.hra,
@@ -1216,6 +1301,8 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
       receiptUrl,
       createdAt: serverTimestamp(),
     });
+    // force refresh in case onSnapshot lags
+    await reloadExpenses();
     setExpenseForm({ 
       date: new Date().toISOString().split('T')[0], 
       head: '', 
@@ -1234,7 +1321,8 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
       head: exp.head || '',
       amount: exp.amount || '',
       description: exp.description || '',
-      receipt: exp.receipt || null
+      receipt: exp.receipt || null,
+      paymentMode: exp.paymentMode || 'Cash'
     });
   };
   const handleEditingExpenseChange = e => {
@@ -1249,9 +1337,19 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
       description: editingExpense.description || '',
       remarks: editingExpense.remarks || '',
       month: editingExpense.month || '',
+      paymentMode: editingExpense.paymentMode || 'Cash',
     });
+    await reloadExpenses();
     setEditingExpenseId(null);
     setEditingExpense({});
+    setExpenseForm({ 
+      date: new Date().toISOString().split('T')[0], 
+      head: '', 
+      amount: '', 
+      description: '', 
+      receipt: null,
+      paymentMode: 'Cash' 
+    });
   };
   const handleCancelEditExpense = () => {
     setEditingExpenseId(null);
@@ -1261,13 +1359,16 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
       head: '', 
       amount: '', 
       description: '', 
-      receipt: null 
+      receipt: null,
+      paymentMode: 'Cash'
     });
+    // Focus first input to make it clear we are back in add mode
+    try { document.querySelector('input[name="date"]').focus(); } catch {}
   };
 
   // Expense handlers
   const handleViewExpense = (expense) => {
-    alert(`Expense Details:\nDate: ${expense.date}\nHead: ${expense.head}\nAmount: ₹${Number(expense.amount).toLocaleString('en-IN')}\nDescription: ${expense.description || 'N/A'}`);
+    alert(`Expense Details:\nDate: ${expense.date}\nHead: ${expense.head}\nAmount: ₹${Number(expense.amount).toLocaleString('en-IN')}\nPayment Mode: ${expense.paymentMode || 'N/A'}\nDescription: ${expense.description || 'N/A'}`);
   };
 
 
@@ -1277,6 +1378,7 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
       try {
         await deleteDoc(doc(db, `artifacts/${appId}/users/${userId}/expenses`, id));
         alert('Expense deleted successfully!');
+        await reloadExpenses();
       } catch (error) {
         console.error('Error deleting expense:', error);
         alert('Error deleting expense. Please try again.');
@@ -1448,6 +1550,11 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
             {/* Basic Information */}
             <div className="flex flex-wrap gap-2">
               <input name="name" value={employeeForm.name} onChange={handleEmployeeFormChange} placeholder="Name" className="border rounded p-1 text-sm" required />
+              <select name="personType" value={employeeForm.personType || 'Employee'} onChange={handleEmployeeFormChange} className="border rounded p-1 text-sm">
+                <option value="Employee">Employee</option>
+                <option value="Labour">Labour</option>
+                <option value="Freelancer">Freelancer</option>
+              </select>
               <input name="designation" value={employeeForm.designation} onChange={handleEmployeeFormChange} placeholder="Designation" className="border rounded p-1 text-sm" />
               <input name="contact" value={employeeForm.contact} onChange={handleEmployeeFormChange} placeholder="Contact" className="border rounded p-1 text-sm" />
             </div>
@@ -2019,6 +2126,7 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
                     >
                       Employee Name {renderSortIcon('name')}
                     </th>
+                    <th className="px-2 py-2 text-left">Type</th>
                     <th 
                       className="px-2 py-2 text-left cursor-pointer hover:bg-gray-100"
                       onClick={() => handleEmployeeSort('designation')}
@@ -2048,6 +2156,7 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
                     <tr key={emp.id} className="border-t border-gray-100 hover:bg-gray-50">
                       <td className="px-2 py-2 font-medium">{emp.employeeId || 'N/A'}</td>
                       <td className="px-2 py-2">{emp.name}</td>
+                      <td className="px-2 py-2">{emp.personType || 'Employee'}</td>
                       <td className="px-2 py-2">{emp.designation || 'N/A'}</td>
                       <td className="px-2 py-2">₹{Number(emp.basicSalaryAmount || emp.basicSalary || emp.salary || 0).toLocaleString('en-IN')}</td>
                       <td className="px-2 py-2">₹{Number(emp.hraAmount || 0).toLocaleString('en-IN')}</td>
@@ -2169,6 +2278,16 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
                           className="border rounded p-2 text-sm"
                           required
                         />
+                        <select
+                          name="personType"
+                          value={editingEmployee.personType || 'Employee'}
+                          onChange={handleEditingEmployeeChange}
+                          className="border rounded p-2 text-sm"
+                        >
+                          <option value="Employee">Employee</option>
+                          <option value="Labour">Labour</option>
+                          <option value="Freelancer">Freelancer</option>
+                        </select>
                         <input
                           name="designation"
                           value={editingEmployee.designation}
@@ -2658,6 +2777,7 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
       // Functions are now defined in main scope for edit modal access
 
       const selectedEmp = employees.find(e => e.employeeId === salaryEmployeeId);
+      const pendingIrregular = irregularPayments.filter(p => !p.applied && p.personType === 'Employee' && p.employeeId === salaryEmployeeId);
       // Validation
       const validateSalaryForm = () => {
         if (!salaryEmployeeId) return 'Select employee';
@@ -2682,9 +2802,14 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
         const emp = employees.find(e => e.employeeId === salaryEmployeeId);
         const fixedTotal = fixedSalaryRows.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
         const performanceTotal = performanceSalaryRows.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
-        const totalEarnings = fixedTotal + performanceTotal;
-        const totalDeductions = salaryDeductions.reduce((sum, deduction) => sum + (Number(deduction.amount) || 0), 0);
+        // Include selected irregular payments (advances/bonus etc.) in totals
+        const pendingForEmp = irregularPayments.filter(p => !p.applied && p.personType === 'Employee' && p.employeeId === salaryEmployeeId);
+        const irregularEarningsTotal = pendingForEmp.reduce((sum, p) => sum + (appliedIrregularSelections[p.id] === 'Earning' ? (Number(p.amount) || 0) : 0), 0);
+        const irregularDeductionsTotal = pendingForEmp.reduce((sum, p) => sum + (appliedIrregularSelections[p.id] === 'Deduction' ? (Number(p.amount) || 0) : 0), 0);
+        const totalEarnings = fixedTotal + performanceTotal + irregularEarningsTotal;
+        const totalDeductions = salaryDeductions.reduce((sum, deduction) => sum + (Number(deduction.amount) || 0), 0) + irregularDeductionsTotal;
         const netAmount = totalEarnings - totalDeductions;
+        const irregularApplied = pendingForEmp.filter(p => appliedIrregularSelections[p.id]).map(p => ({ id: p.id, paymentType: p.paymentType, amount: Number(p.amount) || 0, appliedAs: appliedIrregularSelections[p.id], date: p.date }));
         
         await addDoc(collection(db, `artifacts/${appId}/users/${userId}/salaryPayments`), {
           employeeId: salaryEmployeeId,
@@ -2695,11 +2820,30 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
           fixedRows: fixedSalaryRows,
           performanceRows: performanceSalaryRows,
           deductions: salaryDeductions,
+          irregularApplied,
+          irregularEarningsTotal,
+          irregularDeductionsTotal,
           totalEarnings,
           totalDeductions,
           netAmount,
+        paymentMode: salaryPaymentMode,
           createdAt: serverTimestamp(),
         });
+        // Mark irregulars as applied
+        try {
+          for (const item of irregularApplied) {
+            await updateDoc(doc(db, `artifacts/${appId}/users/${userId}/irregularPayments`, item.id), {
+              applied: true,
+              appliedAt: serverTimestamp(),
+              appliedInMonth: salaryMonth,
+              appliedInPaymentDate: salaryDate,
+              appliedAs: item.appliedAs,
+            });
+          }
+        } catch (e) {
+          console.warn('Failed to mark irregular payments applied', e);
+        }
+        await reloadSalaryPayments();
         // Reset to empty arrays
         setFixedSalaryRows([]);
         setPerformanceSalaryRows([]);
@@ -2708,12 +2852,16 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
         setSelectedEmployeeDisplay('');
         setSalaryDate('');
         setSalaryMonth('');
+        setSalaryPaymentMode('Cash');
       };
       // Total calculation
       const fixedTotal = fixedSalaryRows.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
       const performanceTotal = performanceSalaryRows.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
-      const totalEarnings = fixedTotal + performanceTotal;
-      const totalDeductions = salaryDeductions.reduce((sum, deduction) => sum + (Number(deduction.amount) || 0), 0);
+      const pendingForEmp = irregularPayments.filter(p => !p.applied && p.personType === 'Employee' && p.employeeId === salaryEmployeeId);
+      const irregularEarningsTotal = pendingForEmp.reduce((sum, p) => sum + (appliedIrregularSelections[p.id] === 'Earning' ? (Number(p.amount) || 0) : 0), 0);
+      const irregularDeductionsTotal = pendingForEmp.reduce((sum, p) => sum + (appliedIrregularSelections[p.id] === 'Deduction' ? (Number(p.amount) || 0) : 0), 0);
+      const totalEarnings = fixedTotal + performanceTotal + irregularEarningsTotal;
+      const totalDeductions = salaryDeductions.reduce((sum, deduction) => sum + (Number(deduction.amount) || 0), 0) + irregularDeductionsTotal;
       const netAmount = totalEarnings - totalDeductions;
       // Export salary payments table
       const handleExportSalaryCSV = () => {
@@ -2821,6 +2969,14 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
               <input value={selectedEmp?.designation || ''} readOnly className="border rounded p-1 text-sm min-w-[120px] bg-gray-100" placeholder="Post" />
               <input type="date" value={salaryDate} onChange={e => setSalaryDate(e.target.value)} className="border rounded p-1 text-sm" required />
               <input type="month" value={salaryMonth} onChange={e => setSalaryMonth(e.target.value)} className="border rounded p-1 text-sm" required />
+              <select value={salaryPaymentMode || 'Cash'} onChange={e => setSalaryPaymentMode(e.target.value)} className="border rounded p-1 text-sm">
+                <option value="Cash">Cash</option>
+                <option value="Bank Transfer">Bank Transfer</option>
+                <option value="UPI">UPI</option>
+                <option value="Cheque">Cheque</option>
+                <option value="Card">Card</option>
+                <option value="Other">Other</option>
+              </select>
             </div>
             {/* Enhanced Salary Payment Form */}
             <div className="bg-blue-50 p-4 rounded">
@@ -3000,6 +3156,41 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
                 </div>
               </div>
 
+              {/* Irregular payments to apply */}
+              {salaryEmployeeId && (
+                <div className="mb-4 bg-yellow-50 p-3 rounded border border-yellow-200">
+                  <div className="flex items-center justify-between mb-2">
+                    <h6 className="text-xs font-semibold text-yellow-800">Pending Labour/Advance items for this employee</h6>
+                    <span className="text-xs text-yellow-700">Select how to apply in this salary</span>
+                  </div>
+                  {pendingIrregular.length === 0 ? (
+                    <div className="text-xs text-gray-600">No pending items</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {pendingIrregular.map(item => (
+                        <div key={item.id} className="flex items-center gap-2 bg-white p-2 rounded border">
+                          <div className="flex-1 text-xs">
+                            <div className="font-semibold">
+                              {item.paymentType} - ₹{Number(item.amount || 0).toLocaleString('en-IN')} <span className="text-gray-500">({item.date})</span>
+                            </div>
+                            {item.remark && <div className="text-gray-500">{item.remark}</div>}
+                          </div>
+                          <select
+                            value={appliedIrregularSelections[item.id] || ''}
+                            onChange={e => setAppliedIrregularSelections(s => ({ ...s, [item.id]: e.target.value }))}
+                            className="border rounded p-1 text-xs"
+                          >
+                            <option value="">Ignore</option>
+                            <option value="Earning">Add to Earnings</option>
+                            <option value="Deduction">Deduct from Salary</option>
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Summary & Calculator */}
               <div className="bg-white p-3 rounded border">
                 <h6 className="text-xs font-semibold mb-2 text-gray-700">Payment Summary</h6>
@@ -3053,13 +3244,14 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
             <button onClick={handleExportSalaryPDF} className="bg-purple-600 text-white px-3 py-1 rounded shadow hover:bg-purple-700">Export PDF</button>
           </div>
           <div className="overflow-x-auto rounded border border-gray-200">
-            <table className="min-w-full divide-y divide-gray-200 text-xs">
+              <table id="salaries-table" className="min-w-full divide-y divide-gray-200 text-xs">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-2 py-1">Date</th>
                   <th className="px-2 py-1">Month</th>
                   <th className="px-2 py-1">Employee</th>
                   <th className="px-2 py-1">Post</th>
+                  <th className="px-2 py-1">Payment Mode</th>
                   <th className="px-2 py-1">Earnings</th>
                   <th className="px-2 py-1">Deductions</th>
                   <th className="px-2 py-1">Net Amount</th>
@@ -3075,6 +3267,7 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
                     <td className="px-2 py-1">{entry.month}</td>
                     <td className="px-2 py-1">{entry.employeeName} ({entry.employeeId})</td>
                     <td className="px-2 py-1">{entry.post}</td>
+                    <td className="px-2 py-1">{entry.paymentMode || '-'}</td>
                     <td className="px-2 py-1 text-green-600 font-medium">₹{Number(entry.totalEarnings || entry.total || 0).toLocaleString('en-IN')}</td>
                     <td className="px-2 py-1 text-red-600 font-medium">₹{Number(entry.totalDeductions || 0).toLocaleString('en-IN')}</td>
                     <td className="px-2 py-1 text-blue-600 font-bold">₹{Number(entry.netAmount || entry.total || 0).toLocaleString('en-IN')}</td>
@@ -3107,60 +3300,7 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
               </tfoot>
             </table>
             
-            {/* Debug Test Button */}
-            <div className="mt-4 p-4 bg-gray-100 rounded-lg">
-              <h4 className="text-sm font-semibold mb-2">Debug Tools</h4>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => {
-                    console.log('=== TEST DELETE FUNCTION ===');
-                    console.log('Salary payments count:', salaryPayments.length);
-                    if (salaryPayments.length > 0) {
-                      const firstPayment = salaryPayments[0];
-                
-                      handleDeleteSalaryPayment(firstPayment.id);
-                    } else {
-                      console.log('No salary payments to test with');
-                    }
-                  }}
-                  className="bg-purple-600 text-white px-3 py-1 rounded text-xs hover:bg-purple-700"
-                >
-                  Test Delete Function
-                </button>
-                <button
-                  onClick={() => {
-                    console.log('=== MANUAL MIGRATION TRIGGER ===');
-                    console.log('Current auth state:', { isAuthReady, userId, appId });
-                    try {
-                      const result = migrateExpenseData(db, appId, userId);
-                      console.log('Manual migration result:', result);
-                      if (result.success) {
-                        alert('Manual migration completed successfully!');
-                        window.location.reload();
-                      } else {
-                        alert('Manual migration failed: ' + result.error);
-                      }
-                    } catch (error) {
-                      console.error('Manual migration error:', error);
-                      alert('Manual migration error: ' + error.message);
-                    }
-                  }}
-                  className="bg-red-600 text-white px-3 py-1 rounded text-xs hover:bg-red-700"
-                >
-                  Manual Migration
-                </button>
-                <button
-                  onClick={() => {
-                    console.log('=== CACHE BUSTER ===');
-                    console.log('Cache buster timestamp:', Date.now());
-                    window.location.reload();
-                  }}
-                  className="bg-orange-600 text-white px-3 py-1 rounded text-xs hover:bg-orange-700"
-                >
-                  Force Refresh
-                </button>
-              </div>
-            </div>
+            {/* Debug tools removed for production */}
           </div>
         </div>
       );
@@ -3176,21 +3316,37 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
               {FIXED_HEADS.map(h => <option key={h} value={h}>{h}</option>)}
             </select>
             <input name="amount" value={expenseForm.amount} onChange={handleExpenseFormChange} type="number" placeholder="Amount" className="border rounded p-1 text-sm" required />
+            <select name="paymentMode" value={expenseForm.paymentMode} onChange={handleExpenseFormChange} className="border rounded p-1 text-sm">
+              <option value="Cash">Cash</option>
+              <option value="Bank Transfer">Bank Transfer</option>
+              <option value="UPI">UPI</option>
+              <option value="Cheque">Cheque</option>
+              <option value="Card">Card</option>
+              <option value="Other">Other</option>
+            </select>
             <input name="description" value={expenseForm.description} onChange={handleExpenseFormChange} placeholder="Description" className="border rounded p-1 text-sm" />
             <input name="receipt" type="file" accept="image/*,application/pdf" onChange={handleExpenseFormChange} className="border rounded p-1 text-sm" />
-            <button type="submit" className="bg-green-600 text-white px-3 py-1 rounded">Add Expense</button>
+            {editingExpenseId ? (
+              <div className="flex gap-2">
+                <button type="button" onClick={() => handleSaveExpense(editingExpenseId)} className="bg-green-600 text-white px-3 py-1 rounded">Save Changes</button>
+                <button type="button" onClick={handleCancelEditExpense} className="bg-gray-500 text-white px-3 py-1 rounded">Cancel</button>
+              </div>
+            ) : (
+              <button type="submit" className="bg-green-600 text-white px-3 py-1 rounded">Add Expense</button>
+            )}
           </form>
 
           {/* Fixed Expenses Table */}
           <div className="mt-6">
             <h4 className="text-md font-semibold mb-3">Fixed Expenses List</h4>
             <div className="overflow-x-auto">
-              <table className="min-w-full bg-white border border-gray-300">
+              <table id="fixed-expenses-table" className="min-w-full bg-white border border-gray-300">
                 <thead>
                   <tr className="bg-gray-100">
                     <th className="px-3 py-2 border-b text-left">Date</th>
                     <th className="px-3 py-2 border-b text-left">Head</th>
                     <th className="px-3 py-2 border-b text-right">Amount</th>
+                    <th className="px-3 py-2 border-b text-left">Payment Mode</th>
                     <th className="px-3 py-2 border-b text-left">Description</th>
                     <th className="px-3 py-2 border-b text-center">Actions</th>
                   </tr>
@@ -3203,6 +3359,7 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
                       <td className="px-3 py-2 border-b">{expense.date}</td>
                       <td className="px-3 py-2 border-b">{expense.head}</td>
                       <td className="px-3 py-2 border-b text-right">₹{Number(expense.amount).toLocaleString('en-IN')}</td>
+                      <td className="px-3 py-2 border-b">{expense.paymentMode || '-'}</td>
                       <td className="px-3 py-2 border-b">{expense.description || '-'}</td>
                       <td className="px-3 py-2 border-b text-center">
                         <div className="flex gap-1 justify-center">
@@ -3233,11 +3390,94 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
                   <tr className="bg-gray-100">
                     <td colSpan={2} className="px-3 py-2 font-bold">Total:</td>
                     <td className="px-3 py-2 text-right font-bold">₹{expenses.reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0).toLocaleString('en-IN')}</td>
-                    <td colSpan={2}></td>
+                    <td colSpan={3}></td>
                   </tr>
                 </tfoot>
               </table>
             </div>
+          </div>
+        </div>
+      );
+    }
+    if (selectedGroup === 'advances') {
+      const employeeOptions = employees.map(e => ({ value: e.employeeId, label: `${e.name} (${e.employeeId})` }));
+      const handleIrregularEmployeeSelect = (e) => setIrregularForm(f => ({ ...f, employeeId: e.target.value }));
+      const rows = irregularPayments;
+      return (
+        <div className="mb-6">
+          <h3 className="text-lg font-semibold mb-2">Labour/Advances</h3>
+          <form className="flex flex-wrap gap-2 mb-4" onSubmit={handleSaveIrregular}>
+            <input type="date" name="date" value={irregularForm.date} onChange={handleIrregularFormChange} className="border rounded p-1 text-sm" required />
+            <select name="personType" value={irregularForm.personType} onChange={handleIrregularFormChange} className="border rounded p-1 text-sm">
+              <option value="Employee">Employee</option>
+              <option value="Labour">Labour</option>
+              <option value="Freelancer">Freelancer</option>
+              <option value="Other">Other</option>
+            </select>
+            {irregularForm.personType === 'Employee' ? (
+              <select value={irregularForm.employeeId} onChange={handleIrregularEmployeeSelect} className="border rounded p-1 text-sm min-w-[200px]">
+                <option value="">Select employee...</option>
+                {employeeOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+              </select>
+            ) : (
+              <input name="personName" placeholder="Person name" value={irregularForm.personName} onChange={handleIrregularFormChange} className="border rounded p-1 text-sm min-w-[200px]" />
+            )}
+            <select name="paymentType" value={irregularForm.paymentType} onChange={handleIrregularFormChange} className="border rounded p-1 text-sm">
+              <option>Advance</option>
+              <option>Festival Bonus</option>
+              <option>Bonus</option>
+              <option>Incentive</option>
+              <option>Other</option>
+            </select>
+            <input name="amount" type="number" placeholder="Amount" value={irregularForm.amount} onChange={handleIrregularFormChange} className="border rounded p-1 text-sm w-24" required />
+            <input name="remark" placeholder="Remark" value={irregularForm.remark} onChange={handleIrregularFormChange} className="border rounded p-1 text-sm w-48" />
+            <select name="paymentMode" value={irregularForm.paymentMode} onChange={handleIrregularFormChange} className="border rounded p-1 text-sm">
+              <option>Cash</option>
+              <option>Bank Transfer</option>
+              <option>UPI</option>
+              <option>Cheque</option>
+              <option>Card</option>
+              <option>Other</option>
+            </select>
+            <button type="submit" className="bg-green-600 text-white px-3 py-1 rounded">Save</button>
+          </form>
+          <div className="overflow-x-auto rounded border border-gray-200">
+            <table className="min-w-full divide-y divide-gray-200 text-xs">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-2 py-1">Date</th>
+                  <th className="px-2 py-1">Person</th>
+                  <th className="px-2 py-1">Type</th>
+                  <th className="px-2 py-1">Amount</th>
+                  <th className="px-2 py-1">Payment Mode</th>
+                  <th className="px-2 py-1">Applied</th>
+                  <th className="px-2 py-1">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.length === 0 ? (
+                  <tr><td colSpan={7} className="text-center py-4 text-gray-400">No entries</td></tr>
+                ) : rows.map(item => (
+                  <tr key={item.id}>
+                    <td className="px-2 py-1">{item.date}</td>
+                    <td className="px-2 py-1">
+                      {item.personType === 'Employee' ? (
+                        employees.find(e => e.employeeId === item.employeeId)?.name || item.employeeId
+                      ) : (
+                        item.personName || '-'
+                      )}
+                    </td>
+                    <td className="px-2 py-1">{item.paymentType}</td>
+                    <td className="px-2 py-1 text-blue-600 font-semibold">₹{Number(item.amount || 0).toLocaleString('en-IN')}</td>
+                    <td className="px-2 py-1">{item.paymentMode || '-'}</td>
+                    <td className="px-2 py-1">{item.applied ? 'Yes' : 'No'}</td>
+                    <td className="px-2 py-1">
+                      <button onClick={() => handleDeleteIrregular(item.id)} className="text-red-600 hover:text-red-800">Delete</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       );
@@ -3253,21 +3493,37 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
               {VARIABLE_HEADS.map(h => <option key={h} value={h}>{h}</option>)}
             </select>
             <input name="amount" value={expenseForm.amount} onChange={handleExpenseFormChange} type="number" placeholder="Amount" className="border rounded p-1 text-sm" required />
+            <select name="paymentMode" value={expenseForm.paymentMode} onChange={handleExpenseFormChange} className="border rounded p-1 text-sm">
+              <option value="Cash">Cash</option>
+              <option value="Bank Transfer">Bank Transfer</option>
+              <option value="UPI">UPI</option>
+              <option value="Cheque">Cheque</option>
+              <option value="Card">Card</option>
+              <option value="Other">Other</option>
+            </select>
             <input name="description" value={expenseForm.description} onChange={handleExpenseFormChange} placeholder="Description" className="border rounded p-1 text-sm" />
             <input name="receipt" type="file" accept="image/*,application/pdf" onChange={handleExpenseFormChange} className="border rounded p-1 text-sm" />
-            <button type="submit" className="bg-green-600 text-white px-3 py-1 rounded">Add Expense</button>
+            {editingExpenseId ? (
+              <div className="flex gap-2">
+                <button type="button" onClick={() => handleSaveExpense(editingExpenseId)} className="bg-green-600 text-white px-3 py-1 rounded">Save Changes</button>
+                <button type="button" onClick={handleCancelEditExpense} className="bg-gray-500 text-white px-3 py-1 rounded">Cancel</button>
+              </div>
+            ) : (
+              <button type="submit" className="bg-green-600 text-white px-3 py-1 rounded">Add Expense</button>
+            )}
           </form>
 
           {/* Variable Expenses Table */}
           <div className="mt-6">
             <h4 className="text-md font-semibold mb-3">Variable Expenses List</h4>
             <div className="overflow-x-auto">
-              <table className="min-w-full bg-white border border-gray-300">
+              <table id="variable-expenses-table" className="min-w-full bg-white border border-gray-300">
                 <thead>
                   <tr className="bg-gray-100">
                     <th className="px-3 py-2 border-b text-left">Date</th>
                     <th className="px-3 py-2 border-b text-left">Head</th>
                     <th className="px-3 py-2 border-b text-right">Amount</th>
+                    <th className="px-3 py-2 border-b text-left">Payment Mode</th>
                     <th className="px-3 py-2 border-b text-left">Description</th>
                     <th className="px-3 py-2 border-b text-center">Actions</th>
                   </tr>
@@ -3280,6 +3536,7 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
                       <td className="px-3 py-2 border-b">{expense.date}</td>
                       <td className="px-3 py-2 border-b">{expense.head}</td>
                       <td className="px-3 py-2 border-b text-right">₹{Number(expense.amount).toLocaleString('en-IN')}</td>
+                      <td className="px-3 py-2 border-b">{expense.paymentMode || '-'}</td>
                       <td className="px-3 py-2 border-b">{expense.description || '-'}</td>
                       <td className="px-3 py-2 border-b text-center">
                         <div className="flex gap-1 justify-center">
@@ -3310,7 +3567,7 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
                   <tr className="bg-gray-100">
                     <td colSpan={2} className="px-3 py-2 font-bold">Total:</td>
                     <td className="px-3 py-2 text-right font-bold">₹{expenses.reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0).toLocaleString('en-IN')}</td>
-                    <td colSpan={2}></td>
+                    <td colSpan={3}></td>
                   </tr>
                 </tfoot>
               </table>
@@ -3386,6 +3643,7 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
     setSalaryEmployeeId(payment.employeeId);
     setSalaryDate(payment.date);
     setSalaryMonth(payment.month);
+    setSalaryPaymentMode(payment.paymentMode || 'Cash');
     setSelectedEmployeeDisplay(payment.employeeName);
     
     // Load existing data - handle both old and new formats
@@ -3406,6 +3664,47 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
     setSalaryDeductions(payment.deductions || []);
     
     setShowEditSalaryModal(true);
+  };
+
+  // --- Irregular payments helpers ---
+  const handleIrregularFormChange = e => {
+    const { name, value } = e.target;
+    setIrregularForm(f => ({ ...f, [name]: value }));
+  };
+  const handleSaveIrregular = async (e) => {
+    e.preventDefault();
+    if (!irregularForm.amount || Number(irregularForm.amount) <= 0) return alert('Enter valid amount');
+    if (irregularForm.personType === 'Employee' && !irregularForm.employeeId) return alert('Select employee');
+    try {
+      await addDoc(collection(db, `artifacts/${appId}/users/${userId}/irregularPayments`), {
+        ...irregularForm,
+        amount: Number(irregularForm.amount),
+        applied: false,
+        createdAt: serverTimestamp(),
+      });
+      setIrregularForm({
+        date: new Date().toISOString().split('T')[0],
+        personType: 'Employee',
+        employeeId: '',
+        personName: '',
+        paymentType: 'Advance',
+        amount: '',
+        remark: '',
+        paymentMode: 'Cash'
+      });
+    } catch (e) {
+      console.error('Failed to save irregular payment', e);
+      alert('Failed to save');
+    }
+  };
+  const handleDeleteIrregular = async (id) => {
+    if (!window.confirm('Delete this entry?')) return;
+    try {
+      await deleteDoc(doc(db, `artifacts/${appId}/users/${userId}/irregularPayments`, id));
+    } catch (e) {
+      console.error('Delete irregular failed', e);
+      alert('Failed to delete');
+    }
   };
 
   const handleDeleteSalaryPayment = async (paymentId) => {
@@ -3445,8 +3744,10 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
         totalEarnings,
         totalDeductions,
         netAmount,
+        paymentMode: salaryPaymentMode,
         updatedAt: serverTimestamp(),
       });
+      await reloadSalaryPayments();
 
       alert('Salary payment updated successfully!');
       setShowEditSalaryModal(false);
@@ -3455,6 +3756,11 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
       setFixedSalaryRows([]);
       setPerformanceSalaryRows([]);
       setSalaryDeductions([]);
+      // Clear any pre-filled selection in main form
+      setSalaryEmployeeId('');
+      setSelectedEmployeeDisplay('');
+      setSalaryDate('');
+      setSalaryMonth('');
     } catch (error) {
       console.error('Error updating salary payment:', error);
       alert('Error updating salary payment. Please try again.');
@@ -3468,6 +3774,11 @@ const Expenses = ({ db, userId, isAuthReady, appId, setShowSettings }) => {
     setFixedSalaryRows([]);
     setPerformanceSalaryRows([]);
     setSalaryDeductions([]);
+    // Also reset main form fields so edited values don't linger
+    setSalaryEmployeeId('');
+    setSelectedEmployeeDisplay('');
+    setSalaryDate('');
+    setSalaryMonth('');
   };
 
 

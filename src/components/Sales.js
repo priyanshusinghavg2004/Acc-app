@@ -198,7 +198,13 @@ function Sales({ db, userId, isAuthReady, appId }) {
   const [showFilters, setShowFilters] = useState(false);
   
   // Add state for document type (Invoice, Challan, Quotation)
-  const [docType, setDocType] = useState('invoice'); // 'invoice', 'challan', 'quotation'
+  const [docType, setDocType] = useState(() => {
+    try {
+      const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+      const t = params.get('type');
+      return ['invoice','challan','quotation'].includes(t) ? t : 'invoice';
+    } catch { return 'invoice'; }
+  }); // 'invoice', 'challan', 'quotation'
   const docTypeOptions = [
     { value: 'invoice', label: 'INVOICE', collection: 'salesBills', numberLabel: 'Invoice Number' },
     { value: 'challan', label: 'CHALLAN', collection: 'challans', numberLabel: 'Challan Number' },
@@ -212,6 +218,33 @@ function Sales({ db, userId, isAuthReady, appId }) {
 
   // Add state for editing bill
   const [editingBillId, setEditingBillId] = useState(null);
+
+  // Sync docType and view bill to URL for deep links
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+    if (params.get('type') !== docType) params.set('type', docType);
+    if (editingBillId) params.set('edit', editingBillId); else params.delete('edit');
+    const base = window.location.hash.split('?')[0];
+    const next = `${base}?${params.toString()}`;
+    if (window.location.hash !== next) window.location.hash = next;
+  }, [docType, editingBillId]);
+
+  // On mount, open view/edit if URL has ids
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+    const viewId = params.get('view');
+    const editId = params.get('edit');
+    if (viewId) {
+      const selected = docTypeOptions.find(opt => opt.value === docType);
+      if (selected) {
+        getDoc(doc(db, `artifacts/${appId}/users/${userId}/${selected.collection}`, viewId)).then(snap => {
+          if (snap.exists()) { setViewBill({ id: snap.id, ...snap.data() }); setShowViewModal(true); }
+        }).catch(() => {});
+      }
+    }
+    if (editId) setEditingBillId(editId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Add state for custom fields
   const [customFields, setCustomFields] = useState({ ewayBillNo: '', ewayQr: '', ewayDate: '' });
@@ -804,9 +837,15 @@ function Sales({ db, userId, isAuthReady, appId }) {
       setErrorMessage('Bill number already exists in another document. Please use a unique number.');
       return;
     }
-    // 2. Gap/date check: allow if any bill in FY has the same date
+    // 2. Gap/date check: allow if any bill in FY has the same date (match current doc type and FY)
     const fy = getFinancialYear(invoiceDate);
-    const fyBills = allBills.filter(b => (b.number || '').startsWith(fy));
+    const fyShort = String(fy)
+      .split('-')
+      .map(y => String(y).slice(-2))
+      .join('-');
+    const prefixMap = { invoice: 'INV', challan: 'CHA', quotation: 'QUO' };
+    const typePrefix = prefixMap[docType] || 'INV';
+    const fyBills = allBills.filter(b => (b.number || '').startsWith(typePrefix + fyShort));
     const thisSerial = parseInt((invoiceNumber || '').split('/')[1], 10);
     const thisDate = new Date(invoiceDate);
     const sameDateExists = fyBills.some(b => {
@@ -1428,8 +1467,11 @@ function Sales({ db, userId, isAuthReady, appId }) {
     yPosition = pageHeight - 30;
     doc.text('Authorized Signatory', pageWidth - margin - 50, yPosition, { align: 'right' });
     
-      // Save PDF
-      const fileName = `receipt_${receiptNumber.replace(/[^a-zA-Z0-9]/g, '_')}_${paymentDate}.pdf`;
+      // Save PDF with initials and compact date
+      const fmt = (d) => {
+        try { const x = new Date(d); const day = String(x.getDate()); const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][x.getMonth()]; const yr = x.getFullYear(); return `${day}${mon}${yr}`; } catch { return d; }
+      };
+      const fileName = `REC_${receiptNumber.replace(/[^a-zA-Z0-9/]/g, '_')}_${fmt(paymentDate)}.pdf`;
       doc.save(fileName);
     } catch (error) {
       console.error('Error generating PDF:', error);
@@ -1584,9 +1626,11 @@ function Sales({ db, userId, isAuthReady, appId }) {
           el.style.display = 'none';
         });
         
+        const fmt = (d) => { try { const x = new Date(d); const day = String(x.getDate()); const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][x.getMonth()]; const yr = x.getFullYear(); return `${day}${mon}${yr}`; } catch { return d; } };
+        const fy = (()=>{ try { const d = new Date(invoiceBill?.invoiceDate || invoiceBill?.date || new Date()); let y = d.getFullYear(); if (d.getMonth()<3) y-=1; return `${String(y).slice(-2)}-${String(y+1).slice(-2)}`; } catch { return ''; }})();
         html2pdf.default().from(tempContainer).set({
           margin: 0.5,
-          filename: `${docTypeOptions.find(opt => opt.value === docType)?.label || 'Invoice'}_${invoiceBill?.number || 'Bill'}.pdf`,
+          filename: `${(docTypeOptions.find(opt => opt.value === docType)?.label || 'Invoice').toUpperCase()}_${invoiceBill?.number || 'Bill'}_${fmt(invoiceBill?.invoiceDate || invoiceBill?.date)}.pdf`,
           html2canvas: { scale: 2 },
           jsPDF: { unit: 'in', format: 'a4', orientation: 'portrait' }
         }).save();
@@ -1650,7 +1694,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
         </div>
       </div>
       <div className="bg-white rounded-lg shadow-md p-4 sm:p-8 w-full max-w-5xl mx-4 sm:mx-0">
-        <h2 className="text-xl sm:text-3xl font-bold text-center mb-4 sm:mb-6 uppercase">{docTypeOptions.find(opt => opt.value === docType)?.label || 'INVOICE'}</h2>
+        <h2 id="sales-tabs" className="text-xl sm:text-3xl font-bold text-center mb-4 sm:mb-6 uppercase">{docTypeOptions.find(opt => opt.value === docType)?.label || 'INVOICE'}</h2>
         {/* Remove print area (SunriseTemplate for printing) */}
         {/* Remove print button from the form actions */}
         {/* Hide form/table UI when printing - not needed */}
@@ -1701,7 +1745,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
               </div>
             </div>
                     </div>
-          <h3 className="text-xl font-bold text-gray-800 mb-2">Invoice Items</h3>
+          <h3 id="invoice-items-title" className="text-xl font-bold text-gray-800 mb-2">Invoice Items</h3>
           <div className="overflow-x-auto rounded-lg border border-gray-200 mb-4">
             <table className="min-w-full divide-y divide-gray-200 text-sm">
                 <thead className="bg-gray-50">
@@ -1875,7 +1919,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
           <div className="flex flex-col md:flex-row md:justify-between items-start md:items-center mb-6">
             <div className="flex flex-col md:flex-row gap-2 mb-4 md:mb-0">
               <button onClick={addRow} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md">Add Item Row</button>
-              <button onClick={() => setShowAddItemModal(true)} className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md">ADD ITEM</button>
+              <button data-tour="new-invoice" onClick={() => setShowAddItemModal(true)} className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md">ADD ITEM</button>
             </div>
             <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 w-full md:w-80">
               <div className="flex justify-between mb-1"><span>Subtotal (Excl. GST):</span><span>₹{rows.reduce((sum, row) => sum + (parseFloat(row.amount) || 0), 0)}</span></div>
@@ -1890,6 +1934,7 @@ function Sales({ db, userId, isAuthReady, appId }) {
 
           <div className="flex flex-col md:flex-row gap-4">
             <button
+              id="save-invoice-button"
               onClick={handleSaveInvoice}
               className="flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-md shadow-md transition duration-300 ease-in-out transform hover:scale-105 print:hidden"
             >

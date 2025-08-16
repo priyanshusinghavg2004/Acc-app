@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { collection, addDoc, query, onSnapshot, serverTimestamp, doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { useTableSort, SortableHeader } from '../utils/tableSort';
 import { useTablePagination } from '../utils/tablePagination';
@@ -12,7 +13,11 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
     const [email, setEmail] = useState('');
     const [whatsapp, setWhatsapp] = useState('');
     const [gstin, setGstin] = useState('');
-    const [partyType, setPartyType] = useState('Buyer');
+    const location = useLocation();
+    const [partyType, setPartyType] = useState(() => {
+        const p = new URLSearchParams(location.search).get('type');
+        return p === 'Supplier' ? 'Supplier' : 'Buyer';
+    });
     const [message, setMessage] = useState('');
     const [partiesList, setPartiesList] = useState([]);
     const [editingPartyId, setEditingPartyId] = useState(null);
@@ -48,6 +53,17 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
     const phoneRegex = /^[6-9][0-9]{9}$/;
     // Indian PAN validation regex (5 letters + 4 digits + 1 letter)
     const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
+
+    // Keep partyType in URL
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+        if (params.get('type') !== partyType) {
+            params.set('type', partyType);
+            const base = window.location.hash.split('?')[0] || '#/parties';
+            const next = `${base}?${params.toString()}`;
+            if (window.location.hash !== next) window.location.hash = next;
+        }
+    }, [partyType]);
 
     // Fetch parties data from Firestore
     useEffect(() => {
@@ -209,7 +225,7 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
 
     return (
         <div className="p-4 sm:p-6 bg-white rounded-lg shadow-md">
-            <h2 className="text-xl sm:text-2xl font-bold text-gray-800 mb-4">Manage Parties (Buyers & Sellers)</h2>
+            <h2 id="parties-title" className="text-xl sm:text-2xl font-bold text-gray-800 mb-4">Manage Parties (Buyers & Sellers)</h2>
 
             {message && (
                 <div className={`p-3 mb-4 rounded-md ${message.includes('Error') ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
@@ -217,6 +233,7 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
                 </div>
             )}
 
+            <div id="party-entry-form">
             <h3 className="text-lg sm:text-xl font-bold text-gray-800 mb-4">{editingPartyId ? 'Edit Party' : 'Add New Party'}</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 mb-6">
                 <div>
@@ -322,8 +339,9 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
                         min="0" />
                 </div>
             </div>
+            </div>
             <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-4">
-                <button onClick={handleSaveParty}
+                <button data-tour="add-party" onClick={handleSaveParty}
                     className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 sm:py-2 px-4 rounded-md shadow-md transition duration-300 ease-in-out transform hover:scale-105 min-h-[44px]">
                     {editingPartyId ? 'Update Party' : 'Add Party'}
                 </button>
@@ -340,7 +358,7 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
                 <p className="text-gray-600">No parties added yet. Add your first party above!</p>
             ) : (
                 <div className="overflow-x-auto rounded-lg shadow-md border border-gray-200 table-responsive">
-                    <table className="min-w-full divide-y divide-gray-200">
+                    <table id="parties-table" className="min-w-full divide-y divide-gray-200">
                         <thead className="bg-gray-50">
                             <tr>
                                 <SortableHeader columnKey="firmName" label="Firm Name" onSort={handleSort} sortConfig={sortConfig} />
@@ -385,7 +403,9 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
                     </table>
                     
                     {/* Pagination Controls */}
-                    <PaginationControls {...pagination} />
+                    <div id="parties-pagination">
+                      <PaginationControls {...pagination} />
+                    </div>
                 </div>
             )}
         </div>

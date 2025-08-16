@@ -3,6 +3,8 @@ import { collection, query, where, orderBy, getDocs } from 'firebase/firestore';
 import { useTableSort, SortableHeader } from '../../utils/tableSort';
 import { useTablePagination } from '../../utils/tablePagination';
 import PaginationControls from '../../utils/PaginationControls';
+import GlobalExportButtons from '../GlobalExportButtons';
+import { buildReportFilename, exportTableAsImage, shareLink } from './exportUtils';
 
 const PurchaseBillsSummary = ({ db, userId, appId, dateRange, financialYear, selectedParty, parties, loading, setLoading, companyDetails }) => {
   const [billsData, setBillsData] = useState([]);
@@ -229,15 +231,102 @@ const PurchaseBillsSummary = ({ db, userId, appId, dateRange, financialYear, sel
 
   const displayData = billsData;
 
+  // Prepare export data for GlobalExportButtons
+  const getExportData = () => displayData.map(r => ({
+    partyName: r.partyName,
+    totalInvoices: r.totalInvoices,
+    totalAmount: r.totalAmount,
+    totalGST: r.totalGST,
+    totalPaid: r.totalPaid,
+    totalOutstanding: r.totalOutstanding
+  }));
+
+  const getExportColumns = () => [
+    { key: 'partyName', label: 'Party Name' },
+    { key: 'totalInvoices', label: 'Total Invoices' },
+    { key: 'totalAmount', label: 'Total Amount' },
+    { key: 'totalGST', label: 'Total GST' },
+    { key: 'totalPaid', label: 'Total Paid' },
+    { key: 'totalOutstanding', label: 'Total Outstanding' }
+  ];
+
+  const getReportDetails = () => ({
+    'Period': `${new Date(dateRange.start).toLocaleDateString('en-IN')} to ${new Date(dateRange.end).toLocaleDateString('en-IN')}`,
+    'Total Parties': displayData.length,
+    'Total Invoices': displayData.reduce((sum, r) => sum + (r.totalInvoices || 0), 0),
+    'Total Amount': displayData.reduce((sum, r) => sum + (r.totalAmount || 0), 0),
+    'Total Outstanding': displayData.reduce((sum, r) => sum + (r.totalOutstanding || 0), 0),
+    dateRange
+  });
+
+
+
+  const exportAsImage = async () => {
+    const filename = buildReportFilename({ prefix: 'PURCHASE_SUMMARY', dateRange });
+    const columns = [
+      { key: 'partyName', label: 'Party Name' },
+      { key: 'totalInvoices', label: 'Total Invoices' },
+      { key: 'totalAmount', label: 'Total Amount' },
+      { key: 'totalGST', label: 'Total GST' },
+      { key: 'totalPaid', label: 'Total Paid' },
+      { key: 'totalOutstanding', label: 'Total Outstanding' }
+    ];
+    
+    await exportTableAsImage({
+      data: displayData.map(r => ({
+        partyName: r.partyName,
+        totalInvoices: r.totalInvoices,
+        totalAmount: r.totalAmount,
+        totalGST: r.totalGST,
+        totalPaid: r.totalPaid,
+        totalOutstanding: r.totalOutstanding
+      })),
+      columns,
+      filename,
+      companyDetails,
+      reportDetails: {
+        'Period': `${new Date(dateRange.start).toLocaleDateString('en-IN')} to ${new Date(dateRange.end).toLocaleDateString('en-IN')}`,
+        'Total Parties': displayData.length,
+        'Total Invoices': displayData.reduce((sum, r) => sum + (r.totalInvoices || 0), 0),
+        'Total Amount': formatCurrency(displayData.reduce((sum, r) => sum + (r.totalAmount || 0), 0)),
+        'Total Outstanding': formatCurrency(displayData.reduce((sum, r) => sum + (r.totalOutstanding || 0), 0))
+      }
+    });
+  };
+
+  const shareReportLink = () => {
+    const shareData = {
+      title: 'ACCTOO Purchase Bills Report',
+      text: `Check out this Purchase Bills Summary Report from ACCTOO - ${displayData.length} parties with total outstanding ${formatCurrency(displayData.reduce((sum, r) => sum + (r.totalOutstanding || 0), 0))}`,
+      url: window.location.href
+    };
+    
+    shareLink(shareData);
+  };
+
   return (
     <div className="p-6">
       {/* Report Header */}
       <div className="mb-6">
-        <h2 className="text-xl font-bold text-gray-800 mb-2">Purchase Bill Summary</h2>
-        <p className="text-gray-600">
-          Period: {formatDate(dateRange.start)} to {formatDate(dateRange.end)}
-          {selectedParty && (() => { const p = parties.find(pp => pp.id === selectedParty); return ` | Party: ${p?.firmName || p?.partyName || p?.name || selectedParty}`; })()}
-        </p>
+        <div className="flex justify-between items-start">
+          <div>
+            <h2 className="text-xl font-bold text-gray-800 mb-2">Purchase Bill Summary</h2>
+            <p className="text-gray-600">
+              Period: {formatDate(dateRange.start)} to {formatDate(dateRange.end)}
+              {selectedParty && (() => { const p = parties.find(pp => pp.id === selectedParty); return ` | Party: ${p?.firmName || p?.partyName || p?.name || selectedParty}`; })()}
+            </p>
+          </div>
+          {/* Global Export/Print/Share Buttons */}
+          <GlobalExportButtons
+            data={getExportData()}
+            columns={getExportColumns()}
+            filename="PURCHASE_SUMMARY"
+            title="Purchase Bills Summary Report"
+            companyDetails={companyDetails}
+            reportDetails={getReportDetails()}
+            disabled={displayData.length === 0}
+          />
+        </div>
       </div>
 
       {/* Summary Cards */}
@@ -282,6 +371,8 @@ const PurchaseBillsSummary = ({ db, userId, appId, dateRange, financialYear, sel
         {/* Pagination */}
         <PaginationControls {...pagination} />
       </div>
+
+      {/* Totals Row (Summary cards exist; ensure totals at bottom are visible) */}
 
       {/* Modal + Quick Summary like sales */}
       {showModal && modalParty && (

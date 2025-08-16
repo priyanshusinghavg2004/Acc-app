@@ -13,7 +13,7 @@ import BillTemplates from './components/BillTemplates';
 import CompanyDetails from './components/CompanyDetails';
 import CompanyDetailsWizard from './components/CompanyDetailsWizard';
 import Expenses from './components/Expenses';
-import UserOnboarding from './components/UserOnboarding';
+// import UserOnboarding from './components/UserOnboarding';
 import HelpSupport from './components/HelpSupport';
 import NotificationSettings from './components/NotificationSettings';
 import LandingPage from './components/LandingPage';
@@ -22,6 +22,7 @@ import DataExport from './components/DataExport';
 import OfflineIndicator from './components/OfflineIndicator';
 import MobileBottomNav from './components/MobileBottomNav';
 import Settings from './components/Settings';
+import TourGuide from './components/TourGuide';
 
 import { db, auth } from './firebase.config';
 import { 
@@ -57,7 +58,7 @@ function App() {
   const [registerCompany, setRegisterCompany] = useState('');
   const [registerError, setRegisterError] = useState('');
   const [showCompanyDetailsWizard, setShowCompanyDetailsWizard] = useState(false);
-  const [companyWizardStep, setCompanyWizardStep] = useState(1);
+  // const [companyWizardStep, setCompanyWizardStep] = useState(1);
   const [showCompanyDetailsModal, setShowCompanyDetailsModal] = useState(false);
   const appId = 'acc-app-e5316'; // Use the Firebase project ID
 
@@ -82,10 +83,10 @@ function App() {
   const [companyDetails, setCompanyDetails] = useState({});
 
   // Custom tour state
-  const [showTour, setShowTour] = useState(false);
-  const [currentTourStep, setCurrentTourStep] = useState(0);
+  // const [showTour, setShowTour] = useState(false);
+  // const [currentTourStep, setCurrentTourStep] = useState(0);
   // Update tour steps to be more relevant:
-  const tourSteps = [
+  /* const tourSteps = [
     {
       title: 'Welcome to ACCTOO!',
       content: 'Your complete accounting and business management solution. Let us show you around.',
@@ -106,15 +107,58 @@ function App() {
       content: 'You can now explore all the features. Start with Sales or Company Details to get going.',
       position: 'center'
     }
-  ];
+  ]; */
 
   // Onboarding and Help state
-  const [showOnboarding, setShowOnboarding] = useState(false);
+  // const [showOnboarding, setShowOnboarding] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showNotificationSettings, setShowNotificationSettings] = useState(false);
 
   const [showDataExport, setShowDataExport] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showTour, setShowTour] = useState(false);
+  const [tourIdx, setTourIdx] = useState(0);
+  const [activeTourId, setActiveTourId] = useState('full');
+
+  // Persist tour state in localStorage
+  useEffect(() => {
+    if (showTour) {
+      try {
+        localStorage.setItem('tourOpen', '1');
+        localStorage.setItem('tourIdx', String(tourIdx));
+      } catch {}
+    } else {
+      try {
+        localStorage.removeItem('tourOpen');
+        localStorage.removeItem('tourIdx');
+      } catch {}
+    }
+  }, [showTour, tourIdx]);
+
+  // Resume tour if it was open before refresh
+  useEffect(() => {
+    try {
+      const open = localStorage.getItem('tourOpen') === '1';
+      const idx = parseInt(localStorage.getItem('tourIdx') || '0', 10);
+      const snoozeUntil = parseInt(localStorage.getItem('tourSnoozeUntil') || '0', 10);
+      const snoozed = !isNaN(snoozeUntil) && Date.now() < snoozeUntil;
+      if (open && !snoozed) {
+        setTourIdx(isNaN(idx) ? 0 : idx);
+        setShowTour(true);
+      }
+    } catch {}
+  }, []);
+
+  // Navigate to step route (hash) when tour step changes
+  useEffect(() => {
+    if (!showTour) return;
+    const steps = getTourSteps(activeTourId);
+    const step = steps[tourIdx];
+    if (step?.route) {
+      const desired = step.route.startsWith('#') ? step.route : `#${step.route}`;
+      if (window.location.hash !== desired) window.location.hash = desired;
+    }
+  }, [showTour, tourIdx, activeTourId]);
 
 
   // Add state to store the newly created user's UID during registration:
@@ -133,13 +177,9 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // Remove the automatic tour trigger for existing users:
-  // useEffect(() => {
-  //   if (user && localStorage.getItem('hasSeenTour') !== 'true') {
-  //     setShowTour(true);
-  //     setCurrentTourStep(0);
-  //   }
-  // }, [user]);
+  // Removed email verification related effects
+
+  // Remove the automatic tour trigger for existing users (legacy)
 
   useEffect(() => {
     if (openDropdown !== null) {
@@ -335,19 +375,7 @@ function App() {
 
 
 
-  const handleTourNext = () => {
-    if (currentTourStep < tourSteps.length - 1) {
-      setCurrentTourStep(currentTourStep + 1);
-    } else {
-      setShowTour(false);
-      localStorage.setItem('hasSeenTour', 'true');
-    }
-  };
-
-  const handleTourSkip = () => {
-    setShowTour(false);
-    localStorage.setItem('hasSeenTour', 'true');
-  };
+  // Legacy tour handlers removed
 
 
 
@@ -511,22 +539,19 @@ function App() {
         companyDetails={companyDetails}
         companyInfo={companyInfo}
         userInfo={userInfo}
-        showTour={showTour}
-        currentTourStep={currentTourStep}
-        tourSteps={tourSteps}
-        handleTourNext={handleTourNext}
-        handleTourSkip={handleTourSkip}
-        setShowTour={setShowTour}
-        setCurrentTourStep={setCurrentTourStep}
         showCompanyDetailsWizard={showCompanyDetailsWizard}
         setShowCompanyDetailsWizard={setShowCompanyDetailsWizard}
+        showTour={showTour}
+        setShowTour={setShowTour}
+        tourIdx={tourIdx}
+        setTourIdx={setTourIdx}
+        activeTourId={activeTourId}
+        setActiveTourId={setActiveTourId}
 
         registerEmail={registerEmail}
         newUserId={newUserId}
         showHelp={showHelp}
         setShowHelp={setShowHelp}
-        showOnboarding={showOnboarding}
-        setShowOnboarding={setShowOnboarding}
         showNotificationSettings={showNotificationSettings}
         setShowNotificationSettings={setShowNotificationSettings}
 
@@ -534,6 +559,7 @@ function App() {
         setShowDataExport={setShowDataExport}
         showSettings={showSettings}
         setShowSettings={setShowSettings}
+        
       />
     </Router>
   );
@@ -547,24 +573,20 @@ function AppContent({
   companyDetails, 
   companyInfo,
   userInfo,
-  showTour, 
-  currentTourStep, 
-  tourSteps, 
-  handleTourNext, 
-  handleTourSkip,
-  setShowTour,
-  setCurrentTourStep,
   showCompanyDetailsWizard,
   setShowCompanyDetailsWizard,
+  showTour,
+  setShowTour,
+  tourIdx,
+  setTourIdx,
+  activeTourId,
+  setActiveTourId,
   registerEmail,
   newUserId,
   showHelp,
   setShowHelp,
-  showOnboarding,
-  setShowOnboarding,
   showNotificationSettings,
   setShowNotificationSettings,
-
   showDataExport,
   setShowDataExport,
   showSettings,
@@ -682,57 +704,9 @@ function AppContent({
 
   return (
     <>
-      {/* Custom Tour Modal */}
-      {showTour && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 relative">
-            <div className="text-center">
-              <h3 className="text-xl font-bold text-gray-900 mb-4">
-                {tourSteps[currentTourStep].title}
-              </h3>
-              <p className="text-gray-600 mb-6">
-                {tourSteps[currentTourStep].content}
-              </p>
-              <div className="flex justify-between items-center">
-                <button
-                  onClick={handleTourSkip}
-                  className="text-gray-500 hover:text-gray-700 text-sm"
-                >
-                  Skip Tour
-                </button>
-                <div className="flex space-x-2">
-                  {currentTourStep > 0 && (
-                    <button
-                      onClick={() => setCurrentTourStep(currentTourStep - 1)}
-                      className="px-4 py-2 text-gray-600 border border-gray-300 rounded hover:bg-gray-50"
-                    >
-                      Previous
-                    </button>
-                  )}
-                  <button
-                    onClick={handleTourNext}
-                    className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-                  >
-                    {currentTourStep === tourSteps.length - 1 ? 'Finish' : 'Next'}
-                  </button>
-                </div>
-              </div>
-              <div className="mt-4 flex justify-center space-x-1">
-                {tourSteps.map((_, index) => (
-                  <div
-                    key={index}
-                    className={`w-2 h-2 rounded-full ${
-                      index === currentTourStep ? 'bg-blue-600' : 'bg-gray-300'
-                    }`}
-                  />
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Legacy custom tour modal removed */}
 
-      {/* Company Details Modal */}
+      {/* Company Details Wizard (kept; onboarding tour removed) */}
       <CompanyDetailsWizard 
         isOpen={showCompanyDetailsWizard} 
         onClose={() => setShowCompanyDetailsWizard(false)}
@@ -740,7 +714,6 @@ function AppContent({
         userId={user?.uid || newUserId}
         appId={appId}
         registrationData={(() => {
-          // Try to get registration data from localStorage first
           const storedData = localStorage.getItem('registrationData');
           if (storedData) {
             try {
@@ -749,23 +722,15 @@ function AppContent({
                 contact: parsed.contact || user?.contact || '',
                 email: parsed.email || registerEmail || user?.email || ''
               };
-            } catch (e) {
-              console.error('Error parsing stored registration data:', e);
-            }
+            } catch (e) {}
           }
-          // Fallback to current state
-          return {
-            contact: user?.contact || '',
-            email: registerEmail || user?.email || ''
-          };
+          return { contact: user?.contact || '', email: registerEmail || user?.email || '' };
         })()}
         onComplete={() => {
           setShowCompanyDetailsWizard(false);
-          // Clear any existing tour state
-          localStorage.removeItem('hasSeenTour');
-          // Start the app tour here
+          // Auto-start the new tour for first-time users
           setShowTour(true);
-          setCurrentTourStep(0);
+          setTourIdx(0);
         }}
       />
 
@@ -781,7 +746,7 @@ function AppContent({
               <div className="w-8 h-8 bg-blue-600 rounded-full mx-auto mb-4"></div>
               <p className="text-sm text-gray-500">Loading company setup...</p>
             </div>
-            <button 
+              <button 
               onClick={() => setShowCompanyDetailsWizard(false)}
               className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
             >
@@ -858,6 +823,7 @@ function AppContent({
                     >
                       <button
                         className="text-gray-900 inline-flex items-center px-2 py-1 border-b-2 border-transparent hover:border-gray-300 text-sm font-medium whitespace-nowrap focus:outline-none"
+                        data-nav-group={group.label.replace(/[^a-zA-Z0-9]+/g,'-').toLowerCase()}
                         onClick={e => {
                           e.stopPropagation();
                           if (openDropdown === idx) {
@@ -973,7 +939,7 @@ function AppContent({
                   )}
                 </button>
                 {avatarDropdownOpen && (
-                  <div className="absolute left-1/2 transform -translate-x-1/2 mt-2 w-64 bg-white border border-gray-200 rounded shadow-lg z-40 flex flex-col items-center" style={{ minWidth: '16rem', top: '100%' }}>
+                    <div className="absolute left-1/2 transform -translate-x-1/2 mt-2 w-64 bg-white border border-gray-200 rounded shadow-lg z-40 flex flex-col items-center" style={{ minWidth: '16rem', top: '100%' }}>
                     <div className="pt-6 pb-3 px-4 w-full text-center">
                       <div className="font-bold text-lg text-gray-900 mb-1">{companyDetails.firmName || 'Company Name'}</div>
                       {companyDetails.email && <div className="text-sm text-gray-600 mb-3">{companyDetails.email}</div>}
@@ -995,25 +961,18 @@ function AppContent({
                       {companyDetails.contactNumber && <div><span className="font-semibold">Contact:</span> {companyDetails.contactNumber}</div>}
                     </div>
                     <div className="border-t border-gray-200 my-2 w-full"></div>
-                            <button
-          className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
-          onClick={() => {
-            setShowTour(true);
-            setCurrentTourStep(0);
-            setAvatarDropdownOpen(false);
-          }}
-        >
-          Restart Tour
-        </button>
-        <button
-          className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
-          onClick={() => {
-            setShowOnboarding(true);
-            setAvatarDropdownOpen(false);
-          }}
-        >
-          Restart Onboarding
-        </button>
+                    
+                    <button
+                      className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
+                      onClick={() => {
+                        setShowTour(true);
+                        setTourIdx(0);
+                        setAvatarDropdownOpen(false);
+                      }}
+                    >
+                      ▶️ Start Tour
+                    </button>
+
                     <button
                       className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
                       onClick={() => {
@@ -1181,6 +1140,7 @@ function AppContent({
                                 ? 'bg-blue-50 text-blue-700 border-b border-blue-200' 
                                 : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
                             }`}
+                            data-nav-group={group.label.replace(/[^a-zA-Z0-9]+/g,'-').toLowerCase()}
                             onClick={() => setMobileOpenGroup(mobileOpenGroup === groupIdx ? null : groupIdx)}
                             aria-expanded={mobileOpenGroup === groupIdx}
                             aria-haspopup="true"
@@ -1248,25 +1208,17 @@ function AppContent({
 
                 {/* Footer */}
                 <div className="border-t border-gray-200 p-4">
-                          <button
-          className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded transition-colors duration-150"
-          onClick={() => {
-            setShowTour(true);
-            setCurrentTourStep(0);
-            setMobileMenuOpen(false);
-          }}
-        >
-          Restart Tour
-        </button>
-        <button
-          className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded transition-colors duration-150"
-          onClick={() => {
-            setShowOnboarding(true);
-            setMobileMenuOpen(false);
-          }}
-        >
-          Restart Onboarding
-        </button>
+                  <button
+                    className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded transition-colors duration-150"
+                    onClick={() => {
+                      setShowTour(true);
+                      setTourIdx(0);
+                      setMobileMenuOpen(false);
+                    }}
+                  >
+                    ▶️ Start Tour
+                  </button>
+                 
                   <button
                     className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded transition-colors duration-150"
                     onClick={() => {
@@ -1380,7 +1332,7 @@ function AppContent({
                 appId={appId}
               />
             } />
-            <Route path="/reports" element={
+            <Route path="/reports/:reportId?" element={
               <Reports 
                 db={db}
                 userId={user?.uid}
@@ -1427,22 +1379,38 @@ function AppContent({
           </Routes>
         </div>
       </div>
+
+      {/* New Tour Guide (invoked when needed) */}
+      {showTour && (
+        <TourGuide
+          isOpen={showTour}
+          steps={getTourSteps(activeTourId)}
+          stepIndex={tourIdx}
+          onStepChange={(i) => { setTourIdx(i); try { localStorage.setItem('tourIdx', String(i)); } catch {} }}
+          onClose={() => { setShowTour(false); try { localStorage.removeItem('tourOpen'); localStorage.removeItem('tourIdx'); } catch {} }}
+          onComplete={() => { setShowTour(false); try { localStorage.removeItem('tourOpen'); localStorage.removeItem('tourIdx'); } catch {} }}
+          onSnooze={() => {
+            try { localStorage.setItem('tourSnoozeUntil', String(Date.now() + 1000*60*60)); } catch {}
+            setShowTour(false);
+          }}
+        />
+      )}
       
       {/* Offline Indicator */}
       <OfflineIndicator />
       
-      {/* User Onboarding */}
-      {showOnboarding && (
-        <UserOnboarding 
-          user={user}
-          onComplete={() => setShowOnboarding(false)}
-        />
-      )}
+      {/* Old onboarding removed */}
       
       {/* Help & Support */}
       <HelpSupport 
         isVisible={showHelp}
         onClose={() => setShowHelp(false)}
+        onStartTour={(tourId) => {
+          setShowHelp(false);
+          setActiveTourId(tourId || 'full');
+          setTourIdx(0);
+          setShowTour(true);
+        }}
       />
       
       {/* Notification Settings */}
@@ -1479,6 +1447,107 @@ function AppContent({
 
     </>
   );
+}
+
+function getDefaultTourSteps() {
+  const steps = [];
+  const pushAll = (arr) => { if (Array.isArray(arr)) arr.forEach(s => steps.push(s)); };
+  // Start with the full dashboard tour
+  pushAll(getTourSteps('dashboard'));
+  // Then chain each module's micro-tour in sequence
+  const modules = ['parties', 'items', 'sales', 'purchases', 'payments', 'expenses', 'reports', 'taxes'];
+  modules.forEach((id) => {
+    pushAll(getTourSteps(id));
+  });
+  return steps;
+}
+
+// New: parameterized tour builder used by Help > Tour Library
+function getTourSteps(tourId) {
+  if (tourId === 'full') return getDefaultTourSteps();
+  const steps = [];
+  const add = (s) => steps.push(s);
+  if (tourId === 'dashboard') {
+    add({ id: 'welcome', route: '#/', title: 'Welcome', text: 'Namaste! Yeh chhota tour Dashboard ke har section ka kaam samjhayega.', placement: 'bottom' });
+    add({ id: 'dash-overview', route: '#/', title: 'Dashboard Overview', text: 'Yahan aapko business ka high-level snapshot milta hai: monthly sales/purchases, outstanding, recent activity aur company summary. Yeh sirf dekhne ke liye quick view hai.', selector: '#dashboard-title', placement: 'bottom' });
+    add({ id: 'quick-actions', route: '#/', title: 'Quick Actions', text: 'In buttons ko click karke aap seedha related page (Sales, Purchases, Payments, Parties, Items, Expenses, Reports, Taxes) par ja sakte hain. Har card ek shortcut hai.', selector: '#quick-actions', placement: 'top' });
+    add({ id: 'quick-summary', route: '#/', title: 'Quick Summary (Show/Hide)', text: 'Privacy ke liye summary cards ko Show/Hide toggle se control kar sakte hain. Toggle state aapke device par remembered rehta hai.', selector: '#quick-summary-toggle', placement: 'top' });
+    add({ id: 'outstandings', route: '#/', title: 'Outstanding (Receivable/Payable)', text: 'Yahan top 5 receivable/payable parties dikhte hain. Dono sections me Show/Hide buttons bhi available hain.', selector: '#outstanding-receivable-section', placement: 'top' });
+    add({ id: 'todo', route: '#/', title: 'To-Do List', text: 'Next ya important task ko padhne aur note karne ki jagah, jisse aapko apne kaam aur schedule yaad rakhne me madad milegi.', selector: '.todo-list-section', placement: 'top' });
+    add({ id: 'company-info', route: '#/', title: 'Company Info', text: 'Apki company ka quick info: Logo, Name, GSTIN, Contact, Email aur Address.', selector: '#company-info', placement: 'top' });
+    add({ id: 'navbar', route: '#/', title: 'Top Navigation', text: 'Upar navbar me main menu links ke sath-sath clubbed groups bhi hain: Sales & Purchases, Inventory & Manufacturing, Reports & Analysis, Company & Settings; saath hi Expenses ka direct link. Mobile par bottom nav bhi available hai.', selector: 'nav', placement: 'bottom' });
+    return steps;
+  }
+  if (tourId === 'parties') {
+    add({ id: 'dash-parties-qa', route: '#/', title: 'Dashboard → Parties', text: "Quick Actions me 'Parties' card par click karke Parties page kholen.", selector: '#qa-parties', placement: 'bottom', advanceMode: 'clickTarget' });
+    add({ id: 'parties-intro', route: '#/parties?type=Buyer', title: 'Parties Page', text: 'Hum is parties page me partiyon ki entry karte hain aur ye dhyan rakhte hain ki kaun buyer hai, kaun supplier ya both—taki aage ki accounting me help ho sake.', selector: '#parties-title', placement: 'top' });
+    add({ id: 'parties-form', route: '#/parties?type=Buyer', title: 'Parties Entry Form', text: 'Ye entry form hai—isme hum parties ki details dalte hain: naam, number, address, GST number, WhatsApp number, credit limit aur time, etc. Taki ledger, GST entries jaise reports me bina confusion help mil sake.', selector: '#party-entry-form', placement: 'top' });
+    add({ id: 'parties-add', route: '#/parties?type=Buyer', title: 'Add Party', text: 'Isse party database me store ho jayegi aur Sales/Purchase banate waqt direct use hogi. GST number aur Contact number par validation hai—duplicate GST/Contact wali company dubara add nahi hogi.', selector: '[data-tour="add-party"]', placement: 'bottom' });
+    add({ id: 'parties-list', route: '#/parties?type=Buyer', title: 'Parties List', text: 'Yahan sab added parties dikhte hain—pagination aur sorting ke sath (A→Z / Z→A).', selector: '#parties-table', placement: 'top' });
+    add({ id: 'parties-actions', route: '#/parties?type=Buyer', title: 'Edit / Delete', text: 'Kisi bhi party ke data ko kabhi bhi Edit ya Delete kar sakte hain.', selector: '#parties-table', placement: 'top' });
+    return steps;
+  }
+  // removed legacy 'parties-quick' in favor of consolidated 'parties' tour
+  if (tourId === 'items') {
+    add({ id: 'dash-items-qa', route: '#/', title: 'Dashboard → Items', text: "Quick Actions me 'Manage Items' card par click karke Items page kholen.", selector: '#qa-items', placement: 'bottom', advanceMode: 'clickTarget' });
+    add({ id: 'items-intro', route: '#/items?type=Goods', title: 'Items Page', text: 'Yahan products/services create hote hain—sales/purchases me directly use kiye jaate hain.', selector: 'h2', placement: 'top' });
+    add({ id: 'items-form', route: '#/items?type=Goods', title: 'Item Entry Form', text: 'Is form me Item Name, Quantity Measurement (searchable), Default Rate, Type, HSN, GST %, Description, Prices, Opening Stock set karte hain.', selector: '#itemName', placement: 'top' });
+    add({ id: 'items-gst', route: '#/items?type=Goods', title: 'GST & Raw Material', text: 'Composition GST rate set kar sakte hain. Goods ke liye Raw Material flag/type bhi available hai reporting/stock ke liye.', selector: '#compositionGstRate', placement: 'top' });
+    add({ id: 'items-save', route: '#/items?type=Goods', title: 'Add/Update Item', text: 'Add Item dabane par item database me save hota hai; update par changes save hote hain.', selector: '[data-tour="add-item"]', placement: 'bottom' });
+    add({ id: 'items-list', route: '#/items?type=Goods', title: 'Items List', text: 'Neeche items list with sorting/pagination dikh rahi hai—columns me HSN, GST %, stock, actions etc.', selector: '#items-table', placement: 'top' });
+    return steps;
+  }
+  if (tourId === 'sales') {
+    add({ id: 'dash-sales-qa', route: '#/', title: 'Dashboard → Sales', text: "Quick Actions me 'Create Sales Invoice' card par click karke Sales page kholen.", selector: '#qa-sales', placement: 'bottom', advanceMode: 'clickTarget' });
+    add({ id: 'sales-intro', route: '#/sales?type=invoice', title: 'Sales Page', text: 'Yahan Invoice/Challan/Quotation banate hain. Default Invoice tab khula hota hai.', selector: 'h2, h1', placement: 'top' });
+    add({ id: 'sales-entry', route: '#/sales?type=invoice', title: 'Sales Entry Details', text: 'Invoice number auto-generated hota hai; date default Today rahti hai.', selector: 'h2, h1', placement: 'top' });
+    add({ id: 'sales-items', route: '#/sales?type=invoice', title: 'Invoice Items', text: 'Niche items add karein—multi-dimensional qty expression (5x3x2), per-line discount, aur Regular GST users ke liye auto GST fill sahaj hai. Add Item Row se table me aur items add kar sakte hain; Add Item par click karke naya item bhi bana sakte hain jo abhi list me nahi hai.', selector: '#invoice-items-title', placement: 'top' });
+    add({ id: 'sales-save', route: '#/sales?type=invoice', title: 'Save Invoice', text: 'Save Invoice se document generate ho jata hai.', selector: '#save-invoice-button', placement: 'top' });
+    add({ id: 'sales-list', route: '#/sales?type=invoice', title: 'Saved Invoices List', text: 'Yahan saved invoices ki list milti hai—Quick Summary, Edit, invoice-wise Payment add, Receipt/Invoice print/share actions.', selector: '#sales-table', placement: 'top' });
+    add({ id: 'sales-other-tabs', route: '#/sales?type=challan', title: 'Challan & Quotation', text: 'Challan/Quotation ko bhi isi tarah bana sakte hain, jise baad me Invoice me convert kar sakte hain.', selector: '#sales-tabs', placement: 'top' });
+    return steps;
+  }
+  if (tourId === 'purchases') {
+    add({ id: 'dash-purchases-qa', route: '#/', title: 'Dashboard → Purchases', text: "Quick Actions me 'Create Purchase Bill' par click karke Purchases page kholen.", selector: '#qa-purchases', placement: 'bottom', advanceMode: 'clickTarget' });
+    add({ id: 'purchases-entry', route: '#/purchases?tab=bills', title: 'Purchase Entry Details', text: 'Bill number/Date, Supplier selection etc—defaults aur validations ke sath.', selector: 'h2, h1', placement: 'top' });
+    add({ id: 'purchases-items', route: '#/purchases?tab=bills', title: 'Bill Items', text: 'Items add karein; multi-dimensional qty expression & per-line discount supported. Regular users ke liye auto GST fill. Add Item Row se aur rows; agar item list me nahi hai to naya item add karein.', selector: '#purchase-items-title', placement: 'top' });
+    add({ id: 'purchases-save', route: '#/purchases?tab=bills', title: 'Save Bill', text: 'Save Bill se record create hota hai.', selector: '#save-purchase-button', placement: 'top' });
+    add({ id: 'purchases-list', route: '#/purchases?tab=bills', title: 'Saved Bills List', text: 'Saved bills ki list with actions—edit, payments, print/share, filters/sorting.', selector: '#purchases-list-title', placement: 'top' });
+    add({ id: 'purchases-orders', route: '#/purchases?tab=orders', title: 'Purchase Orders', text: 'Orders create/track karein aur baad me bills me convert kar sakte hain.', selector: '.flex.gap-2.justify-center.mb-4', placement: 'top' });
+    return steps;
+  }
+  if (tourId === 'payments') {
+    add({ id: 'dash-payments-qa', route: '#/', title: 'Dashboard → Payments', text: "Quick Actions me 'Manage Payments' card se Payments page kholen.", selector: '#qa-payments', placement: 'bottom', advanceMode: 'clickTarget' });
+    add({ id: 'payments-overview', route: '#/payments?tab=invoice', title: 'Payments Overview', text: 'Is page se Invoice, Challan, Purchase bills ki payments allocate/manage karein; Payment Receipts list aur Payment Mode bhi yahi se mil jata hai.', selector: '#payments-tabs', placement: 'top' });
+    add({ id: 'payments-fifo', route: '#/payments?tab=invoice', title: 'FIFO / Khata Payment', text: 'FIFO ya Khata payment system aapke traditional udhari funde se match karke allocations karta hai. Extra payment Advance me store hota hai aur next invoice/bill me auto-adjust hota hai.', selector: '#party-summary, #payments-tabs', placement: 'top' });
+    add({ id: 'payments-receipts-tab', route: '#/payments?tab=receipts', title: 'Payment Receipts', text: 'Yahan sabhi receipts unique IDs ke sath milti hain. Sub-tabs (Invoice/Challan/Purchase) se filter karein.', selector: '#payments-receipts-tabs', placement: 'top' });
+    add({ id: 'payments-mode-tab', route: '#/payments?tab=mode', title: 'Payment Mode', text: 'Mode-wise received/paid/expense/balance ka breakdown. Export/Print options available.', selector: '#payments-header-actions', placement: 'top' });
+    return steps;
+  }
+  if (tourId === 'expenses') {
+    add({ id: 'dash-expenses-qa', route: '#/', title: 'Dashboard → Expenses', text: "Quick Actions me 'Expenses' card par click karke Expenses page kholen.", selector: '#qa-expenses', placement: 'bottom', advanceMode: 'clickTarget' });
+    add({ id: 'expenses-fixed', route: '#/expenses?tab=fixed', title: 'Fixed Expenses', text: 'Fixed expenses jaise electricity, rent, water, etc ke payment ko add kar sakte hain.', selector: '#fixed-expenses-table', placement: 'top' });
+    add({ id: 'expenses-variable', route: '#/expenses?tab=variable', title: 'Variable Expenses', text: 'Variable expenses jaise stationary, tour, office expenses, etc ko add kar sakte hain.', selector: '#variable-expenses-table', placement: 'top' });
+    add({ id: 'expenses-salary', route: '#/expenses?tab=salaries', title: 'Salary Payments', text: 'Salary expenses me aap apne employee ki payments ko add kar sakte hain.', selector: '#salaries-table', placement: 'top' });
+    add({ id: 'expenses-employee', route: '#/expenses?tab=employee', title: 'Employees / KYC', text: 'Is page me aap apne employees aur unki KYC/Payments ko manage kar sakte hain.', selector: 'h3.text-xl.font-bold, #salaries-table', placement: 'top' });
+    return steps;
+  }
+  if (tourId === 'reports') {
+    add({ id: 'dash-reports-qa', route: '#/', title: 'Dashboard → Reports', text: "Quick Actions se 'Reports' card par click karke reports list par jayein.", selector: '#qa-reports', placement: 'bottom', advanceMode: 'clickTarget' });
+    add({ id: 'reports-type', route: '#/reports/partywise-sales', title: 'Choose Report', text: 'Yahan report type select karein. Click karke change karein.', selector: '#report-type-select', placement: 'right', advanceMode: 'clickTarget' });
+    add({ id: 'reports-names', route: '#/reports/partywise-sales', title: 'Available Reports', text: 'Partywise Sales, Customer Ledger, Invoice Collection, Payment Register, Aging Report, Itemwise Sales, Purchase Bills Summary, Stock Report, Profit & Loss, Balance Sheet, Cash Flow.', selector: '#report-type-select', placement: 'right' });
+    add({ id: 'reports-filters', route: '#/reports/partywise-sales?fy=current', title: 'Time & Filters', text: 'Date Range, Quick Presets, Financial Year aur Party filter yahan set karein.', selector: '#reports-filters-panel', placement: 'top' });
+    return steps;
+  }
+  if (tourId === 'taxes') {
+    add({ id: 'dash-taxes-qa', route: '#/', title: 'Dashboard → Taxes', text: "Quick Actions se 'Taxes' card par click karke Taxes page kholen.", selector: '#qa-taxes', placement: 'bottom', advanceMode: 'clickTarget' });
+    add({ id: 'taxes-payments', route: '#/taxes?tab=tax-payments', title: 'Tax Payments', text: 'Apne GST/other tax payments ko yahan track/record karein.', selector: '#taxes-container', placement: 'bottom' });
+    add({ id: 'taxes-gstr1', route: '#/taxes?tab=gstr1-regular', title: 'GSTR-1 (Regular)', text: 'Sales outward summary; filters set karke export karein.', selector: '#taxes-container', placement: 'bottom' });
+    add({ id: 'taxes-gstr3b', route: '#/taxes?tab=gstr3b-regular', title: 'GSTR-3B (Regular)', text: 'Outward vs inward credit summary.', selector: '#taxes-container', placement: 'bottom' });
+    add({ id: 'taxes-hsn', route: '#/taxes?tab=hsn-regular', title: 'HSN Summary', text: 'HSN-wise summary (Regular/Composition tabs available).', selector: '#taxes-container', placement: 'bottom' });
+    return steps;
+  }
+  return getDefaultTourSteps();
 }
 
 export default App;

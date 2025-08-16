@@ -3,8 +3,7 @@ import { collection, query, where, orderBy, getDocs } from 'firebase/firestore';
 import { useTableSort, SortableHeader } from '../../utils/tableSort';
 import { useTablePagination } from '../../utils/tablePagination';
 import PaginationControls from '../../utils/PaginationControls';
-import ShareButton from './ShareButton';
-import { exportTableAsPDF, exportTableAsExcel, exportTableAsImage, shareLink as shareLinkUtil } from './exportUtils';
+import GlobalExportButtons from '../GlobalExportButtons';
 
 // Clean rebuild: Cash Flow + Daybook
 // Mapping rules
@@ -123,6 +122,26 @@ const CashFlowReport = ({ db, userId, appId, dateRange, loading, setLoading }) =
 					};
 				}).filter(r => r.outflow > 0);
 
+				// Irregular labour/freelancer payments (Outflow)
+				const iq = query(
+					collection(db, `artifacts/${appId}/users/${userId}/irregularPayments`),
+					where('date', '>=', startStr), where('date', '<=', endStr), orderBy('date', 'asc')
+				);
+				const isnap = await getDocs(iq);
+				const irrRows = isnap.docs.map(d => {
+					const v = d.data();
+					return {
+						id: `irr:${d.id}`,
+						date: normalizeDate(v.date),
+						type: 'Labour/Advance',
+						inflow: 0,
+						outflow: Number(v.amount || 0),
+						docNo: v.paymentType || 'Irregular',
+						partyName: v.personType === 'Employee' ? (v.employeeName || 'Employee') : (v.personName || v.personType || ''),
+						mode: modeOf(v.paymentMode)
+					};
+				}).filter(r => r.outflow > 0);
+
 				// Tax payments under Taxes module (Outflow)
 				const tq = query(
 					collection(db, `artifacts/${appId}/users/${userId}/taxPayments`),
@@ -143,7 +162,7 @@ const CashFlowReport = ({ db, userId, appId, dateRange, loading, setLoading }) =
 					};
 				}).filter(r => r.outflow > 0);
 
-				const all = [...payRows, ...expRows, ...salRows, ...taxRows].sort((a, b) => new Date(a.date) - new Date(b.date));
+				const all = [...payRows, ...expRows, ...salRows, ...irrRows, ...taxRows].sort((a, b) => new Date(a.date) - new Date(b.date));
 				let bal = 0;
 				const withBal = all.map(r => { bal += (r.inflow || 0) - (r.outflow || 0); return { ...r, balance: bal }; });
 				setRows(withBal);
@@ -197,86 +216,18 @@ const CashFlowReport = ({ db, userId, appId, dateRange, loading, setLoading }) =
 		{ key: 'balance', label: 'Balance', width: 26 }
 	];
 
-	const exportPDF = async () => {
-		await exportTableAsPDF({
-			data: buildExportRows(),
-			columns: columnsDef,
-			filename: `cash_flow_${new Date().toISOString().slice(0,10)}.pdf`,
-			title: 'CASH FLOW / DAYBOOK',
-			companyDetails,
-			reportDetails: {
-				Period: `${effectiveRange.start.toLocaleDateString('en-IN')} to ${effectiveRange.end.toLocaleDateString('en-IN')}`,
-				Inflow: formatCurrency(summary.inflow),
-				Outflow: formatCurrency(summary.outflow),
-				Net: formatCurrency(summary.net)
-			}
-		});
-	};
+	// Prepare export data for GlobalExportButtons
+	const getExportData = () => buildExportRows();
 
-	const exportExcel = () => {
-		exportTableAsExcel({
-			data: buildExportRows(),
-			columns: columnsDef,
-			filename: `cash_flow_${new Date().toISOString().slice(0,10)}`,
-			companyDetails,
-			reportDetails: {
-				Period: `${effectiveRange.start.toLocaleDateString('en-IN')} to ${effectiveRange.end.toLocaleDateString('en-IN')}`
-			}
-		});
-	};
+	const getExportColumns = () => columnsDef;
 
-	const exportImage = async () => {
-		await exportTableAsImage({
-			data: buildExportRows(),
-			columns: columnsDef,
-			filename: `cash_flow_${new Date().toISOString().slice(0,10)}`,
-			companyDetails,
-			reportDetails: {
-				Period: `${effectiveRange.start.toLocaleDateString('en-IN')} to ${effectiveRange.end.toLocaleDateString('en-IN')}`,
-				Inflow: formatCurrency(summary.inflow),
-				Outflow: formatCurrency(summary.outflow),
-				Net: formatCurrency(summary.net)
-			}
-		});
-	};
-
-	const printReport = () => {
-		const w = window.open('', '_blank');
-		const rowsHtml = buildExportRows().map(r => `
-			<tr>
-				<td style="text-align:center;">${r.date}</td>
-				<td style="text-align:center;">${r.docNo}</td>
-				<td style="text-align:center;">${r.type}</td>
-				<td style="text-align:center;">${r.party}</td>
-				<td style="text-align:right;">${Number(r.inflow||0).toLocaleString('en-IN')}</td>
-				<td style="text-align:right;">${Number(r.outflow||0).toLocaleString('en-IN')}</td>
-				<td style="text-align:right;">${Number(r.balance||0).toLocaleString('en-IN')}</td>
-			</tr>`).join('');
-		w.document.write(`
-			<html><head><title>Cash Flow / Daybook</title>
-			<style>body{font-family:Arial;padding:16px} table{width:100%;border-collapse:collapse} th,td{border:1px solid #ddd;padding:8px}</style>
-			</head><body>
-			<div style="text-align:center;margin-bottom:8px;border-bottom:2px solid #333;padding-bottom:8px;">
-				<div style="font-size:20px;font-weight:bold;">${companyDetails?.firmName || 'Company Name'}</div>
-				<div style="font-size:12px;color:#555;">${companyDetails?.address || ''}</div>
-				<div style="font-size:12px;color:#555;">${companyDetails?.gstin ? `GSTIN: ${companyDetails.gstin}` : ''}${companyDetails?.gstin && companyDetails?.contactNumber ? ' | ' : ''}${companyDetails?.contactNumber || ''}</div>
-			</div>
-			<h3 style="margin:0 0 12px;text-align:center;">CASH FLOW / DAYBOOK</h3>
-			<div style="margin-bottom:8px;">Period: ${effectiveRange.start.toLocaleDateString('en-IN')} to ${effectiveRange.end.toLocaleDateString('en-IN')}</div>
-			<table><thead><tr>
-				<th>Date</th><th>Doc No</th><th>Type</th><th>Party</th><th>Inflow</th><th>Outflow</th><th>Balance</th>
-			</tr></thead><tbody>${rowsHtml}</tbody></table>
-			</body></html>`);
-		w.document.close(); w.focus(); setTimeout(()=>{ w.print(); w.close(); }, 300);
-	};
-
-	const doShareLink = () => {
-		shareLinkUtil({
-			title: 'Cash Flow / Daybook',
-			text: `Inflow: ${formatCurrency(summary.inflow)} | Outflow: ${formatCurrency(summary.outflow)} | Net: ${formatCurrency(summary.net)}`,
-			url: window.location.href
-		});
-	};
+	const getReportDetails = () => ({
+		'Period': `${effectiveRange.start.toLocaleDateString('en-IN')} to ${effectiveRange.end.toLocaleDateString('en-IN')}`,
+		'Inflow': summary.inflow,
+		'Outflow': summary.outflow,
+		'Net': summary.net,
+		dateRange: { start: effectiveRange.start, end: effectiveRange.end }
+	});
 
   return (
     <div className="p-6">
@@ -304,12 +255,16 @@ const CashFlowReport = ({ db, userId, appId, dateRange, loading, setLoading }) =
             </select>
           </div>
         </div>
-					<div className="flex gap-2 w-full md:w-auto">
-						<button onClick={exportPDF} className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md text-sm">📄 Export PDF</button>
-						<button onClick={exportExcel} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm">📊 Export Excel</button>
-						<button onClick={printReport} className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-md text-sm">🖨️ Print</button>
-						<ShareButton onExportPDF={exportPDF} onExportExcel={exportExcel} onExportImage={exportImage} onShareLink={doShareLink} />
-        </div>
+					{/* Global Export/Print/Share Buttons */}
+					<GlobalExportButtons
+						data={getExportData()}
+						columns={getExportColumns()}
+						filename="CASHFLOW"
+						title="Cash Flow / Daybook"
+						companyDetails={companyDetails}
+						reportDetails={getReportDetails()}
+						disabled={filtered.length === 0}
+					/>
         </div>
       </div>
 

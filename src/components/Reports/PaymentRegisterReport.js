@@ -3,9 +3,8 @@ import { collection, query, where, orderBy, getDocs, onSnapshot, doc } from 'fir
 import { useTableSort, SortableHeader } from '../../utils/tableSort';
 import { useTablePagination } from '../../utils/tablePagination';
 import PaginationControls from '../../utils/PaginationControls';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
-import ShareButton from './ShareButton';
+import GlobalExportButtons from '../GlobalExportButtons';
+import { buildReportFilename } from './exportUtils';
 
 const PaymentRegisterReport = ({ db, userId, appId, dateRange, financialYear, selectedParty, parties, loading, setLoading }) => {
   const [paymentData, setPaymentData] = useState([]);
@@ -159,208 +158,33 @@ const PaymentRegisterReport = ({ db, userId, appId, dateRange, financialYear, se
     // You can implement navigation logic here
   };
 
-  // Export PDF
-  const exportToPDF = () => {
-    if (!sortedData || sortedData.length === 0) return;
-    const docPdf = new jsPDF({ orientation: 'landscape' });
-    const pageWidth = docPdf.internal.pageSize.width;
+  // Prepare export data for GlobalExportButtons
+  const getExportData = () => sortedData;
 
-    // Letterhead
-    docPdf.setFontSize(20);
-    docPdf.setFont(undefined, 'bold');
-    docPdf.text(companyDetails?.firmName || 'Company Name', pageWidth / 2, 20, { align: 'center' });
-    docPdf.setFontSize(9);
-    docPdf.setFont(undefined, 'normal');
-    let y = 30;
-    let line1 = '';
-    if (companyDetails?.address) line1 += companyDetails.address;
-    if (companyDetails?.city && companyDetails?.state) {
-      if (line1) line1 += ', ';
-      line1 += `${companyDetails.city}, ${companyDetails.state} ${companyDetails?.pincode || ''}`;
-    }
-    if (line1) { docPdf.text(line1, pageWidth / 2, y, { align: 'center' }); y += 5; }
-    let line2 = '';
-    if (companyDetails?.gstin) line2 += `GSTIN: ${companyDetails.gstin}`;
-    if (companyDetails?.contactNumber) { if (line2) line2 += ' | '; line2 += `Phone: ${companyDetails.contactNumber}`; }
-    if (line2) { docPdf.text(line2, pageWidth / 2, y, { align: 'center' }); y += 10; }
+  const getExportColumns = () => [
+    { key: 'paymentNo', label: 'Payment No' },
+    { key: 'date', label: 'Date' },
+    { key: 'partyName', label: 'Party' },
+    { key: 'amountPaid', label: 'Amount' },
+    { key: 'appliedToInvoices', label: 'Applied To Bills' },
+    { key: 'unappliedAmount', label: 'Unapplied' },
+    { key: 'status', label: 'Status' },
+    { key: 'paymentMode', label: 'Mode' },
+    { key: 'reference', label: 'Reference' }
+  ];
 
-    // Title and details
-    docPdf.setFontSize(16);
-    docPdf.setFont(undefined, 'bold');
-    docPdf.text('PAYMENT REGISTER REPORT', pageWidth / 2, y, { align: 'center' });
-    y += 10;
-    docPdf.setFontSize(10);
-    docPdf.setFont(undefined, 'normal');
-    docPdf.text(`Period: ${formatDate(dateRange.start)} to ${formatDate(dateRange.end)}`, 14, y); y += 5;
-    docPdf.text(`Generated: ${new Date().toLocaleDateString()}`, 14, y); y += 10;
-    docPdf.text(`Total Payments: ${totalSummary.totalPayments}`, 14, y); y += 5;
-    docPdf.text(`Total Amount: ${formatCurrencyPdf(totalSummary.totalAmount)}`, 14, y); y += 5;
-    docPdf.text(`Total Applied: ${formatCurrencyPdf(totalSummary.totalApplied)}`, 14, y); y += 5;
-    docPdf.text(`Unapplied: ${formatCurrencyPdf(totalSummary.totalUnapplied)}`, 14, y); y += 5;
+  const getReportDetails = () => ({
+    'Period': `${formatDate(dateRange.start)} to ${formatDate(dateRange.end)}`,
+    'Total Payments': totalSummary.totalPayments,
+    'Total Amount': totalSummary.totalAmount,
+    'Total Applied': totalSummary.totalApplied,
+    'Unapplied': totalSummary.totalUnapplied,
+    dateRange
+  });
 
-    // Table
-    const body = sortedData.map(p => [
-      p.paymentNo,
-      formatDate(p.date),
-      p.partyName,
-      formatCurrencyPdf(p.amountPaid),
-      // Preserve line breaks; strip excessive spaces
-      (p.appliedToInvoices || '').replace(/<br>/g, '\n').replace(/\s{2,}/g, ' '),
-      formatCurrencyPdf(p.unappliedAmount),
-      p.status,
-      p.paymentMode,
-      p.reference
-    ]);
 
-    autoTable(docPdf, {
-      startY: y + 5,
-      head: [[
-        'Payment No', 'Date', 'Party', 'Amount', 'Applied To Bills', 'Unapplied', 'Status', 'Mode', 'Reference'
-      ]],
-      body,
-      theme: 'grid',
-      tableWidth: 'auto',
-      margin: { left: 10, right: 10 },
-      headStyles: { fillColor: [66, 139, 202], textColor: 255 },
-      styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
-      columnStyles: {
-        3: { halign: 'right' },
-        4: { cellWidth: 120 },
-        5: { halign: 'right' }
-      }
-    });
 
-    docPdf.save(`payment_register_${formatDate(dateRange.start)}_${formatDate(dateRange.end)}.pdf`);
-  };
 
-  // Export CSV (Excel)
-  const exportToExcel = () => {
-    if (!sortedData || sortedData.length === 0) return;
-    let csv = '';
-    csv += `${companyDetails?.firmName || 'Company Name'}\n`;
-    let line1 = '';
-    if (companyDetails?.address) line1 += companyDetails.address;
-    if (companyDetails?.city && companyDetails?.state) {
-      if (line1) line1 += ', ';
-      line1 += `${companyDetails.city}, ${companyDetails.state} ${companyDetails?.pincode || ''}`;
-    }
-    if (line1) csv += `${line1}\n`;
-    let line2 = '';
-    if (companyDetails?.gstin) line2 += `GSTIN: ${companyDetails.gstin}`;
-    if (companyDetails?.contactNumber) { if (line2) line2 += ' | '; line2 += `Phone: ${companyDetails.contactNumber}`; }
-    if (line2) csv += `${line2}\n`;
-    if (companyDetails?.email) csv += `Email: ${companyDetails.email}\n`;
-    csv += '\nPAYMENT REGISTER REPORT\n\n';
-    csv += `Period: ${formatDate(dateRange.start)} to ${formatDate(dateRange.end)}\n`;
-    csv += `Generated: ${new Date().toLocaleDateString()}\n`;
-    csv += `Total Payments: ${totalSummary.totalPayments}\n`;
-    csv += `Total Amount: ${totalSummary.totalAmount}\n`;
-    csv += `Total Applied: ${totalSummary.totalApplied}\n`;
-    csv += `Unapplied: ${totalSummary.totalUnapplied}\n`;
-    csv += '\n';
-    const headers = ['Payment No', 'Date', 'Party', 'Amount', 'Applied To Bills', 'Unapplied', 'Status', 'Mode', 'Reference'];
-    csv += headers.join(',') + '\n';
-    sortedData.forEach(p => {
-      const row = [
-        p.paymentNo,
-        formatDate(p.date),
-        p.partyName,
-        (p.amountPaid || 0),
-        (p.appliedToInvoices || '').replace(/<br>/g, '; '),
-        (p.unappliedAmount || 0),
-        p.status,
-        p.paymentMode,
-        p.reference
-      ];
-      csv += row.join(',') + '\n';
-    });
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    link.href = url;
-    link.download = `payment_register_${formatDate(dateRange.start)}_${formatDate(dateRange.end)}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
-  // Print
-  const printReport = () => {
-    if (!sortedData || sortedData.length === 0) return;
-    const w = window.open('', '_blank');
-    const html = `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Payment Register Report</title>
-          <style>
-            body { font-family: Arial, sans-serif; margin: 20px; }
-            .letterhead { text-align: center; margin-bottom: 30px; border-bottom: 2px solid #333; padding-bottom: 20px; }
-            .company-name { font-size: 24px; font-weight: bold; margin-bottom: 10px; }
-            .company-details { font-size: 12px; color: #666; }
-            .report-title { font-size: 20px; font-weight: bold; text-align: center; margin: 20px 0; }
-            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 12px; }
-            th { background-color: #f2f2f2; font-weight: bold; }
-            .text-right { text-align: right; }
-          </style>
-        </head>
-        <body>
-          <div class="letterhead">
-            <div class="company-name">${companyDetails?.firmName || 'Company Name'}</div>
-            <div class="company-details">
-              ${companyDetails?.address ? `<div>${companyDetails.address}</div>` : ''}
-              ${companyDetails?.city && companyDetails?.state ? `<div>${companyDetails.city}, ${companyDetails.state} ${companyDetails?.pincode || ''}</div>` : ''}
-              ${companyDetails?.gstin || companyDetails?.contactNumber ? `<div>${companyDetails?.gstin ? `GSTIN: ${companyDetails.gstin}` : ''}${companyDetails?.gstin && companyDetails?.contactNumber ? ' | ' : ''}${companyDetails?.contactNumber ? `Phone: ${companyDetails.contactNumber}` : ''}</div>` : ''}
-              ${companyDetails?.email ? `<div>Email: ${companyDetails.email}</div>` : ''}
-            </div>
-          </div>
-          <div class="report-title">PAYMENT REGISTER REPORT</div>
-          <div><strong>Period:</strong> ${formatDate(dateRange.start)} to ${formatDate(dateRange.end)}</div>
-          <div><strong>Generated:</strong> ${new Date().toLocaleDateString()}</div>
-          <div style="margin-top:10px;">
-            <strong>Total Payments:</strong> ${totalSummary.totalPayments} &nbsp; | &nbsp;
-            <strong>Total Amount:</strong> ${formatCurrency(totalSummary.totalAmount)} &nbsp; | &nbsp;
-            <strong>Total Applied:</strong> ${formatCurrency(totalSummary.totalApplied)} &nbsp; | &nbsp;
-            <strong>Unapplied:</strong> ${formatCurrency(totalSummary.totalUnapplied)}
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th>Payment No</th>
-                <th>Date</th>
-                <th>Party</th>
-                <th class="text-right">Amount</th>
-                <th>Applied To Bills</th>
-                <th class="text-right">Unapplied</th>
-                <th>Status</th>
-                <th>Mode</th>
-                <th>Reference</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${sortedData.map(p => `
-                <tr>
-                  <td>${p.paymentNo}</td>
-                  <td>${formatDate(p.date)}</td>
-                  <td>${p.partyName}</td>
-                  <td class="text-right">${formatCurrency(p.amountPaid)}</td>
-                  <td>${(p.appliedToInvoices || '').replace(/<br>/g, '<br>')}</td>
-                  <td class="text-right">${formatCurrency(p.unappliedAmount)}</td>
-                  <td>${p.status}</td>
-                  <td>${p.paymentMode}</td>
-                  <td>${p.reference}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </body>
-      </html>
-    `;
-    w.document.write(html);
-    w.document.close();
-    w.focus();
-    setTimeout(() => { w.print(); w.close(); }, 400);
-  };
 
   // Export as Image
   const exportAsImage = () => {
@@ -430,7 +254,8 @@ const PaymentRegisterReport = ({ db, userId, appId, dateRange, financialYear, se
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = url;
-            link.download = `payment_register_${formatDate(dateRange.start)}_${formatDate(dateRange.end)}.png`;
+            const filename = buildReportFilename({ prefix: 'PAYMENT_REGISTER', companyDetails, dateRange });
+            link.download = `${filename}.png`;
             link.click();
             URL.revokeObjectURL(url);
             document.body.removeChild(container);
@@ -521,36 +346,16 @@ const PaymentRegisterReport = ({ db, userId, appId, dateRange, financialYear, se
               Shows all payments with FIFO allocation to outstanding bills
             </p>
           </div>
-          <div className="mt-4 lg:mt-0 flex gap-2">
-            <button
-              onClick={exportToPDF}
-              disabled={sortedData.length === 0}
-              className="bg-blue-500 hover:bg-blue-600 disabled:bg-gray-300 text-white px-4 py-2 rounded-md transition-colors text-sm"
-            >
-              📄 Export PDF
-            </button>
-            <button
-              onClick={exportToExcel}
-              disabled={sortedData.length === 0}
-              className="bg-green-500 hover:bg-green-600 disabled:bg-gray-300 text-white px-4 py-2 rounded-md transition-colors text-sm"
-            >
-              📊 Export Excel
-            </button>
-            <button
-              onClick={printReport}
-              disabled={sortedData.length === 0}
-              className="bg-gray-500 hover:bg-gray-600 disabled:bg-gray-300 text-white px-4 py-2 rounded-md transition-colors text-sm"
-            >
-              🖨️ Print
-            </button>
-            <ShareButton
-              onExportPDF={exportToPDF}
-              onExportExcel={exportToExcel}
-              onExportImage={exportAsImage}
-              onShareLink={shareLink}
-              disabled={sortedData.length === 0}
-            />
-          </div>
+          {/* Global Export/Print/Share Buttons */}
+          <GlobalExportButtons
+            data={getExportData()}
+            columns={getExportColumns()}
+            filename="PAYMENT_REGISTER"
+            title="Payment Register Report"
+            companyDetails={companyDetails}
+            reportDetails={getReportDetails()}
+            disabled={sortedData.length === 0}
+          />
         </div>
       </div>
 

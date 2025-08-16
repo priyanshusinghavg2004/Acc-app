@@ -485,13 +485,38 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
   
   // Main state
   const [activeTab, setActiveTab] = useState(() => {
-    const urlParams = new URLSearchParams(location.search);
-    const tabParam = urlParams.get('tab');
-    if (tabParam === 'invoices' || tabParam === 'invoice') return 'invoice';
-    if (tabParam === 'challans' || tabParam === 'challan') return 'challan';
-    if (tabParam === 'purchases' || tabParam === 'purchase') return 'purchase';
+    try {
+      const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+      const tabParam = params.get('tab');
+      const allowed = ['invoice','challan','purchase','receipts','payments','advances','mode'];
+      if (tabParam && allowed.includes(tabParam)) return tabParam;
+    } catch {}
     return 'invoice';
   });
+  // keep tab in URL
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+    if (params.get('tab') !== activeTab) {
+      params.set('tab', activeTab);
+      const base = window.location.hash.split('?')[0] || '#/payments';
+      const next = `${base}?${params.toString()}`;
+      if (window.location.hash !== next) window.location.hash = next;
+    }
+  }, [activeTab]);
+
+  // Respond to hash changes (e.g., when navigated by tour steps)
+  useEffect(() => {
+    const allowed = ['invoice','challan','purchase','receipts','payments','advances','mode'];
+    const handler = () => {
+      try {
+        const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+        const t = params.get('tab');
+        if (t && allowed.includes(t) && t !== activeTab) setActiveTab(t);
+      } catch {}
+    };
+    window.addEventListener('hashchange', handler);
+    return () => window.removeEventListener('hashchange', handler);
+  }, [activeTab]);
   const [receiptsSortBy, setReceiptsSortBy] = useState('receiptNumber');
   const [receiptsSortOrder, setReceiptsSortOrder] = useState('asc'); // 'invoice', 'challan', 'purchase'
   const [receiptsSubTab, setReceiptsSubTab] = useState('invoice'); // 'invoice', 'challan', 'purchase' for receipts tab
@@ -510,7 +535,7 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
   const [invoices, setInvoices] = useState([]);
   const [challans, setChallans] = useState([]);
   const [purchaseBills, setPurchaseBills] = useState([]);
-  const [payments, setPayments] = useState([]);
+                                                                          const [payments, setPayments] = useState([]);
   const [company, setCompany] = useState(null);
 
   // UI state
@@ -2784,12 +2809,12 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-2">
         <h1 className="text-3xl font-bold text-gray-800">Payments</h1>
       </div>
       
       {/* Tabs */}
-      <div className="flex space-x-1 mb-6">
+      <div id="payments-tabs" className="flex space-x-1 mb-6">
         {['invoice', 'challan', 'purchase', 'receipts'].map((tab) => (
           <button
             key={tab}
@@ -2815,7 +2840,7 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
 
       {/* Sub-tabs for Payment Receipts */}
       {activeTab === 'receipts' && (
-        <div className="flex space-x-1 mb-6">
+        <div id="payments-receipts-tabs" className="flex space-x-1 mb-6">
           {['invoice', 'challan', 'purchase'].map((subTab) => (
             <button
               key={subTab}
@@ -2961,7 +2986,7 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
       {/* Payment Mode Summary (new tab) */}
       {activeTab === 'mode' && (
         <div className="bg-white p-4 rounded-lg shadow mb-6">
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-3" id="payments-header-actions">
             <h3 className="text-lg font-semibold">Payment Mode</h3>
             <div className="flex gap-2">
               <button onClick={() => handleExportPaymentMode('pdf')} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm">Export PDF</button>

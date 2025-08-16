@@ -83,7 +83,7 @@ function Purchases({ db, userId, isAuthReady, appId }) {
   
   // Document type: purchaseBill or purchaseOrder
   const [docType, setDocType] = useState(() => {
-    const urlParams = new URLSearchParams(location.search);
+    const urlParams = new URLSearchParams(window.location.hash.split('?')[1] || '');
     const tabParam = urlParams.get('tab');
     if (tabParam === 'orders') return 'purchaseOrder';
     return 'purchaseBill';
@@ -120,6 +120,32 @@ function Purchases({ db, userId, isAuthReady, appId }) {
   const [showViewModal, setShowViewModal] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const escListenerRef = useRef();
+
+  // Keep docType and edit/view ids in URL for deep links
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+    const desiredTab = docType === 'purchaseOrder' ? 'orders' : 'bills';
+    if (params.get('tab') !== desiredTab) params.set('tab', desiredTab);
+    if (editingBillId) params.set('edit', editingBillId); else params.delete('edit');
+    const base = window.location.hash.split('?')[0] || '#/purchases';
+    const next = `${base}?${params.toString()}`;
+    if (window.location.hash !== next) window.location.hash = next;
+  }, [docType, editingBillId]);
+
+  // On first load, if view/edit present open it
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+    const viewId = params.get('view');
+    const editId = params.get('edit');
+    if (viewId) {
+      const collectionName = docType === 'purchaseOrder' ? 'purchaseOrders' : 'purchaseBills';
+      getDoc(doc(db, `artifacts/${appId}/users/${userId}/${collectionName}`, viewId)).then(snap => {
+        if (snap.exists()) { setViewBill({ id: snap.id, ...snap.data() }); setShowViewModal(true); }
+      }).catch(() => {});
+    }
+    if (editId) setEditingBillId(editId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Payment Modal states
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -990,8 +1016,11 @@ function Purchases({ db, userId, isAuthReady, appId }) {
       doc.setFont(undefined, 'normal');
       doc.text('Thank you for your payment!', pageWidth / 2, yPosition, { align: 'center' });
       
-      // Save PDF
-      const fileName = `receipt_${safeText(selectedPaymentForReceipt.receiptNumber)}_${safeText(selectedPaymentForReceipt.paymentDate)}.pdf`;
+      // Save PDF with initials and compact date
+      const fmt = (d) => {
+        try { const x = new Date(d); const day = String(x.getDate()); const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][x.getMonth()]; const yr = x.getFullYear(); return `${day}${mon}${yr}`; } catch { return d; }
+      };
+      const fileName = `REC_${safeText(selectedPaymentForReceipt.receiptNumber)}_${fmt(selectedPaymentForReceipt.paymentDate)}.pdf`;
       doc.save(fileName);
     } catch (error) {
       console.error('Error generating PDF:', error);
@@ -1161,9 +1190,10 @@ function Purchases({ db, userId, isAuthReady, appId }) {
         hiddenElements.forEach(el => {
           el.style.display = 'none';
         });
+        const fmt = (d) => { try { const x = new Date(d); const day = String(x.getDate()); const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][x.getMonth()]; const yr = x.getFullYear(); return `${day}${mon}${yr}`; } catch { return d; } };
         html2pdf.default().from(tempContainer).set({
           margin: 0.5,
-          filename: `Purchase_${invoiceBill?.number || 'Bill'}.pdf`,
+          filename: `PURCHASE_${invoiceBill?.number || 'Bill'}_${fmt(invoiceBill?.billDate || invoiceBill?.date)}.pdf`,
           html2canvas: { scale: 2 },
           jsPDF: { unit: 'in', format: 'a4', orientation: 'portrait' }
         }).save();
@@ -1272,7 +1302,7 @@ function Purchases({ db, userId, isAuthReady, appId }) {
                     </div>
                 </div>
         {/* Items Table */}
-        <h3 className="text-xl font-bold text-gray-800 mb-2">Items</h3>
+        <h3 id="purchase-items-title" className="text-xl font-bold text-gray-800 mb-2">Items</h3>
         <div className="overflow-x-auto rounded-lg border border-gray-200 mb-4">
           <table className="min-w-full divide-y divide-gray-200 text-sm">
                                 <thead className="bg-gray-50">
@@ -1424,7 +1454,7 @@ function Purchases({ db, userId, isAuthReady, appId }) {
         </div>
 
                 <div className="flex gap-4 mt-4">
-                    <button
+                    <button id="save-purchase-button"
             onClick={handleSaveBill}
                         className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-300 ease-in-out transform hover:scale-105"
                     >
@@ -1455,7 +1485,7 @@ function Purchases({ db, userId, isAuthReady, appId }) {
                         </button>
                     )}
                 </div>
-        <h3 className="text-xl font-bold text-gray-800 mt-8 mb-4">Recent Bills</h3>
+        <h3 id="purchases-list-title" className="text-xl font-bold text-gray-800 mt-8 mb-4">Recent Bills</h3>
         {bills.length === 0 ? (
           <div className="text-center text-gray-500 py-4">No bills yet. Create your first bill above!</div>
                 ) : (

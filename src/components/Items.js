@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { collection, addDoc, query, onSnapshot, serverTimestamp, doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { useTableSort, SortableHeader } from '../utils/tableSort';
 import { useTablePagination } from '../utils/tablePagination';
@@ -8,7 +9,11 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
     const [itemName, setItemName] = useState('');
     const [quantityMeasurement, setQuantityMeasurement] = useState('');
     const [defaultRate, setDefaultRate] = useState('');
-    const [itemType, setItemType] = useState('Service');
+    const location = useLocation();
+    const [itemType, setItemType] = useState(() => {
+        const p = new URLSearchParams(location.search).get('type');
+        return p === 'Goods' ? 'Goods' : 'Service';
+    });
     const [hsnCode, setHsnCode] = useState('');
     const [gstPercentage, setGstPercentage] = useState('');
     const [message, setMessage] = useState('');
@@ -27,6 +32,17 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
     const [compositionGstRate, setCompositionGstRate] = useState('');
     const [isRawMaterial, setIsRawMaterial] = useState(false);
     const [rawMaterialType, setRawMaterialType] = useState('Base Material');
+
+    // Sync itemType to URL
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
+        if (params.get('type') !== itemType) {
+            params.set('type', itemType);
+            const base = window.location.hash.split('?')[0] || '#/items';
+            const next = `${base}?${params.toString()}`;
+            if (window.location.hash !== next) window.location.hash = next;
+        }
+    }, [itemType]);
 
     // Table sorting hook with default sort by creation date descending (LIFO)
     const { sortConfig, handleSort, getSortedData } = useTableSort([], { key: 'createdAt', direction: 'desc' });
@@ -420,7 +436,7 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
                 </div>
             </div>
             <div className="flex gap-4 mt-4">
-                <button onClick={handleSaveItem}
+                <button data-tour="add-item" onClick={handleSaveItem}
                     className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-300 ease-in-out transform hover:scale-105">
                     {editingItemId ? 'Update Item' : 'Add Item'}
                 </button>
@@ -437,7 +453,7 @@ const Items = ({ db, userId, isAuthReady, appId }) => {
                 <p className="text-gray-600">No items added yet. Add your first item above!</p>
             ) : (
                 <div className="overflow-x-auto rounded-lg shadow-md border border-gray-200">
-                    <table className="min-w-full divide-y divide-gray-200">
+                    <table id="items-table" className="min-w-full divide-y divide-gray-200">
                         <thead className="bg-gray-50">
                             <tr>
                                 <SortableHeader columnKey="itemName" label="Item Name" onSort={handleSort} sortConfig={sortConfig} />

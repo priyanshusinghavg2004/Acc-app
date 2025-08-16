@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { collection, getDocs, orderBy, query, where, doc, getDoc } from 'firebase/firestore';
 import { useTableSort, SortableHeader } from '../../utils/tableSort';
 import { useTablePagination } from '../../utils/tablePagination';
+import { exportTableAsPDF, exportTableAsExcel, exportTableAsImage, buildReportFilename, shareLink } from './exportUtils';
+import ShareButton from './ShareButton';
 import PaginationControls from '../../utils/PaginationControls';
 import { formatCurrency } from './CommonComponents';
 
@@ -25,6 +27,8 @@ const ItemwiseSalesReport = ({ db, userId, appId, dateRange, selectedParty, part
   const [billListModal, setBillListModal] = useState(null); // { type: 'sales'|'purchase', itemRow }
   const [billSummaryModal, setBillSummaryModal] = useState(null); // { type, bill }
   const [itemIdToName, setItemIdToName] = useState({});
+
+  const [companyDetails, setCompanyDetails] = useState(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -163,6 +167,19 @@ const ItemwiseSalesReport = ({ db, userId, appId, dateRange, selectedParty, part
     fetchData();
   }, [db, userId, appId, dateRange?.start, dateRange?.end, selectedParty]);
 
+  // Fetch company details for header
+  useEffect(() => {
+    const loadCompany = async () => {
+      try {
+        if (!db || !userId || !appId) return;
+        const ref = doc(db, `artifacts/${appId}/users/${userId}/companyDetails`, 'myCompany');
+        const snap = await getDoc(ref);
+        if (snap.exists()) setCompanyDetails(snap.data());
+      } catch {}
+    };
+    loadCompany();
+  }, [db, userId, appId]);
+
   // ESC key handler (LIFO close for modals)
   useEffect(() => {
     const handleEsc = (e) => {
@@ -203,14 +220,97 @@ const ItemwiseSalesReport = ({ db, userId, appId, dateRange, selectedParty, part
     );
   }, [rowsByItem]);
 
+  // Export helpers
+  const getExportColumns = () => ([
+    { key: 'itemName', label: 'Item' },
+    { key: 'totalSalesAmount', label: 'Total Sales' },
+    { key: 'totalPurchaseAmount', label: 'Total Purchase' },
+    { key: 'stockValueInHand', label: 'Stock Value in Hand' },
+    { key: 'salesBillCount', label: 'Sales Bills' },
+    { key: 'purchaseBillCount', label: 'Purchase Bills' }
+  ]);
+  const buildExportRows = () => rowsByItem.map(r => ({
+    itemName: r.itemName,
+    totalSalesAmount: Number(r.totalSalesAmount || 0),
+    totalPurchaseAmount: Number(r.totalPurchaseAmount || 0),
+    stockValueInHand: Number((r.totalPurchaseAmount || 0) - (r.totalSalesAmount || 0)),
+    salesBillCount: (r.salesBillNumbers || []).length,
+    purchaseBillCount: (r.purchaseBillNumbers || []).length
+  }));
+  const exportPDF = async () => {
+    const filename = buildReportFilename({ prefix: 'ITEMWISE', dateRange });
+    await exportTableAsPDF({ data: buildExportRows(), columns: getExportColumns(), filename: `${filename}.pdf`, title: 'Item-wise Sales/Purchase', reportDetails: { Period: `${new Date(dateRange.start).toLocaleDateString('en-IN')} to ${new Date(dateRange.end).toLocaleDateString('en-IN')}` } });
+  };
+  const exportExcel = () => {
+    const filename = buildReportFilename({ prefix: 'ITEMWISE', dateRange });
+    exportTableAsExcel({ data: buildExportRows(), columns: getExportColumns(), filename, companyDetails, reportDetails: { Period: `${new Date(dateRange.start).toLocaleDateString('en-IN')} to ${new Date(dateRange.end).toLocaleDateString('en-IN')}` } });
+  };
+
+  const exportAsImage = async () => {
+    const filename = buildReportFilename({ prefix: 'ITEMWISE', dateRange });
+    await exportTableAsImage({
+      data: buildExportRows(),
+      columns: getExportColumns(),
+      filename,
+      companyDetails,
+      reportDetails: {
+        'Period': `${new Date(dateRange.start).toLocaleDateString('en-IN')} to ${new Date(dateRange.end).toLocaleDateString('en-IN')}`,
+        'Total Items': totals.items,
+        'Total Sales': formatCurrency(totals.sales),
+        'Total Purchase': formatCurrency(totals.purchases),
+        'Stock Value': formatCurrency(totals.stock)
+      }
+    });
+  };
+
+  const shareReportLink = () => {
+    const shareData = {
+      title: 'ACCTOO Item-wise Sales Report',
+      text: `Check out this Item-wise Sales and Purchase Report from ACCTOO - ${totals.items} items with total sales ${formatCurrency(totals.sales)}`,
+      url: window.location.href
+    };
+    
+    shareLink(shareData);
+  };
+  const printReport = () => {
+    const w = window.open('', '_blank');
+    const rows = buildExportRows();
+    const head = `<tr>${getExportColumns().map(c=>`<th style=\"border:1px solid #ddd;padding:6px;text-align:left;\">${c.label}</th>`).join('')}</tr>`;
+    const body = rows.map(r=>`<tr>${getExportColumns().map(c=>`<td style=\"border:1px solid #ddd;padding:6px;\">${r[c.key] ?? ''}</td>`).join('')}</tr>`).join('');
+    const headerHtml = `
+      <div style="text-align:center;margin-bottom:8px;border-bottom:2px solid #333;padding-bottom:8px;">
+        <div style="font-size:20px;font-weight:bold;">${companyDetails?.firmName || 'Company Name'}</div>
+        ${companyDetails?.address ? `<div style=\"font-size:12px;color:#555;\">${companyDetails.address}</div>` : ''}
+        ${(companyDetails?.gstin || companyDetails?.contactNumber) ? `<div style=\"font-size:12px;color:#555;\">${companyDetails?.gstin ? `GSTIN: ${companyDetails.gstin}` : ''}${companyDetails?.gstin && companyDetails?.contactNumber ? ' | ' : ''}${companyDetails?.contactNumber || ''}</div>` : ''}
+      </div>`;
+    w.document.write(`<html><head><title>Item-wise Sales/Purchase</title><style>body{font-family:Arial;padding:16px} table{width:100%;border-collapse:collapse} th,td{border:1px solid #ddd;padding:6px} th{background:#f6f6f6}</style></head><body>${headerHtml}<h3 style="text-align:center;margin:8px 0;">Item-wise Sales and Purchase</h3><div>Period: ${new Date(dateRange.start).toLocaleDateString('en-IN')} to ${new Date(dateRange.end).toLocaleDateString('en-IN')}</div><table><thead>${head}</thead><tbody>${body}</tbody></table></body></html>`);
+    w.document.close(); w.focus(); setTimeout(()=>{ w.print(); w.close(); }, 300);
+  };
+
   return (
     <div className="p-6">
       <div className="mb-6">
-        <h2 className="text-xl font-bold text-gray-800 mb-2">Item-wise Sales and Purchase (Amount-wise)</h2>
-        <p className="text-gray-600">
-          Period: {new Date(dateRange.start).toLocaleDateString('en-IN')} to {new Date(dateRange.end).toLocaleDateString('en-IN')}
-          {selectedParty && ` | Party: ${parties?.find?.((p) => p.id === selectedParty)?.partyName || selectedParty}`}
-        </p>
+        <div className="flex justify-between items-start">
+          <div>
+            <h2 className="text-xl font-bold text-gray-800 mb-2">Item-wise Sales and Purchase (Amount-wise)</h2>
+            <p className="text-gray-600">
+              Period: {new Date(dateRange.start).toLocaleDateString('en-IN')} to {new Date(dateRange.end).toLocaleDateString('en-IN')}
+              {selectedParty && ` | Party: ${parties?.find?.((p) => p.id === selectedParty)?.partyName || selectedParty}`}
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={exportPDF} className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md text-sm">📄 Export PDF</button>
+            <button onClick={exportExcel} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm">📊 Export Excel</button>
+            <button onClick={printReport} className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-md text-sm">🖨️ Print</button>
+            <ShareButton
+              onExportPDF={exportPDF}
+              onExportExcel={exportExcel}
+              onExportImage={exportAsImage}
+              onShareLink={shareReportLink}
+              disabled={rowsByItem.length === 0}
+            />
+          </div>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -274,6 +374,15 @@ const ItemwiseSalesReport = ({ db, userId, appId, dateRange, selectedParty, part
                   </td>
                 </tr>
               ))}
+              {/* Totals Row */}
+              <tr className="bg-gray-100 font-semibold">
+                <td className="px-6 py-4">Total ({totals.items} items)</td>
+                <td className="px-6 py-4 text-right">{formatCurrency(totals.sales)}</td>
+                <td className="px-6 py-4 text-right">{formatCurrency(totals.purchases)}</td>
+                <td className="px-6 py-4 text-right">{formatCurrency(totals.stock)}</td>
+                <td className="px-6 py-4">-</td>
+                <td className="px-6 py-4">-</td>
+              </tr>
             </tbody>
           </table>
         </div>

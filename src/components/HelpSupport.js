@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 
-const HelpSupport = ({ isVisible, onClose }) => {
+const HelpSupport = ({ isVisible, onClose, onStartTour }) => {
   const [activeTab, setActiveTab] = useState('help');
   const [searchQuery, setSearchQuery] = useState('');
   const [filteredContent, setFilteredContent] = useState([]);
@@ -166,44 +166,7 @@ const HelpSupport = ({ isVisible, onClose }) => {
     }
   ];
 
-  const videoTutorials = [
-    {
-      title: 'Getting Started',
-      description: 'Learn the basics of setting up your business profile and navigating the app.',
-      duration: '3:45',
-      thumbnail: '🎬'
-    },
-    {
-      title: 'Creating Your First Sale',
-      description: 'Step-by-step guide to creating sales and generating invoices.',
-      duration: '5:20',
-      thumbnail: '💰'
-    },
-    {
-      title: 'Managing Payments',
-      description: 'How to record payments and track outstanding amounts.',
-      duration: '4:15',
-      thumbnail: '💳'
-    },
-    {
-      title: 'Using Reports',
-      description: 'Generate and analyze business reports for better decision making.',
-      duration: '6:30',
-      thumbnail: '📊'
-    },
-    {
-      title: 'Mobile App Features',
-      description: 'Optimize your experience on mobile devices with touch gestures and responsive design.',
-      duration: '4:50',
-      thumbnail: '📱'
-    },
-    {
-      title: 'Offline Mode',
-      description: 'Learn how to work without internet and sync data when reconnected.',
-      duration: '3:25',
-      thumbnail: '🌐'
-    }
-  ];
+  
 
   useEffect(() => {
     // Filter content based on current page and search query
@@ -273,6 +236,40 @@ const HelpSupport = ({ isVisible, onClose }) => {
     </div>
   );
 
+  const renderTourLibrary = () => (
+    <div className="space-y-6">
+      <h3 className="text-lg font-semibold text-gray-900">Tour Library</h3>
+      <p className="text-sm text-gray-600">Choose a guided tour for any module.</p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {[
+          { id: 'dashboard', title: 'Dashboard Tour', desc: 'Overview, quick actions, outstanding.' },
+          { id: 'parties', title: 'Parties Tour', desc: 'Add/edit parties, list and filters.' },
+          { id: 'items', title: 'Items Tour', desc: 'Create items, rates, tax, HSN.' },
+          { id: 'sales', title: 'Sales Tour', desc: 'Invoices, challans, quotations.' },
+          { id: 'purchases', title: 'Purchases Tour', desc: 'Bills and orders workflow.' },
+          { id: 'payments', title: 'Payments Tour', desc: 'Receipts, payments, advances.' },
+          { id: 'expenses', title: 'Expenses Tour', desc: 'Fixed, variable, salaries.' },
+          { id: 'reports', title: 'Reports Tour', desc: 'Report list and parameters.' },
+          { id: 'taxes', title: 'Taxes Tour', desc: 'GST summary and HSN views.' },
+          { id: 'full', title: 'Full Product Tour', desc: 'Back-to-back tours starting at Dashboard.' }
+        ].map(card => (
+          <div key={card.id} className="bg-white border border-gray-200 rounded-lg p-4 flex items-center justify-between">
+            <div>
+              <div className="font-medium text-gray-900">{card.title}</div>
+              <div className="text-gray-600 text-sm">{card.desc}</div>
+            </div>
+            <button
+              className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+              onClick={() => onStartTour && onStartTour(card.id)}
+            >
+              Start
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
   const renderFAQs = () => (
     <div className="space-y-6">
       {faqs.map((category, categoryIndex) => (
@@ -288,32 +285,6 @@ const HelpSupport = ({ isVisible, onClose }) => {
           </div>
         </div>
       ))}
-    </div>
-  );
-
-  const renderVideoTutorials = () => (
-    <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {videoTutorials.map((tutorial, index) => (
-          <div key={index} className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
-            <div className="flex items-start space-x-3">
-              <div className="flex-shrink-0">
-                <span className="text-3xl">{tutorial.thumbnail}</span>
-              </div>
-              <div className="flex-1">
-                <h4 className="font-medium text-gray-900 mb-1">{tutorial.title}</h4>
-                <p className="text-gray-600 text-sm mb-2">{tutorial.description}</p>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-500">{tutorial.duration}</span>
-                  <button className="text-blue-600 text-sm font-medium hover:text-blue-700">
-                    Watch Now
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
     </div>
   );
 
@@ -414,7 +385,7 @@ const HelpSupport = ({ isVisible, onClose }) => {
             {[
               { id: 'help', label: 'Help', icon: '❓' },
               { id: 'faqs', label: 'FAQs', icon: '❔' },
-              { id: 'videos', label: 'Video Tutorials', icon: '🎬' },
+              { id: 'tours', label: 'Tour Library', icon: '🧭' },
               { id: 'contact', label: 'Contact', icon: '📞' }
             ].map((tab) => (
               <button
@@ -437,7 +408,7 @@ const HelpSupport = ({ isVisible, onClose }) => {
         <div className="p-6 overflow-y-auto max-h-[calc(90vh-200px)]">
           {activeTab === 'help' && renderHelpContent()}
           {activeTab === 'faqs' && renderFAQs()}
-          {activeTab === 'videos' && renderVideoTutorials()}
+          {activeTab === 'tours' && renderTourLibrary()}
           {activeTab === 'contact' && renderContact()}
         </div>
       </div>

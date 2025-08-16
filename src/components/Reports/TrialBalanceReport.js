@@ -88,6 +88,16 @@ const TrialBalanceReport = ({ db, userId, appId, dateRange, financialYear, selec
           return { id: doc.id, date: d.date, amount: parseFloat(d.amount || 0) };
         });
 
+        // Include irregular labour/freelancer payments as expenses up to end date
+        const irrSnap = await getDocs(query(
+          collection(db, `artifacts/${appId}/users/${userId}/irregularPayments`),
+          where('date', '<=', endStr), orderBy('date', 'desc')
+        ));
+        const irr = irrSnap.docs.map(doc => {
+          const d = doc.data();
+          return { id: `irr:${doc.id}`, date: d.date, amount: parseFloat(d.amount || 0) };
+        });
+
         // Calculate trial balance entries
         const trialBalanceEntries = [];
 
@@ -180,13 +190,13 @@ const TrialBalanceReport = ({ db, userId, appId, dateRange, financialYear, selec
         });
 
         // Expenses
-        const totalExpenses = expenses.reduce((sum, expense) => sum + expense.amount, 0);
+        const totalExpenses = [...expenses, ...irr].reduce((sum, expense) => sum + expense.amount, 0);
         trialBalanceEntries.push({
           ledger: 'Expenses',
           group: 'Expenses',
           debit: totalExpenses,
           credit: 0,
-          drillDownData: expenses,
+          drillDownData: [...expenses, ...irr],
           description: 'Operating and administrative expenses'
         });
 
@@ -471,4 +481,4 @@ const TrialBalanceReport = ({ db, userId, appId, dateRange, financialYear, selec
   );
 };
 
-export default TrialBalanceReport; 
+export default function TrialBalanceReport() { return null; }

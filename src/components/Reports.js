@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { collection, query, where, orderBy, getDocs, onSnapshot, doc } from 'firebase/firestore';
 import { useTableSort } from '../utils/tableSort';
 import { useTablePagination } from '../utils/tablePagination';
@@ -17,7 +18,6 @@ import StockReport from './Reports/StockReport';
 // GST reports moved under Taxes section
 import ProfitLossReport from './Reports/ProfitLossReport';
 import BalanceSheetReport from './Reports/BalanceSheetReport';
-import TrialBalanceReport from './Reports/TrialBalanceReport';
 import CashFlowReport from './Reports/CashFlowReport';
 
 // Helper to get current financial year start and end
@@ -30,13 +30,22 @@ function getCurrentFinancialYearRange() {
 }
 
 const Reports = ({ db, userId, isAuthReady, appId }) => {
-  const [selectedReport, setSelectedReport] = useState('partywise-sales');
+  const navigate = useNavigate();
+  const { reportId } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const ALL_REPORT_IDS = useMemo(() => REPORT_CONSTANTS.REPORT_TYPES.map(r => r.value), []);
+
+  const initialReport = ALL_REPORT_IDS.includes(reportId || '') ? reportId : 'partywise-sales';
+  const [selectedReport, setSelectedReport] = useState(initialReport);
   const [dateRange, setDateRange] = useState(getCurrentFinancialYearRange());
   const [financialYear, setFinancialYear] = useState(new Date().getFullYear());
   const [selectedParty, setSelectedParty] = useState('');
   const [parties, setParties] = useState([]);
+  const [partiesLoaded, setPartiesLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [companyDetails, setCompanyDetails] = useState(null);
+  const [hydrated, setHydrated] = useState(false); // URL -> state hydration complete
 
   // Sync date range when financial year changes
   useEffect(() => {
@@ -46,14 +55,74 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
     setDateRange({ start, end });
   }, [financialYear]);
 
+  // Read reportId from URL and keep state in sync
+  useEffect(() => {
+    if (!reportId) return; // handled by default route
+    if (ALL_REPORT_IDS.includes(reportId) && reportId !== selectedReport) {
+      setSelectedReport(reportId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportId]);
+
+  // Parse query params -> state
+  useEffect(() => {
+    const startQ = searchParams.get('start');
+    const endQ = searchParams.get('end');
+    const fyQ = searchParams.get('fy');
+    const partyQ = searchParams.get('party') || '';
+
+    let nextDateRange = null;
+    if (startQ && endQ) {
+      const s = new Date(startQ);
+      const e = new Date(endQ);
+      if (!isNaN(s.getTime()) && !isNaN(e.getTime())) {
+        nextDateRange = { start: s, end: e };
+      }
+    }
+    if (nextDateRange) {
+      const curS = dateRange.start.toISOString().slice(0,10);
+      const curE = dateRange.end.toISOString().slice(0,10);
+      if (curS !== searchParams.get('start') || curE !== searchParams.get('end')) {
+        setDateRange(nextDateRange);
+      }
+    }
+    if (fyQ && Number(fyQ) !== financialYear) {
+      const num = parseInt(fyQ, 10);
+      if (!isNaN(num)) setFinancialYear(num);
+    }
+    if (partyQ !== selectedParty) setSelectedParty(partyQ);
+    if (!hydrated) setHydrated(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  // State -> URL (keep query params and route in sync)
+  useEffect(() => {
+    if (!hydrated) return; // wait until URL params have been read once
+    const desiredPath = `/reports/${selectedReport}`;
+    // Update path if needed
+    if (reportId !== selectedReport) {
+      navigate(desiredPath, { replace: true });
+    }
+    // Update query params
+    const qp = new URLSearchParams(searchParams);
+    qp.set('start', dateRange.start.toISOString().split('T')[0]);
+    qp.set('end', dateRange.end.toISOString().split('T')[0]);
+    qp.set('fy', String(financialYear));
+    if (selectedParty) qp.set('party', selectedParty); else qp.delete('party');
+    const current = searchParams.toString();
+    const next = qp.toString();
+    if (current !== next) setSearchParams(qp, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated, selectedReport, dateRange.start, dateRange.end, financialYear, selectedParty]);
+
   // Fetch parties for filters
   useEffect(() => {
-    if (!isAuthReady || !userId) return;
+    if (!isAuthReady || !userId || !appId) return;
 
     const fetchParties = async () => {
       try {
         const partiesQuery = query(
-          collection(db, `artifacts/acc-app-e5316/users/${userId}/parties`),
+          collection(db, `artifacts/${appId}/users/${userId}/parties`),
           orderBy('firmName', 'asc')
         );
         
@@ -63,22 +132,27 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
             ...doc.data()
           }));
           setParties(partiesData);
+          setPartiesLoaded(true);
+        }, (err) => {
+          console.error('Error fetching parties:', err);
+          setPartiesLoaded(true);
         });
 
         return unsubscribe;
       } catch (error) {
         console.error('Error fetching parties:', error);
+        setPartiesLoaded(true);
       }
     };
 
     fetchParties();
-  }, [db, userId, isAuthReady]);
+  }, [db, userId, isAuthReady, appId]);
 
   // Fetch company details
   useEffect(() => {
-    if (!isAuthReady || !userId) return;
+    if (!isAuthReady || !userId || !appId) return;
 
-    const companyDocRef = doc(db, `artifacts/acc-app-e5316/users/${userId}/companyDetails`, 'myCompany');
+    const companyDocRef = doc(db, `artifacts/${appId}/users/${userId}/companyDetails`, 'myCompany');
     const unsubscribe = onSnapshot(companyDocRef, (docSnap) => {
       if (docSnap.exists()) {
         setCompanyDetails(docSnap.data());
@@ -86,7 +160,7 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
     });
     
     return () => unsubscribe();
-  }, [db, userId, isAuthReady]);
+  }, [db, userId, isAuthReady, appId]);
 
   // Date range presets
   const datePresets = REPORT_CONSTANTS.DATE_PRESETS;
@@ -167,7 +241,7 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
     setLoading,
     isAuthReady,
     companyDetails
-  }), [db, userId, appId, dateRange, financialYear, selectedParty, loading, isAuthReady, companyDetails]); // Removed parties from dependency array
+  }), [db, userId, appId, dateRange, financialYear, selectedParty, parties, loading, isAuthReady, companyDetails]);
 
   const renderReportComponent = () => {
     switch (selectedReport) {
@@ -192,7 +266,7 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
       case 'balance-sheet':
         return <BalanceSheetReport {...commonProps} />;
       case 'trial-balance':
-        return <TrialBalanceReport {...commonProps} />;
+        return null; // Trial Balance removed
       case 'cash-flow':
         return <CashFlowReport {...commonProps} />;
       default:
@@ -228,6 +302,7 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
             Select Report Type
           </label>
           <select
+            id="report-type-select"
             value={selectedReport}
             onChange={(e) => setSelectedReport(e.target.value)}
             className="w-full lg:w-64 border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -241,7 +316,7 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
         </div>
 
         {/* Filters Panel */}
-        <div className="bg-gray-50 rounded-lg p-4 mb-6">
+        <div id="reports-filters-panel" className="bg-gray-50 rounded-lg p-4 mb-6">
           <h3 className="text-lg font-semibold text-gray-800 mb-4">Filters</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 min-w-0">
             {/* Date Range */}
@@ -320,7 +395,14 @@ const Reports = ({ db, userId, isAuthReady, appId }) => {
 
         {/* Report Content */}
         <div className="bg-white border border-gray-200 rounded-lg">
-          {renderReportComponent()}
+          {selectedReport === 'partywise-sales' && !partiesLoaded ? (
+            <div className="p-8 text-center">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
+              <p className="text-gray-600">Loading parties…</p>
+            </div>
+          ) : (
+            renderReportComponent()
+          )}
         </div>
       </div>
     </div>

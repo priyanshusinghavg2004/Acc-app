@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
+import { collection, query, where, getDocs, orderBy, limit, doc, getDoc, setDoc, writeBatch } from 'firebase/firestore';
 import { saveAs } from 'file-saver';
 import * as XLSX from 'xlsx';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 
 const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
@@ -21,6 +23,10 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
   const [activeTab, setActiveTab] = useState('export');
   const [recentExports, setRecentExports] = useState([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [backupProgress, setBackupProgress] = useState(0);
+  const [restoreProgress, setRestoreProgress] = useState(0);
+  const [restorePreview, setRestorePreview] = useState(null);
+  const [overwriteOnRestore, setOverwriteOnRestore] = useState(true);
 
   
   const exportFormats = [
@@ -38,6 +44,8 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
     { id: 'items', label: 'Items', icon: '📦', color: 'bg-teal-500' },
     { id: 'expenses', label: 'Expenses', icon: '💸', color: 'bg-red-500' }
   ];
+
+  const KNOWN_COLLECTIONS = ['parties', 'items', 'salesBills', 'purchaseBills', 'payments', 'expenses', 'advances'];
 
   const dateRanges = [
     { id: 'all', label: 'All Time' },
@@ -195,14 +203,30 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
     return data;
   };
 
+  // Helper: load party id -> name map for better labels in exports
+  const loadPartyMap = async () => {
+    try {
+      const coll = collection(db, `artifacts/${appId}/users/${userId}/parties`);
+      const snap = await getDocs(coll);
+      const map = {};
+      snap.forEach(d => {
+        const v = d.data();
+        map[d.id] = v.firmName || v.partyName || v.name || '';
+      });
+      return map;
+    } catch {
+      return {};
+    }
+  };
+
   // Transform data for export
-  const transformDataForExport = (data) => {
+  const transformDataForExport = (data, partyMap = {}) => {
     switch (selectedModule) {
       case 'sales':
         return data.map(item => ({
           'Invoice Number': item.number || '',
           'Date': item.invoiceDate ? new Date(item.invoiceDate).toLocaleDateString() : '',
-          'Party': item.party || '',
+          'Party': item.partyName || partyMap[item.partyId || item.party || item.buyerId] || item.party || item.partyId || '',
           'Amount': item.amount || 0,
           'Payment Status': item.paymentStatus || 'Pending',
           'Notes': item.notes || '',
@@ -213,7 +237,9 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
         return data.map(item => ({
           'Bill Number': item.number || '',
           'Date': item.billDate ? new Date(item.billDate).toLocaleDateString() : '',
-          'Supplier': item.supplier || '',
+          'Supplier': item.supplierName || item.partyName ||
+                      partyMap[item.supplierId || item.party || item.supplier || item.partyId] ||
+                      item.party || item.supplier || item.supplierId || item.partyId || '',
           'Amount': item.amount || 0,
           'Payment Status': item.paymentStatus || 'Pending',
           'Notes': item.notes || '',
@@ -224,7 +250,7 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
         return data.map(item => ({
           'Receipt Number': item.receiptNumber || '',
           'Date': item.paymentDate ? new Date(item.paymentDate).toLocaleDateString() : '',
-          'Party Name': item.partyName || '',
+          'Party Name': item.partyName || partyMap[item.partyId || item.party || item.buyerId || item.supplierId] || item.party || '',
           'Amount': item.totalAmount || item.amount || 0,
           'Payment Mode': item.paymentMode || '',
           'Reference': item.reference || '',
@@ -312,13 +338,40 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
 
   // Export to PDF (simplified - would need jsPDF for full implementation)
   const exportToPDF = (data, filename) => {
-    // For now, we'll create a simple text-based PDF
-    const content = data.map(row => 
-      Object.entries(row).map(([key, value]) => `${key}: ${value}`).join('\n')
-    ).join('\n\n');
-    
-    const blob = new Blob([content], { type: 'text/plain' });
-    saveAs(blob, `${filename}.txt`);
+    if (!data.length) throw new Error('No data to export');
+    const doc = new jsPDF({ orientation: 'landscape' });
+    const headers = Object.keys(data[0]);
+    const rows = data.map(r => headers.map(h => r[h]));
+    doc.text(`${filename}`, 14, 12);
+    autoTable(doc, { head: [headers], body: rows, startY: 16, styles: { fontSize: 8 } });
+    doc.save(`${filename}.pdf`);
+  };
+
+  // Build and share CSV via Web Share API if available
+  const shareCurrentSelection = async () => {
+    try {
+      const raw = await fetchDataForExport();
+      const partyMap = (selectedModule === 'sales' || selectedModule === 'purchases' || selectedModule === 'payments')
+        ? await loadPartyMap() : {};
+      const data = transformDataForExport(raw, partyMap);
+      if (!data.length) { alert('No data to share.'); return; }
+      const headers = Object.keys(data[0]);
+      const csvContent = [headers.join(','), ...data.map(row => headers.map(h => `"${(row[h] ?? '').toString().replace(/"/g, '""')}"`).join(','))].join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv' });
+      const ts = new Date().toISOString().split('T')[0];
+      const moduleLabel = modules.find(m => m.id === selectedModule)?.label || selectedModule;
+      const fileName = `${moduleLabel}_export_${ts}.csv`;
+      const file = new File([blob], fileName, { type: 'text/csv' });
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: `${moduleLabel} Export`, text: `${moduleLabel} data exported from ACCTOO` });
+      } else {
+        saveAs(blob, fileName);
+        alert('Your device does not support direct sharing. The CSV has been downloaded; please attach it in your email/WhatsApp.');
+      }
+    } catch (err) {
+      console.error('Share failed', err);
+      alert(`Share failed: ${err.message}`);
+    }
   };
 
   // Export to JSON
@@ -356,7 +409,9 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
       }
       
       setExportProgress(50);
-      const transformedData = transformDataForExport(data);
+      const partyMap = (selectedModule === 'sales' || selectedModule === 'purchases' || selectedModule === 'payments')
+        ? await loadPartyMap() : {};
+      const transformedData = transformDataForExport(data, partyMap);
       
       setExportProgress(75);
       const timestamp = new Date().toISOString().split('T')[0];
@@ -418,6 +473,137 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
     localStorage.removeItem(`exportHistory_${userId}`);
   };
 
+  // ---------- Full Backup (All Collections) ----------
+  const createFullBackup = async () => {
+    if (!db || !userId || !appId) return;
+    try {
+      setBackupProgress(5);
+      const collectionsData = {};
+      let processed = 0;
+      for (const coll of KNOWN_COLLECTIONS) {
+        const collRef = collection(db, `artifacts/${appId}/users/${userId}/${coll}`);
+        const snap = await getDocs(collRef);
+        collectionsData[coll] = snap.docs.map(d => ({ id: d.id, data: d.data() }));
+        processed += 1;
+        setBackupProgress(Math.min(95, Math.round((processed / (KNOWN_COLLECTIONS.length + 1)) * 100)));
+      }
+      // Company details (single document)
+      const companyDocRef = doc(db, `artifacts/${appId}/users/${userId}/companyDetails`, 'myCompany');
+      const companySnap = await getDoc(companyDocRef);
+      const company = companySnap.exists() ? { id: 'myCompany', data: companySnap.data() } : null;
+
+      const backup = {
+        meta: {
+          appId,
+          userId,
+          createdAt: new Date().toISOString(),
+          formatVersion: 1,
+        },
+        companyDetails: company,
+        collections: collectionsData,
+      };
+
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+      const ts = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
+      saveAs(blob, `acctoo-backup-${ts}.json`);
+      setBackupProgress(100);
+      setTimeout(() => setBackupProgress(0), 1200);
+    } catch (err) {
+      console.error('Backup failed', err);
+      alert(`Backup failed: ${err.message}`);
+      setBackupProgress(0);
+    }
+  };
+
+  // ---------- Restore from Backup ----------
+  function reviveDatesDeep(input) {
+    if (!input || typeof input !== 'object') return input;
+    // If Timestamp-like {seconds, nanoseconds}
+    if (Object.prototype.hasOwnProperty.call(input, 'seconds') && Object.prototype.hasOwnProperty.call(input, 'nanoseconds')) {
+      const secs = Number(input.seconds);
+      if (!isNaN(secs)) return new Date(secs * 1000);
+    }
+    const output = Array.isArray(input) ? [] : {};
+    for (const [k, v] of Object.entries(input)) {
+      // Common audit fields we want to restore as Date if serialized
+      if ((k === 'createdAt' || k === 'updatedAt') && v && typeof v === 'object' && 'seconds' in v) {
+        output[k] = new Date(Number(v.seconds) * 1000);
+      } else {
+        output[k] = reviveDatesDeep(v);
+      }
+    }
+    return output;
+  }
+
+  const handleRestoreFile = async (e) => {
+    try {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const text = await file.text();
+      const json = JSON.parse(text);
+      setRestorePreview({
+        meta: json.meta,
+        counts: Object.fromEntries(Object.entries(json.collections || {}).map(([k, arr]) => [k, Array.isArray(arr) ? arr.length : 0])),
+        raw: json,
+      });
+    } catch (err) {
+      console.error('Restore preview failed', err);
+      alert('Invalid backup file.');
+      setRestorePreview(null);
+    }
+  };
+
+  const startRestore = async () => {
+    if (!restorePreview?.raw) { alert('Select a valid backup file first.'); return; }
+    const proceed = window.confirm('This will restore data from backup. Continue?');
+    if (!proceed) return;
+    const { raw } = restorePreview;
+    try {
+      setRestoreProgress(1);
+      // Enforce: userId must match backup's userId
+      if (raw.meta?.userId && raw.meta.userId !== userId) {
+        alert('This backup belongs to a different user. Please login with the same account to restore.');
+        setRestoreProgress(0);
+        return;
+      }
+      // Optional: warn if appId mismatch
+      if (raw.meta?.appId && raw.meta.appId !== appId) {
+        const ok = window.confirm('Backup appId differs from current app. Continue anyway?');
+        if (!ok) { setRestoreProgress(0); return; }
+      }
+      // Restore company details
+      if (raw.companyDetails?.id && raw.companyDetails?.data) {
+        const ref = doc(db, `artifacts/${appId}/users/${userId}/companyDetails`, raw.companyDetails.id);
+        await setDoc(ref, reviveDatesDeep(raw.companyDetails.data), { merge: overwriteOnRestore });
+      }
+      const entries = Object.entries(raw.collections || {});
+      let processed = 0;
+      for (const [collName, docs] of entries) {
+        if (!Array.isArray(docs) || docs.length === 0) { processed++; continue; }
+        // Write in batches of 400 to stay under limits
+        for (let i = 0; i < docs.length; i += 400) {
+          const batch = writeBatch(db);
+          const slice = docs.slice(i, i + 400);
+          slice.forEach(({ id, data }) => {
+            const ref = doc(db, `artifacts/${appId}/users/${userId}/${collName}`, id);
+            batch.set(ref, reviveDatesDeep(data), { merge: overwriteOnRestore });
+          });
+          await batch.commit();
+          setRestoreProgress(Math.min(99, Math.round(((processed + i / docs.length) / entries.length) * 100)));
+        }
+        processed++;
+        setRestoreProgress(Math.min(99, Math.round((processed / entries.length) * 100)));
+      }
+      setRestoreProgress(100);
+      alert('Restore completed successfully. You may refresh the app to see updated data.');
+      setTimeout(() => setRestoreProgress(0), 1500);
+    } catch (err) {
+      console.error('Restore failed', err);
+      alert(`Restore failed: ${err.message}`);
+      setRestoreProgress(0);
+    }
+  };
+
   if (!isVisible) return null;
 
   return (
@@ -465,6 +651,17 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
           >
             <span>📤</span>
             <span>Share</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('backup')}
+            className={`flex-1 flex items-center justify-center space-x-2 py-3 text-sm font-medium transition-colors ${
+              activeTab === 'backup'
+                ? 'text-blue-600 border-b-2 border-blue-600'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <span>🗄️</span>
+            <span>Backup & Restore</span>
           </button>
           <button
             onClick={() => setActiveTab('history')}
@@ -650,29 +847,33 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
 
           {activeTab === 'share' && (
             <div className="space-y-6">
-              <div className="text-center py-8">
+              <div className="text-center py-6">
                 <div className="text-gray-400 mb-4">
                   <svg className="w-16 h-16 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.367 2.684 3 3 0 00-5.367-2.684z" />
                   </svg>
                 </div>
                 <h3 className="text-lg font-medium text-gray-900 mb-2">Share Your Data</h3>
-                <p className="text-gray-600 mb-6">Export your data first, then share it using these options</p>
-                
+                <p className="text-gray-600 mb-4">Share the current module data as a CSV file using your device share menu. If sharing is not supported, we’ll download the file so you can attach it manually.</p>
+
+                <div className="mb-4">
+                  <button onClick={shareCurrentSelection} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Share file (CSV)</button>
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <button
                     onClick={handleShareViaEmail}
                     className="flex items-center justify-center space-x-3 p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
                   >
                     <span className="text-2xl">📧</span>
-                    <span className="font-medium">Share via Email</span>
+                    <span className="font-medium">Open Email (attach file manually)</span>
                   </button>
                   <button
                     onClick={handleShareViaWhatsApp}
                     className="flex items-center justify-center space-x-3 p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
                   >
                     <span className="text-2xl">💬</span>
-                    <span className="font-medium">Share via WhatsApp</span>
+                    <span className="font-medium">Open WhatsApp (attach file manually)</span>
                   </button>
                 </div>
               </div>
@@ -730,6 +931,46 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
               )}
             </div>
           )}
+
+          {activeTab === 'backup' && (
+            <div className="space-y-8">
+              <div className="p-4 border border-gray-200 rounded-lg">
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">Full Backup</h3>
+                <p className="text-sm text-gray-600 mb-4">Download a single backup file (.json) containing all your data for this company/user. You can restore it later on the same or another device.</p>
+                <button
+                  onClick={createFullBackup}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  disabled={backupProgress > 0 && backupProgress < 100}
+                >
+                  {backupProgress > 0 && backupProgress < 100 ? `Preparing… ${backupProgress}%` : 'Download Full Backup (.json)'}
+                </button>
+              </div>
+              <div className="p-4 border border-gray-200 rounded-lg">
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">Restore From Backup</h3>
+                <p className="text-sm text-gray-600 mb-4">Select a previously downloaded backup file to restore your data. The same format is used for export and import. Links between records are preserved by restoring the original document IDs.</p>
+                <div className="flex items-center gap-3 mb-4">
+                  <input type="file" accept="application/json,.json" onChange={handleRestoreFile} />
+                  <label className="flex items-center gap-2 text-sm text-gray-700">
+                    <input type="checkbox" checked={overwriteOnRestore} onChange={(e)=>setOverwriteOnRestore(e.target.checked)} />
+                    <span>Overwrite existing data (merge if unchecked)</span>
+                  </label>
+                </div>
+                {restorePreview && (
+                  <div className="text-sm text-gray-700 mb-3">
+                    <div className="mb-1">Backup date: <span className="font-medium">{new Date(restorePreview.meta?.createdAt || Date.now()).toLocaleString()}</span></div>
+                    <div className="mb-2">Collections: {Object.entries(restorePreview.counts).map(([k,v]) => `${k}: ${v}`).join(', ')}</div>
+                  </div>
+                )}
+                <button
+                  onClick={startRestore}
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-400"
+                  disabled={!restorePreview || (restoreProgress > 0 && restoreProgress < 100)}
+                >
+                  {restoreProgress > 0 && restoreProgress < 100 ? `Restoring… ${restoreProgress}%` : 'Start Restore'}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -743,6 +984,9 @@ const DataExport = ({ db, userId, appId, isVisible, onClose }) => {
                   Date Range: {dateRanges.find(d => d.id === dateRange)?.label}
                 </div>
               </div>
+            )}
+            {activeTab === 'backup' && (
+              <div className="text-xs text-gray-500">Backup includes: {KNOWN_COLLECTIONS.join(', ')} and company details.</div>
             )}
           </div>
           <div className="flex space-x-3">
