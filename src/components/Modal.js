@@ -56,30 +56,50 @@ export const ActionBar = ({ children, className = "", justify = "between" }) => 
   );
 };
 
-// Modal Manager for LIFO functionality
+// Modal Manager for LIFO functionality with global ESC handling
 class ModalManager {
   constructor() {
-    this.modals = [];
+    this.modals = []; // stack of { id, onClose }
     this.listeners = [];
+    this.escAttached = false;
+    this.handleKeyDown = this.handleKeyDown.bind(this);
   }
 
-  push(modalId) {
-    this.modals.push(modalId);
+  handleKeyDown(event) {
+    if (event.key !== 'Escape') return;
+    const top = this.modals[this.modals.length - 1];
+    if (!top) return;
+    // Pop first to avoid re-entrancy if onClose triggers another close
+    this.modals.pop();
+    this.notifyListeners();
+    try {
+      if (typeof top.onClose === 'function') top.onClose();
+    } catch (_) {}
+    if (this.modals.length === 0) this.detachEsc();
+  }
+
+  attachEsc() {
+    if (this.escAttached) return;
+    document.addEventListener('keydown', this.handleKeyDown);
+    this.escAttached = true;
+  }
+
+  detachEsc() {
+    if (!this.escAttached) return;
+    document.removeEventListener('keydown', this.handleKeyDown);
+    this.escAttached = false;
+  }
+
+  register(modalId, onClose) {
+    this.modals.push({ id: modalId, onClose });
+    this.attachEsc();
     this.notifyListeners();
   }
 
-  pop() {
-    const modalId = this.modals.pop();
+  unregister(modalId) {
+    this.modals = this.modals.filter(m => m.id !== modalId);
+    if (this.modals.length === 0) this.detachEsc();
     this.notifyListeners();
-    return modalId;
-  }
-
-  peek() {
-    return this.modals[this.modals.length - 1];
-  }
-
-  isEmpty() {
-    return this.modals.length === 0;
   }
 
   subscribe(listener) {
@@ -94,12 +114,15 @@ class ModalManager {
   }
 
   closeTop() {
-    if (!this.isEmpty()) {
-      const topModal = this.peek();
-      this.pop();
-      return topModal;
-    }
-    return null;
+    const top = this.modals[this.modals.length - 1];
+    if (!top) return null;
+    this.modals.pop();
+    this.notifyListeners();
+    try {
+      if (typeof top.onClose === 'function') top.onClose();
+    } catch (_) {}
+    if (this.modals.length === 0) this.detachEsc();
+    return top.id;
   }
 }
 
@@ -115,14 +138,12 @@ export const useModalManager = () => {
     return unsubscribe;
   }, []);
 
-  const openModal = (modalId) => {
-    globalModalManager.push(modalId);
+  const openModal = (modalId, onClose) => {
+    globalModalManager.register(modalId, onClose);
   };
 
   const closeModal = (modalId) => {
-    // Remove specific modal from stack
-    globalModalManager.modals = globalModalManager.modals.filter(id => id !== modalId);
-    globalModalManager.notifyListeners();
+    globalModalManager.unregister(modalId);
   };
 
   const closeTopModal = () => {
@@ -144,23 +165,18 @@ export const StandardModal = ({
   zIndex = "z-50"
 }) => {
   const modalRef = useRef(null);
+  const modalIdRef = useRef(`modal-${Math.random().toString(36).slice(2)}`);
 
   useEffect(() => {
-    const handleEscKey = (event) => {
-      if (event.key === 'Escape' && isOpen) {
-        onClose();
-      }
-    };
-
     if (isOpen) {
-      document.addEventListener('keydown', handleEscKey);
+      globalModalManager.register(modalIdRef.current, onClose);
       document.body.style.overflow = 'hidden';
+      return () => {
+        globalModalManager.unregister(modalIdRef.current);
+        document.body.style.overflow = 'unset';
+      };
     }
-
-    return () => {
-      document.removeEventListener('keydown', handleEscKey);
-      document.body.style.overflow = 'unset';
-    };
+    return undefined;
   }, [isOpen, onClose]);
 
   const sizeClasses = {
@@ -226,26 +242,22 @@ export const PreviewModal = ({
   onZoomReset,
   maxWidth = "max-w-4xl",
   maxHeight = "max-h-[90vh]",
-  zIndex = "z-50"
+  zIndex = "z-50",
+  extraActions = null
 }) => {
   const modalRef = useRef(null);
+  const modalIdRef = useRef(`modal-${Math.random().toString(36).slice(2)}`);
 
   useEffect(() => {
-    const handleEscKey = (event) => {
-      if (event.key === 'Escape' && isOpen) {
-        onClose();
-      }
-    };
-
     if (isOpen) {
-      document.addEventListener('keydown', handleEscKey);
+      globalModalManager.register(modalIdRef.current, onClose);
       document.body.style.overflow = 'hidden';
+      return () => {
+        globalModalManager.unregister(modalIdRef.current);
+        document.body.style.overflow = 'unset';
+      };
     }
-
-    return () => {
-      document.removeEventListener('keydown', handleEscKey);
-      document.body.style.overflow = 'unset';
-    };
+    return undefined;
   }, [isOpen, onClose]);
 
   if (!isOpen) return null;
@@ -268,6 +280,7 @@ export const PreviewModal = ({
           </div>
           <ActionBar>
             <span className="text-xs text-gray-500">Press ESC to close</span>
+            {extraActions}
             {showPrintButton && (
               <StandardButton variant="primary" onClick={onPrint}>
                 Print

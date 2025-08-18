@@ -27,6 +27,7 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
     const [pan, setPan] = useState('');
     const [creditPeriod, setCreditPeriod] = useState('0');
     const [creditLimit, setCreditLimit] = useState('0');
+    const [openingBalance, setOpeningBalance] = useState('0');
     const [sameAsWhatsapp, setSameAsWhatsapp] = useState(false);
 
       // Table sorting hook with default sort by creation date descending (LIFO)
@@ -108,6 +109,7 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
         setPan('');
         setCreditPeriod('0');
         setCreditLimit('0');
+        setOpeningBalance('0');
         setPartyType('Buyer');
         setEditingPartyId(null);
         setMessage('');
@@ -167,6 +169,7 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
                 pan,
                 creditPeriod: parseInt(creditPeriod) || 0,
                 creditLimit: parseFloat(creditLimit) || 0,
+                openingBalance: parseFloat(openingBalance) || 0,
                 partyType,
                 timestamp: serverTimestamp()
             };
@@ -202,6 +205,7 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
         setPan(party.pan || '');
         setCreditPeriod(party.creditPeriod?.toString() || '0');
         setCreditLimit(party.creditLimit?.toString() || '0');
+        setOpeningBalance(party.openingBalance?.toString() || '0');
         setPartyType(party.partyType);
         setMessage('Editing existing party.');
         setSameAsWhatsapp(party.whatsapp === party.contact);
@@ -235,6 +239,26 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
 
             <div id="party-entry-form">
             <h3 className="text-lg sm:text-xl font-bold text-gray-800 mb-4">{editingPartyId ? 'Edit Party' : 'Add New Party'}</h3>
+            
+            {/* Opening Balance Info Box */}
+            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
+                <div className="flex items-start">
+                    <div className="flex-shrink-0">
+                        <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                        </svg>
+                    </div>
+                    <div className="ml-3">
+                        <h4 className="text-sm font-medium text-blue-800">Opening Balance Guide</h4>
+                        <div className="mt-1 text-sm text-blue-700">
+                            <p><strong>+ve Value:</strong> Customer owes you money (Udhari/Receivable)</p>
+                            <p><strong>-ve Value:</strong> You owe supplier money (Advance/Payable)</p>
+                            <p><strong>0:</strong> No opening balance</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 mb-6">
                 <div>
                     <label htmlFor="firmName" className="block text-sm font-medium text-gray-700">Party Name</label>
@@ -338,6 +362,16 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
                         className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
                         min="0" />
                 </div>
+                <div>
+                    <label htmlFor="openingBalance" className="block text-sm font-medium text-gray-700">Opening Balance (₹)</label>
+                    <input type="number" id="openingBalance" value={openingBalance} onChange={(e) => setOpeningBalance(e.target.value)}
+                        className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500"
+                        step="0.01" />
+                    <p className="mt-1 text-xs text-gray-500">
+                        <strong>+ve for Udhari (Receivable):</strong> Amount customer owes you<br/>
+                        <strong>-ve for Advance (Payable):</strong> Amount you owe to supplier
+                    </p>
+                </div>
             </div>
             </div>
             <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mt-4">
@@ -364,6 +398,7 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
                                 <SortableHeader columnKey="firmName" label="Firm Name" onSort={handleSort} sortConfig={sortConfig} />
                                 <SortableHeader columnKey="personName" label="Person Name" onSort={handleSort} sortConfig={sortConfig} />
                                 <SortableHeader columnKey="partyType" label="Type" onSort={handleSort} sortConfig={sortConfig} />
+                                <SortableHeader columnKey="openingBalance" label="Opening Balance" onSort={handleSort} sortConfig={sortConfig} />
                                 <SortableHeader columnKey="contact" label="Contact" onSort={handleSort} sortConfig={sortConfig} />
                                 <SortableHeader columnKey="email" label="Email" onSort={handleSort} sortConfig={sortConfig} />
                                 <SortableHeader columnKey="whatsapp" label="WhatsApp" onSort={handleSort} sortConfig={sortConfig} />
@@ -373,11 +408,23 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
                             </tr>
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
-                            {pagination.currentData.map((party) => (
+                                                        {pagination.currentData.map((party) => (
                                 <tr key={party.id}>
                                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{party.firmName}</td>
                                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{party.personName}</td>
                                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{party.partyType}</td>
+                                    <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">
+                                        <span className={`font-medium ${party.openingBalance > 0 ? 'text-green-600' : party.openingBalance < 0 ? 'text-red-600' : 'text-gray-600'}`}>
+                                            {party.openingBalance > 0 ? `+${party.openingBalance.toLocaleString()}` : 
+                                             party.openingBalance < 0 ? `-${Math.abs(party.openingBalance).toLocaleString()}` : 
+                                             '0.00'}
+                                        </span>
+                                        <div className="text-xs text-gray-500">
+                                            {party.openingBalance > 0 ? 'Receivable' : 
+                                             party.openingBalance < 0 ? 'Payable' : 
+                                             'No Balance'}
+                                        </div>
+                                    </td>
                                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{party.contact}</td>
                                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{party.email}</td>
                                     <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-800">{party.whatsapp}</td>
@@ -389,7 +436,7 @@ const Parties = ({ db, userId, isAuthReady, appId }) => {
                                             className="text-indigo-600 hover:text-indigo-900 font-medium mr-2"
                                         >
                                             Edit
-                                        </button>
+                                            </button>
                                         <button
                                             onClick={() => handleDeleteParty(party.id)}
                                             className="text-red-600 hover:text-red-900 font-medium"

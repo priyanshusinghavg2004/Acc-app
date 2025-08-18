@@ -297,6 +297,10 @@ const CustomerLedgerReport = ({ db, userId, dateRange, selectedParty, parties, l
           }
         });
 
+        // Get party opening balance from parties data
+        const selectedPartyData = parties.find(p => p.id === selectedParty);
+        let partyOpeningBalance = selectedPartyData?.openingBalance || 0;
+        
         // Calculate opening balance (transactions before start date) - simplified
         const openingQuery = query(
           collection(db, `${basePath}/salesBills`),
@@ -345,7 +349,7 @@ const CustomerLedgerReport = ({ db, userId, dateRange, selectedParty, parties, l
           return date < dateRange.start;
         });
 
-        let openingBalance = 0;
+        let openingBalance = partyOpeningBalance; // Start with party's opening balance
         
         // Add sales (receivable)
         openingSales.forEach(sale => {

@@ -1,7 +1,34 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../firebase.config';
+import { APP_ID } from '../utils/appArtifacts';
 
 const LandingPage = () => {
+  const [site, setSite] = useState(null);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const ref = doc(db, 'artifacts', APP_ID, 'backoffice_website', 'content');
+        const snap = await getDoc(ref);
+        if (snap.exists()) setSite(snap.data());
+      } catch (e) {
+        // ignore
+      }
+    };
+    load();
+  }, []);
+
+  const hero = site?.hero || {
+    title: 'Smart Accounting for',
+    highlight: ' Modern Business',
+    subtitle: "Streamline your business finances with India's most comprehensive accounting software.",
+    primaryCtaText: 'Start Free Trial',
+    secondaryCtaText: 'Watch Demo'
+  };
+  const pricing = site?.pricing || { basicPrice: 999, trialText: 'After 3 months free trial' };
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Navigation */}
@@ -31,19 +58,18 @@ const LandingPage = () => {
               <img src="/Logoacctoo.png" alt="Acctoo" className="h-20 w-auto mx-auto mb-6" />
             </div>
             <h1 className="text-5xl md:text-7xl font-bold text-gray-900 mb-6">
-              Smart Accounting for
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600"> Modern Business</span>
+              {hero.title}
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600">{hero.highlight}</span>
             </h1>
             <p className="text-xl text-gray-600 mb-10 max-w-4xl mx-auto leading-relaxed">
-              Streamline your business finances with India's most comprehensive accounting software. 
-              Manage invoices, track payments, generate GST reports, and grow your business with confidence.
+              {hero.subtitle}
             </p>
             <div className="flex flex-col sm:flex-row gap-6 justify-center">
               <Link to="/login" className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-10 py-4 rounded-xl text-lg font-semibold hover:from-blue-700 hover:to-purple-700 transition-all duration-300 shadow-lg hover:shadow-xl transform hover:-translate-y-1">
-                Start Free Trial
+                {hero.primaryCtaText}
               </Link>
               <button className="border-2 border-blue-600 text-blue-600 px-10 py-4 rounded-xl text-lg font-semibold hover:bg-blue-600 hover:text-white transition-all duration-300 shadow-md hover:shadow-lg">
-                Watch Demo
+                {hero.secondaryCtaText}
               </button>
             </div>
           </div>
@@ -427,10 +453,10 @@ const LandingPage = () => {
                 <h3 className="text-2xl font-bold text-gray-900 mb-2">Acctoo Basic</h3>
                 <div className="mb-4">
                   <div className="flex items-center justify-center mb-2">
-                    <span className="text-4xl font-bold text-gray-900">₹999</span>
+                    <span className="text-4xl font-bold text-gray-900">₹{pricing.basicPrice}</span>
                     <span className="text-gray-600 ml-2">/year</span>
                   </div>
-                  <p className="text-lg text-gray-600">After 3 months free trial</p>
+                  <p className="text-lg text-gray-600">{pricing.trialText}</p>
                 </div>
                 <p className="text-gray-600">Perfect for small businesses</p>
               </div>

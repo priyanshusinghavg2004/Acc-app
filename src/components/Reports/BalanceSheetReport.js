@@ -120,10 +120,17 @@ const BalanceSheetReport = ({ db, userId, appId, dateRange, financialYear, selec
           description: 'Total bank/UPI/cheque receipts from sales'
         });
 
-        // Debtors (accounts receivable)
+        // Debtors (accounts receivable) - including party opening balances
         const totalSales = sales.reduce((sum, sale) => sum + sale.totalAmount, 0);
         const salesPayments = salesReceipts.reduce((s, p) => s + (p.amount||0), 0);
-        const debtors = totalSales - salesPayments;
+        
+        // Add party opening balances (positive for receivable, negative for payable)
+        const partyOpeningBalances = parties.reduce((sum, party) => {
+            const balance = party.openingBalance || 0;
+            return sum + (balance > 0 ? balance : 0); // Only positive balances (receivable)
+        }, 0);
+        
+        const debtors = totalSales - salesPayments + partyOpeningBalances;
 
         assets.push({
           category: 'Debtors',
@@ -148,13 +155,20 @@ const BalanceSheetReport = ({ db, userId, appId, dateRange, financialYear, selec
           description: 'Opening capital (settings)'
         });
 
-        // Creditors (accounts payable)
+        // Creditors (accounts payable) - including party opening balances
         const totalPurchases = purchases.reduce((sum, purchase) => sum + purchase.totalAmount, 0);
         const purchasePaymentRows = payments
           .filter(p => (p.receiptNumber || '').toString().toUpperCase().startsWith('PRP') || ((p.type||'').toString().toLowerCase()==='payment' && ((p.documentType||'').toString().toLowerCase()==='purchase')) )
           .map(p => ({ id:p.id, date:p.paymentDate || p.date, amount:Number(p.totalAmount || p.amount || 0), receiptNumber:p.receiptNumber || p.number || '', partyName:p.partyName || p.partyFirmName || '' }));
         const purchasePayments = purchasePaymentRows.reduce((s, p) => s + Number(p.amount || 0), 0);
-        const creditors = totalPurchases - purchasePayments;
+        
+        // Add party opening balances (negative for payable)
+        const partyPayableBalances = parties.reduce((sum, party) => {
+            const balance = party.openingBalance || 0;
+            return sum + (balance < 0 ? Math.abs(balance) : 0); // Only negative balances (payable)
+        }, 0);
+        
+        const creditors = totalPurchases - purchasePayments + partyPayableBalances;
 
         liabilities.push({
           category: 'Creditors',

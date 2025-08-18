@@ -32,7 +32,7 @@ function QuotationTemplate({ billData = {}, companyDetails = {}, partyDetails = 
   const terms = billData.quotationTermsOverride || companyDetails.quotationTerms || '';
 
   return (
-    <div className="p-8 bg-white rounded shadow max-w-3xl mx-auto text-sm print:p-0 print:shadow-none print:bg-white">
+    <div className="p-4 md:p-8 bg-white rounded shadow max-w-3xl w-full mx-auto text-sm print:p-0 print:shadow-none print:bg-white">
       {/* Header */}
       <div className="flex justify-between items-center mb-4">
         <div className="flex items-center gap-3">
@@ -69,7 +69,7 @@ function QuotationTemplate({ billData = {}, companyDetails = {}, partyDetails = 
       )}
       {/* Item Table */}
       <div className="overflow-x-auto mt-4 mb-4">
-        <table className="w-full border border-gray-300">
+        <table className="w-full min-w-[560px] border border-gray-300">
           <thead className="bg-gray-100">
             <tr>
               <th className="border px-2 py-1">Sr.</th>

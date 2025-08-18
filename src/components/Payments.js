@@ -19,6 +19,9 @@ import {
   applyAdvanceToBills as applyAdvanceToBillsUtil
 } from '../utils/advanceUtils';
 import jsPDF from 'jspdf';
+import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { app } from '../firebase.config';
+import ShareButton from './Reports/ShareButton';
 
 // jsPDF is imported from module; plugin will be loaded dynamically where needed
 
@@ -635,15 +638,159 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
         const body = rows.map(r=>`<tr>${cols.map(c=>`<td style=\"border:1px solid #ddd;padding:6px;text-align:${c.key==='mode'?'left':'right'};\">${(r[c.key]||0).toLocaleString? r[c.key].toLocaleString('en-IN') : (r[c.key]||'')}</td>`).join('')}</tr>`).join('');
         return `<div style=\"margin:10px 0\"><div style=\"font-weight:600;margin:6px 0\">${title}</div><table style=\"width:100%;border-collapse:collapse\"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
       };
-      const rows = buildModeRows();
-      const cashRow = rows.find(r=>r.mode==='Cash') || { receipts:0,payments:0,expenses:0 };
-      const bankCombined = rows.filter(r=>r.mode!=='Cash').reduce((s,r)=>s+((r.receipts||0)-(r.payments||0)-(r.expenses||0)),0);
-      const balanceRows = [ { mode:'Cash', balance: (cashRow.receipts - cashRow.payments - cashRow.expenses) }, { mode:'Bank (UPI+Bank+Cheque/DD)', balance: bankCombined } ];
-      const balanceCols = [ {key:'mode',label:'Mode'}, {key:'balance',label:'Balance'} ];
-      w.document.write(`<html><head><title>Payment Mode</title><style>body{font-family:Arial;padding:16px} table{width:100%;border-collapse:collapse} th,td{border:1px solid #ddd;padding:6px} th{background:#f6f6f6}</style></head><body>${headerHtml}${renderTable('1) Payment Received (Sales/PRI)', rows.map(r=>({ mode:r.mode, value:r.receipts })), [{key:'mode',label:'Mode'},{key:'value',label:'Total'}])}${renderTable('2) Payment Paid (Purchase/PRP)', rows.map(r=>({ mode:r.mode, value:r.payments })), [{key:'mode',label:'Mode'},{key:'value',label:'Total'}])}${renderTable('3) Expense', rows.map(r=>({ mode:r.mode, value:r.expenses })), [{key:'mode',label:'Mode'},{key:'value',label:'Total'}])}${renderTable('4) Balance', balanceRows, balanceCols)}</body></html>`);
-      w.document.close(); w.focus(); setTimeout(()=>{ w.print(); w.close(); }, 300);
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Payment Mode</title></head><body>${headerHtml}${renderTable('1) Payment Received (Sales/PRI)', data.map(r=>({mode:r.mode,value:r.receipts})), [{key:'mode',label:'Mode'},{key:'value',label:'Total'}])}${renderTable('2) Payment Paid (Purchase/PRP)', data.map(r=>({mode:r.mode,value:r.payments})), [{key:'mode',label:'Mode'},{key:'value',label:'Total'}])}${renderTable('3) Expense', data.map(r=>({mode:r.mode,value:r.expenses})), [{key:'mode',label:'Mode'},{key:'value',label:'Total'}])}${(()=>{ const cash = data.find(r=>r.mode==='Cash')||{receipts:0,payments:0,expenses:0}; const bank = data.filter(r=>r.mode!=='Cash').reduce((s,r)=>s+((r.receipts||0)-(r.payments||0)-(r.expenses||0)),0); return renderTable('4) Balance', [{mode:'Cash',value:(cash.receipts - cash.payments - cash.expenses)},{mode:'Bank Combined',value:bank}], [{key:'mode',label:'Mode'},{key:'value',label:'Balance'}]); })()}</body></html>`;
+      w.document.write(html); w.document.close(); w.focus(); w.print(); w.close();
     }
   };
+
+  // Share helpers (match GlobalExportButtons behavior)
+  const shareBlobViaSystem = async (blob, suggestedName, mime) => {
+    try {
+      const file = new File([blob], suggestedName, { type: mime });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: suggestedName, text: 'Payments Report' });
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  };
+
+  const sharePaymentsAsPDF = async (tableType) => {
+    try {
+      const { jsPDF } = await import('jspdf');
+      const { default: autoTable } = await import('jspdf-autotable');
+      const doc = new jsPDF();
+      const makeTable = (arr, columns, title) => {
+        doc.addPage();
+        doc.setFontSize(16); doc.setFont(undefined, 'bold');
+        doc.text(title || 'Payments Report', 14, 16);
+        doc.setFontSize(10);
+        autoTable(doc, { head: [columns.map(c => c.label)], body: arr.map(r => columns.map(c => r[c.key] ?? '')), startY: 22, styles: { fontSize: 8 } });
+      };
+      doc.deletePage(1);
+      const addSection = async (type) => {
+        if (type === 'bills') {
+          const bills = getFilteredBills();
+          const rows = bills.map(bill => ({ billNumber: getBillNumber(bill), date: convertTimestamp(bill[getBillDateField()]), partyName: getPartyName(bill.partyId || bill.party), totalAmount: bill.totalAmount || 0, totalPaid: bill.totalPaid || 0, outstanding: bill.outstanding || 0, paymentCount: bill.paymentCount || 0 }));
+          const totals = getBillsTotals();
+          rows.push({ billNumber: `TOTAL (${totals.totalBills} bills)`, date: '', partyName: '', totalAmount: totals.totalAmount, totalPaid: totals.totalPaid, outstanding: totals.totalOutstanding, paymentCount: '' });
+          makeTable(rows, [
+            { key: 'billNumber', label: `${activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} Number` },
+            { key: 'date', label: 'Date' },
+            { key: 'partyName', label: 'Party Name' },
+            { key: 'totalAmount', label: 'Total Amount' },
+            { key: 'totalPaid', label: 'Total Paid' },
+            { key: 'outstanding', label: 'Outstanding' },
+            { key: 'paymentCount', label: 'Payment Count' }
+          ], `${activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} Bills`);
+        } else if (type === 'party-summary') {
+          const summary = getPartyWiseSummary();
+          const rows = summary.map(p => ({ partyName: p.partyName, totalBills: p.totalBills, totalAmount: p.totalAmount, totalPaid: p.totalPaid, outstanding: p.outstanding }));
+          const totals = getPartyWiseTotals();
+          rows.push({ partyName: `TOTAL (${totals.totalParties} parties)`, totalBills: totals.totalBills, totalAmount: totals.totalAmount, totalPaid: totals.totalPaid, outstanding: totals.totalOutstanding });
+          makeTable(rows, [
+            { key: 'partyName', label: 'Party Name' },
+            { key: 'totalBills', label: 'Total Bills' },
+            { key: 'totalAmount', label: 'Total Amount' },
+            { key: 'totalPaid', label: 'Total Paid' },
+            { key: 'outstanding', label: 'Outstanding' }
+          ], 'Party-wise Summary');
+        } else if (type === 'receipts') {
+          const filteredReceipts = payments.filter(payment => (activeTab === 'receipts' ? payment.type === receiptsSubTab : payment.type === activeTab));
+          const rows = filteredReceipts.map(payment => ({ receiptNumber: payment.receiptNumber, date: convertTimestamp(payment.paymentDate), partyName: payment.partyName, amount: payment.totalAmount || 0, paymentMode: payment.paymentMode, paymentType: payment.paymentType === 'bill' ? 'Bill Payment' : 'Khata Payment', reference: payment.reference || '-', notes: payment.notes || '-' }));
+          const totals = getReceiptsTotals();
+          rows.push({ receiptNumber: `TOTAL (${totals.totalReceipts} receipts)`, date: '', partyName: '', amount: totals.totalAmount, paymentMode: '', paymentType: '', reference: '', notes: '' });
+          makeTable(rows, [
+            { key: 'receiptNumber', label: 'Receipt Number' },
+            { key: 'date', label: 'Date' },
+            { key: 'partyName', label: 'Party Name' },
+            { key: 'amount', label: 'Amount' },
+            { key: 'paymentMode', label: 'Payment Mode' },
+            { key: 'paymentType', label: 'Payment Type' },
+            { key: 'reference', label: 'Reference' },
+            { key: 'notes', label: 'Notes' }
+          ], `${activeTab === 'receipts' ? receiptsSubTab.charAt(0).toUpperCase() + receiptsSubTab.slice(1) : activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} Receipts`);
+        }
+      };
+      if (tableType === 'all') {
+        await addSection('bills');
+        await addSection('party-summary');
+        await addSection('receipts');
+      } else {
+        await addSection(tableType);
+      }
+      const blob = doc.output('blob');
+      const ok = await shareBlobViaSystem(blob, `payments-${tableType}.pdf`, 'application/pdf');
+      if (!ok) { doc.save(`payments-${tableType}.pdf`); }
+    } catch (e) {
+      console.error('Payments share PDF failed:', e);
+      await handleExport(tableType);
+    }
+  };
+
+  const sharePaymentsAsExcel = async (tableType) => {
+    try {
+      let headers = [];
+      let rows = [];
+      if (tableType === 'bills') {
+        headers = ['Bill Number','Date','Party Name','Total Amount','Total Paid','Outstanding','Payment Count'];
+        const bills = getFilteredBills();
+        rows = bills.map(bill => [getBillNumber(bill), convertTimestamp(bill[getBillDateField()]), getPartyName(bill.partyId || bill.party), bill.totalAmount || 0, bill.totalPaid || 0, bill.outstanding || 0, bill.paymentCount || 0]);
+      } else if (tableType === 'party-summary') {
+        headers = ['Party Name','Total Bills','Total Amount','Total Paid','Outstanding'];
+        const summary = getPartyWiseSummary();
+        rows = summary.map(p => [p.partyName, p.totalBills, p.totalAmount, p.totalPaid, p.outstanding]);
+      } else if (tableType === 'receipts') {
+        headers = ['Receipt Number','Date','Party Name','Amount','Payment Mode','Payment Type','Reference','Notes'];
+        const filteredReceipts = payments.filter(payment => (activeTab === 'receipts' ? payment.type === receiptsSubTab : payment.type === activeTab));
+        rows = filteredReceipts.map(p => [p.receiptNumber, convertTimestamp(p.paymentDate), p.partyName, p.totalAmount || 0, p.paymentMode, (p.paymentType === 'bill' ? 'Bill Payment' : 'Khata Payment'), p.reference || '-', p.notes || '-']);
+      } else { return; }
+      let csv = headers.join(',') + '\n';
+      rows.forEach(r => { csv += r.map(v => (typeof v === 'number' ? v : `"${String(v).replace(/"/g,'""')}"`)).join(',') + '\n'; });
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const ok = await shareBlobViaSystem(blob, `payments-${tableType}.csv`, 'text/csv');
+      if (!ok) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = `payments-${tableType}.csv`; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+      }
+    } catch (e) { console.error('Payments share CSV failed:', e); }
+  };
+
+  const sharePaymentsAsImage = async (containerId, suggestedName = 'payments.png') => {
+    try {
+      const node = document.getElementById(containerId);
+      if (!node) return;
+      const html2canvas = await import('html2canvas');
+      const canvas = await html2canvas.default(node, { scale: 2, useCORS: true, allowTaint: false, backgroundColor: '#ffffff' });
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+      const ok = await shareBlobViaSystem(blob, suggestedName, 'image/png');
+      if (!ok) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = suggestedName; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+      }
+    } catch (e) { console.error('Payments share image failed:', e); }
+  };
+
+  const sharePaymentsLink = async (htmlBuilder, filenamePrefix = 'payments') => {
+    try {
+      const html = htmlBuilder();
+      const blob = new Blob([html], { type: 'text/html' });
+      const storage = getStorage(app);
+      const token = Math.random().toString(36).slice(2);
+      const path = `publicReports/${filenamePrefix}-${token}.html`;
+      const sref = storageRef(storage, path);
+      await uploadBytes(sref, blob, { contentType: 'text/html' });
+      const url = await getDownloadURL(sref);
+      const wrapped = `https://acctoo.com/doc-viewer.html?u=${encodeURIComponent(url)}`;
+      if (navigator.share) {
+        await navigator.share({ title: filenamePrefix, text: filenamePrefix, url: wrapped });
+      } else {
+        await navigator.clipboard.writeText(wrapped);
+        alert('Public link copied to clipboard');
+      }
+    } catch (e) { console.error('Payments share link failed:', e); }
+  };
+
   useEffect(() => {
     if (activeTab !== 'mode') return;
     const effectiveAppId = appId || 'acc-app-e5316';
@@ -2992,6 +3139,16 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
               <button onClick={() => handleExportPaymentMode('pdf')} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm">Export PDF</button>
               <button onClick={() => handleExportPaymentMode('excel')} className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm">Export Excel</button>
               <button onClick={() => handleExportPaymentMode('print')} className="bg-gray-700 hover:bg-gray-800 text-white px-3 py-1 rounded text-sm">Print</button>
+              <ShareButton
+                onExportPDF={() => sharePaymentsAsPDF('all')}
+                onExportExcel={() => sharePaymentsAsExcel('all')}
+                onExportImage={() => sharePaymentsAsImage('payments-header-actions', 'payments-mode.png')}
+                onShareLink={() => sharePaymentsLink(() => {
+                  const table = document.querySelector('#payments-header-actions')?.parentElement?.parentElement;
+                  const html = table ? table.outerHTML : '<div>No data</div>';
+                  return `<!DOCTYPE html><html><head><meta charset=\"utf-8\"/><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"/><title>Payment Mode</title><style>body{font-family:Arial;padding:16px} table{width:100%;border-collapse:collapse} th,td{border:1px solid #ddd;padding:6px} th{background:#f6f6f6}</style></head><body><h2 style=\"text-align:center;margin:8px 0\">${company?.firmName||'Payments'}</h2>${html}</body></html>`;
+                }, 'payments-mode')}
+              />
             </div>
           </div>
           {/* 1. Payment Received (Sales/PRI) */}
@@ -3364,6 +3521,16 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
               >
                 Export All Tables
               </button>
+              <ShareButton
+                onExportPDF={() => sharePaymentsAsPDF('bills')}
+                onExportExcel={() => sharePaymentsAsExcel('bills')}
+                onExportImage={() => sharePaymentsAsImage('payments-header-actions', 'payments-bills.png')}
+                onShareLink={() => sharePaymentsLink(() => {
+                  const table = document.querySelector('#payments-header-actions')?.parentElement?.parentElement?.nextElementSibling;
+                  const html = table ? table.outerHTML : '<div>No data</div>';
+                  return `<!DOCTYPE html><html><head><meta charset=\"utf-8\"/><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"/><title>Payments - Bills</title><style>body{font-family:Arial;padding:16px} table{width:100%;border-collapse:collapse} th,td{border:1px solid #ddd;padding:6px} th{background:#f6f6f6}</style></head><body><h2 style=\"text-align:center;margin:8px 0\">${company?.firmName||'Payments'}</h2>${html}</body></html>`;
+                }, 'payments-bills')}
+              />
             </div>
           </div>
         </div>
@@ -3631,6 +3798,16 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
                 >
                   Export All Tables
                 </button>
+                <ShareButton
+                  onExportPDF={() => sharePaymentsAsPDF('receipts')}
+                  onExportExcel={() => sharePaymentsAsExcel('receipts')}
+                  onExportImage={() => sharePaymentsAsImage('payments-header-actions', 'payments-receipts.png')}
+                  onShareLink={() => sharePaymentsLink(() => {
+                    const table = document.querySelector('#payments-header-actions')?.parentElement?.parentElement?.nextElementSibling;
+                    const html = table ? table.outerHTML : '<div>No data</div>';
+                    return `<!DOCTYPE html><html><head><meta charset=\"utf-8\"/><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"/><title>Payment Receipts</title><style>body{font-family:Arial;padding:16px} table{width:100%;border-collapse:collapse} th,td{border:1px solid #ddd;padding:6px} th{background:#f6f6f6}</style></head><body><h2 style=\"text-align:center;margin:8px 0\">${company?.firmName||'Payments'}</h2>${html}</body></html>`;
+                  }, 'payments-receipts')}
+                />
               </div>
             </div>
           </div>
@@ -4272,6 +4449,68 @@ const Payments = ({ db, userId, isAuthReady, appId }) => {
                   >
                     Download PDF
                   </button>
+                  <ShareButton
+                    onExportPDF={async () => {
+                      // Build PDF and share as attachment
+                      try {
+                        const jsPDFLocal = window.jsPDF || (window.jspdf && window.jspdf.jsPDF);
+                        if (!jsPDFLocal) return;
+                        const doc = new jsPDFLocal();
+                        let y = 15;
+                        doc.setFontSize(20); doc.setFont('helvetica', 'bold'); doc.setTextColor(31,41,55);
+                        doc.text('PAYMENT RECEIPT', 105, y, { align: 'center' }); y += 12;
+                        doc.setFontSize(12); doc.setTextColor(59,130,246); doc.setFont('helvetica', 'bold');
+                        doc.text(`Receipt No: ${selectedReceipt.receiptNumber}`, 105, y, { align: 'center' }); y += 12;
+                        doc.setFontSize(14); doc.setTextColor(0,0,0); doc.setFont('helvetica', 'bold');
+                        doc.text(company?.firmName || company?.name || 'Company Name', 105, y, { align: 'center' }); y += 10;
+                        doc.setDrawColor(209,213,219); doc.line(25, y, 185, y); y += 10;
+                        doc.setFontSize(12); doc.setFont('helvetica', 'normal');
+                        const addKV = (k, v) => { doc.text(`${k}: ${v}`, 25, y); y += 8; };
+                        addKV('Date', selectedReceipt.paymentDate || new Date().toISOString().split('T')[0]);
+                        addKV('Received From', selectedReceipt.partyName || '');
+                        addKV('Amount', `₹${parseFloat(selectedReceipt.totalAmount || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`);
+                        addKV('Payment Mode', selectedReceipt.paymentMode || 'Cash');
+                        addKV('Reference', selectedReceipt.reference || '-');
+                        addKV('Payment Type', selectedReceipt.paymentType === 'bill' ? 'Bill Payment' : 'Khata Payment');
+                        if (selectedReceipt.notes) addKV('Notes', selectedReceipt.notes);
+                        const blob = doc.output('blob');
+                        const ok = await shareBlobViaSystem(blob, `receipt-${selectedReceipt.receiptNumber}.pdf`, 'application/pdf');
+                        if (!ok) { doc.save(`receipt-${selectedReceipt.receiptNumber}.pdf`); }
+                      } catch (e) { console.error('Share receipt PDF failed:', e); }
+                    }}
+                    onExportImage={async () => {
+                      try {
+                        const el = document.querySelector('.receipt-container');
+                        if (!el) return;
+                        const html2canvas = await import('html2canvas');
+                        const canvas = await html2canvas.default(el, { scale: 2, useCORS: true, allowTaint: false, backgroundColor: '#ffffff' });
+                        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+                        const ok = await shareBlobViaSystem(blob, `receipt-${selectedReceipt.receiptNumber}.png`, 'image/png');
+                        if (!ok) {
+                          const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `receipt-${selectedReceipt.receiptNumber}.png`; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+                        }
+                      } catch (e) { console.error('Share receipt image failed:', e); }
+                    }}
+                    onShareLink={async () => {
+                      try {
+                        // Reuse print html content for viewer
+                        const html = (() => {
+                          const el = document.querySelector('.receipt-container');
+                          const inner = el ? el.outerHTML : '<div>No content</div>';
+                          return `<!DOCTYPE html><html><head><meta charset=\"utf-8\"/><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"/><title>Payment Receipt</title><style>body{font-family:Arial;padding:16px;background:#fff}</style></head><body>${inner}</body></html>`;
+                        })();
+                        const storage = getStorage(app);
+                        const token = Math.random().toString(36).slice(2);
+                        const path = `publicDocs/receipts/${selectedReceipt.id || selectedReceipt.receiptNumber}-${token}.html`;
+                        const sref = storageRef(storage, path);
+                        await uploadBytes(sref, new Blob([html], { type: 'text/html' }), { contentType: 'text/html' });
+                        const url = await getDownloadURL(sref);
+                        const wrapped = `https://acctoo.com/doc-viewer.html?u=${encodeURIComponent(url)}`;
+                        if (navigator.share) { await navigator.share({ title: `Receipt ${selectedReceipt.receiptNumber}`, text: 'Payment Receipt', url: wrapped }); }
+                        else { await navigator.clipboard.writeText(wrapped); alert('Public link copied to clipboard'); }
+                      } catch (e) { console.error('Share receipt link failed:', e); }
+                    }}
+                  />
                   <button
                     onClick={() => setShowReceiptModal(false)}
                     className="bg-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-400 transition-colors"

@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { collection, onSnapshot, doc, addDoc, serverTimestamp, getDoc, setDoc, deleteDoc, getDocs, query } from 'firebase/firestore';
 import { useLocation } from 'react-router-dom';
+import ShareButton from './Reports/ShareButton';
+import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { app } from '../firebase.config';
 import BillTemplates from './BillTemplates';
 import PurchaseBillTemplate from './BillTemplates/PurchaseBillTemplate';
 import PurchaseOrderTemplate from './BillTemplates/PurchaseOrderTemplate';
@@ -862,6 +865,7 @@ function Purchases({ db, userId, isAuthReady, appId }) {
       printWindow.document.write('.print\\:text-zinc-500 { color: #71717a !important; }');
       printWindow.document.write('.print\\:text-neutral-500 { color: #737373 !important; }');
       printWindow.document.write('.print\\:text-stone-500 { color: #78716c !important; }');
+      printWindow.document.write('@media print { img { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }');
       printWindow.document.write('</style>');
       printWindow.document.write('</head><body>');
       printWindow.document.write(printContents);
@@ -1146,7 +1150,19 @@ function Purchases({ db, userId, isAuthReady, appId }) {
   // Add print and PDF download handlers (copied from Sales.js, adapted):
   const handleInvoicePrint = () => {
     if (invoiceRef.current) {
-      const printContents = invoiceRef.current.innerHTML;
+      const temp = document.createElement('div');
+      temp.innerHTML = invoiceRef.current.innerHTML;
+      const imgs = Array.from(temp.querySelectorAll('img'));
+      imgs.forEach(async (img) => {
+        try {
+          const src = img.getAttribute('src'); if (!src || src.startsWith('data:')) return;
+          const proxied = src.startsWith('/img?') || src.includes('/img?') ? src : `${window.location.origin}/img?u=${encodeURIComponent(src)}`;
+          const resp = await fetch(proxied, { mode: 'cors' }); const blob = await resp.blob();
+          const dataUrl = await new Promise((resolve) => { const r = new FileReader(); r.onloadend = () => resolve(r.result); r.readAsDataURL(blob); });
+          img.setAttribute('src', dataUrl); img.removeAttribute('crossorigin');
+        } catch (_) {}
+      });
+      const printContents = temp.innerHTML;
       const printWindow = window.open('', '', 'height=800,width=1000');
       printWindow.document.write('<html><head><title>Purchase Bill</title>');
       printWindow.document.write('<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss/dist/tailwind.min.css">');
@@ -1174,30 +1190,103 @@ function Purchases({ db, userId, isAuthReady, appId }) {
       printWindow.document.write('</body></html>');
       printWindow.document.close();
       printWindow.focus();
-      setTimeout(() => {
-        printWindow.print();
-        printWindow.close();
-      }, 500);
+      const ensureImages = () => {
+        try {
+          const imgs = Array.from(printWindow.document.images || []);
+          imgs.forEach(img => { try { img.setAttribute('crossorigin', 'anonymous'); } catch (_) {} });
+          if (imgs.length === 0) return Promise.resolve();
+          return Promise.all(imgs.map(img => new Promise(resolve => {
+            if (img.complete) return resolve();
+            img.addEventListener('load', resolve, { once: true });
+            img.addEventListener('error', resolve, { once: true });
+          })));
+        } catch (_) {
+          return Promise.resolve();
+        }
+      };
+      printWindow.onload = async () => {
+        await ensureImages();
+        setTimeout(() => {
+          printWindow.print();
+          printWindow.close();
+        }, 100);
+      };
     }
   };
 
   const handleInvoiceDownload = () => {
     if (invoiceRef.current) {
-      import('html2pdf.js').then(html2pdf => {
+      import('html2pdf.js').then(async html2pdf => {
         const tempContainer = document.createElement('div');
         tempContainer.innerHTML = invoiceRef.current.innerHTML;
         const hiddenElements = tempContainer.querySelectorAll('.print\\:hidden, [class*="print:hidden"]');
         hiddenElements.forEach(el => {
           el.style.display = 'none';
         });
+        const imgs = Array.from(tempContainer.querySelectorAll('img'));
+        for (const img of imgs) {
+          try { const src = img.getAttribute('src'); if (!src || src.startsWith('data:')) continue; const proxied = src.startsWith('/img?') || src.includes('/img?') ? src : `${window.location.origin}/img?u=${encodeURIComponent(src)}`; const resp = await fetch(proxied, { mode: 'cors' }); const blob = await resp.blob(); const dataUrl = await new Promise((resolve) => { const r = new FileReader(); r.onloadend = () => resolve(r.result); r.readAsDataURL(blob); }); img.setAttribute('src', dataUrl); img.removeAttribute('crossorigin'); } catch (_) {}
+        }
         const fmt = (d) => { try { const x = new Date(d); const day = String(x.getDate()); const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][x.getMonth()]; const yr = x.getFullYear(); return `${day}${mon}${yr}`; } catch { return d; } };
-        html2pdf.default().from(tempContainer).set({
+        const worker = html2pdf.default().from(tempContainer).set({
           margin: 0.5,
           filename: `PURCHASE_${invoiceBill?.number || 'Bill'}_${fmt(invoiceBill?.billDate || invoiceBill?.date)}.pdf`,
-          html2canvas: { scale: 2 },
+          html2canvas: { scale: 2, useCORS: true, allowTaint: false },
           jsPDF: { unit: 'in', format: 'a4', orientation: 'portrait' }
-        }).save();
+        });
+        const pdfBlob = await worker.outputPdf('blob');
+        const shared = await shareBlobViaSystem(pdfBlob, `PURCHASE_${invoiceBill?.number || 'Bill'}.pdf`, 'application/pdf');
+        if (!shared) {
+          await worker.save();
+        }
       });
+    }
+  };
+
+  // Duplicate function removed; using single definition below
+
+  const shareBlobViaSystem = async (blob, suggestedName, mime) => {
+    try {
+      const file = new File([blob], suggestedName, { type: mime });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: suggestedName, text: 'Sharing document' });
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  };
+
+  // Share: link to open this purchase bill directly in preview
+  const handlePurchaseShareLink = async () => {
+    try {
+      if (!invoiceBill || !invoiceRef.current) return;
+      const container = document.createElement('html');
+      const head = document.createElement('head');
+      head.innerHTML = '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Document</title><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss/dist/tailwind.min.css">';
+      const body = document.createElement('body');
+      const doc = document.createElement('div');
+      doc.style.background = 'white'; doc.style.margin = '0 auto'; doc.style.padding = '0';
+      doc.innerHTML = invoiceRef.current.innerHTML;
+      Array.from(doc.querySelectorAll('button')).forEach(b => b.remove());
+      // Keep images as-is (match reports minimal HTML)
+      body.appendChild(doc); container.appendChild(head); container.appendChild(body);
+      const blob = new Blob([container.outerHTML || container.innerHTML], { type: 'text/html' });
+      const storage = getStorage(app);
+      const token = Math.random().toString(36).slice(2);
+      const path = `publicDocs/${userId || 'anon'}/${invoiceBill.id}-${token}.html`;
+      const sref = storageRef(storage, path);
+      await uploadBytes(sref, blob, { contentType: 'text/html' });
+      const storageUrl = await getDownloadURL(sref);
+      const hostingBase = 'https://acctoo.com';
+      const wrapped = `${hostingBase}/doc-viewer.html?u=${encodeURIComponent(storageUrl)}`;
+      if (navigator.share) {
+        await navigator.share({ title: (docTypeOptions.find(opt => opt.value === docType)?.label || 'Document'), text: (docTypeOptions.find(opt => opt.value === docType)?.label || 'Document'), url: wrapped });
+      } else {
+        await navigator.clipboard.writeText(wrapped);
+        alert('Public link copied to clipboard');
+      }
+    } catch (e) {
+      console.error('Share link failed:', e);
     }
   };
 
@@ -1213,11 +1302,58 @@ function Purchases({ db, userId, isAuthReady, appId }) {
     }
   };
 
+  // Share: Image (PNG attachment) same behavior as reports
+  const handleInvoiceShareImage = async () => {
+    try {
+      if (!invoiceBill || !invoiceRef.current) return;
+      const html2canvas = await import('html2canvas');
+      const canvas = await html2canvas.default(invoiceRef.current, { scale: 2, useCORS: true, allowTaint: false, backgroundColor: '#ffffff' });
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+      const label = (docTypeOptions.find(opt => opt.value === docType)?.label || 'Document');
+      const shared = await shareBlobViaSystem(blob, `${label}_${invoiceBill?.number || 'Bill'}.png`, 'image/png');
+      if (!shared) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `${label}_${invoiceBill?.number || 'Bill'}.png`;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+    } catch (e) {
+      console.error('Share image failed:', e);
+    }
+  };
 
-
-
-
-
+  // Share: Excel (CSV attachment) same behavior as reports
+  const handleInvoiceShareExcel = async () => {
+    try {
+      if (!invoiceBill) return;
+      const label = (docTypeOptions.find(opt => opt.value === docType)?.label || 'Document');
+      let csv = '';
+      if (company?.firmName) csv += `${company.firmName}\n`;
+      if (company?.address) csv += `${company.address}\n`;
+      if (company?.gstin) csv += `GSTIN: ${company.gstin}\n`;
+      csv += `\n${label},${invoiceBill?.number || ''}\n`;
+      csv += `Date,${invoiceBill?.invoiceDate || invoiceBill?.date || ''}\n`;
+      csv += '\nItems\n';
+      const rows = (invoiceBill?.rows || invoiceBill?.items || []);
+      csv += 'S.No,Item,Qty,Rate,Amount\n';
+      rows.forEach((r, idx) => {
+        const qty = r.quantity ?? r.qty ?? '';
+        const rate = r.rate ?? r.price ?? '';
+        const amount = r.amount ?? r.total ?? '';
+        const name = r.description ?? r.itemName ?? '';
+        csv += `${idx+1},"${String(name).replace(/"/g,'""')}",${qty},${rate},${amount}\n`;
+      });
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const shared = await shareBlobViaSystem(blob, `${label}_${invoiceBill?.number || 'Bill'}.csv`, 'text/csv');
+      if (!shared) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = `${label}_${invoiceBill?.number || 'Bill'}.csv`; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+      }
+    } catch (e) {
+      console.error('Share CSV failed:', e);
+    }
+  };
 
   // UI rendering (similar to Sales)
     return (
@@ -1588,6 +1724,13 @@ function Purchases({ db, userId, isAuthReady, appId }) {
               <div className="flex flex-row items-center gap-3 bg-white rounded-lg shadow-md px-4 py-2">
                 <button className="bg-blue-600 text-white px-3 py-1 rounded print:hidden" onClick={handleInvoicePrint}>Print</button>
                 <button className="bg-green-600 text-white px-3 py-1 rounded print:hidden" onClick={handleInvoiceDownload}>Save as PDF</button>
+                <ShareButton
+                  onExportPDF={handleInvoiceDownload}
+                  onExportExcel={handleInvoiceShareExcel}
+                  onExportImage={handleInvoiceShareImage}
+                  onShareLink={handlePurchaseShareLink}
+                  disabled={!invoiceBill}
+                />
                 <button className="bg-gray-400 text-white px-3 py-1 rounded print:hidden" onClick={() => setShowInvoiceModal(false)}>Close</button>
                 <button className="bg-gray-200 text-gray-800 px-2 py-1 rounded ml-4 print:hidden" onClick={() => setInvoiceZoom(z => Math.max(0.5, z - 0.1))}>-</button>
                 <span className="px-2 print:hidden">{Math.round(invoiceZoom * 100)}%</span>

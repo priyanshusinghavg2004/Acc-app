@@ -39,6 +39,14 @@ class PushNotificationManager {
 
   async initialize() {
     try {
+      // Disable push notifications entirely in development to avoid SW churn/reloads
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('Push notifications disabled in development');
+        this.isSupported = false;
+        this.isInitialized = true;
+        return false;
+      }
+
       // Check if Firebase Messaging is supported
       if (!browserSupport.hasFirebaseMessaging()) {
         console.log('Push notifications not supported');
@@ -93,6 +101,10 @@ class PushNotificationManager {
   }
 
   async requestPermission() {
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('Requesting notification permission is disabled in development');
+      return false;
+    }
     if (!this.isSupported) {
       throw new Error('Push notifications not supported');
     }
@@ -115,6 +127,10 @@ class PushNotificationManager {
   }
 
   async getToken() {
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('Skipping FCM getToken in development');
+      return null;
+    }
     if (!this.messaging || !getToken) {
       console.warn('Messaging not initialized or getToken not available');
       return null;

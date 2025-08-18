@@ -6,11 +6,14 @@ const ShareButton = ({
   onExportImage, 
   onShareLink, 
   disabled = false,
-  className = "bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white px-4 py-2 rounded-md transition duration-300 text-sm relative"
+  className = "bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white px-4 py-2 rounded-md transition duration-300 text-sm relative",
+  allowMessage = false,
+  defaultMessage = ''
 }) => {
   const [showDropdown, setShowDropdown] = useState(false);
   const dropdownRef = useRef(null);
   const buttonRef = useRef(null);
+  const [message, setMessage] = useState(defaultMessage || '');
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -51,31 +54,36 @@ const ShareButton = ({
     setShowDropdown(!showDropdown);
   };
 
-  const handleOptionClick = (action) => {
+  const handleOptionClick = async (action) => {
     setShowDropdown(false);
-    if (action) {
-      action();
+    if (!action) return;
+    try {
+      if (typeof action === 'function') {
+        await action(message);
+      }
+    } catch (_) {
+      // swallow
     }
   };
 
   const shareOptions = [
     { 
-      label: '📄 Share as PDF', 
+      label: '📄 Share as PDF (attach)', 
       action: onExportPDF,
       disabled: !onExportPDF
     },
     { 
-      label: '📊 Share as Excel', 
+      label: '📊 Share as Excel (attach)', 
       action: onExportExcel,
       disabled: !onExportExcel
     },
     { 
-      label: '🖼️ Share as Image', 
+      label: '🖼️ Share as Image (attach)', 
       action: onExportImage,
       disabled: !onExportImage
     },
     { 
-      label: '📱 Share Link', 
+      label: '📱 Share Link (public viewer)', 
       action: onShareLink,
       disabled: !onShareLink
     }
@@ -97,6 +105,17 @@ const ShareButton = ({
           ref={dropdownRef}
           className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg z-50 border border-gray-200"
         >
+          {allowMessage && (
+            <div className="p-2 border-b">
+              <textarea
+                value={message}
+                onChange={(e)=>setMessage(e.target.value)}
+                placeholder="Optional message"
+                rows={3}
+                className="w-full text-xs border rounded p-1"
+              />
+            </div>
+          )}
           {shareOptions.map((option, index) => (
             <button
               key={index}

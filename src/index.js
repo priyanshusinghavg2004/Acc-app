@@ -11,16 +11,28 @@ root.render(
   </React.StrictMode>
 );
 
-// Register service worker for offline functionality
+// Register service worker for offline functionality (production only).
+// In development, ensure no service worker controls the page to avoid reload loops.
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js')
-      .then((registration) => {
-        console.log('SW registered: ', registration);
-      })
-      .catch((registrationError) => {
-        console.log('SW registration failed: ', registrationError);
+    if (process.env.NODE_ENV === 'production') {
+      navigator.serviceWorker.register('/sw.js')
+        .then((registration) => {
+          console.log('SW registered: ', registration);
+        })
+        .catch((registrationError) => {
+          console.log('SW registration failed: ', registrationError);
+        });
+    } else {
+      navigator.serviceWorker.getRegistrations().then((registrations) => {
+        registrations.forEach((registration) => registration.unregister());
       });
+      if (window.caches && typeof window.caches.keys === 'function') {
+        window.caches.keys().then((keys) => {
+          keys.forEach((key) => window.caches.delete(key));
+        });
+      }
+    }
   });
 }
 

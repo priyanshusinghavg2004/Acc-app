@@ -1,5 +1,6 @@
 import { doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase.config';
+import { getSettingsDoc } from './appArtifacts';
 
 // Generate 6-digit alphanumeric Company ID
 export const generateCompanyId = () => {
@@ -90,8 +91,8 @@ export const createCompanyIfNeeded = async (userData, userId, appId) => {
 
     await setDoc(doc(db, `artifacts/${appId}/companies/${companyId}`), companyData);
 
-    // Update user document with company ID
-    const userRef = doc(db, 'users', userId);
+    // Update user Settings document with company ID and role
+    const userRef = getSettingsDoc(userId);
     await updateDoc(userRef, {
       companyId,
       companyRole: 'owner',

@@ -139,6 +139,24 @@ const AgingReport = ({ db, userId, appId, dateRange, selectedParty, parties, loa
           partyAgg.set(inv.partyId, entry);
         });
 
+        // Add party opening balances to outstanding amounts
+        parties.forEach(party => {
+          if (party.openingBalance && party.openingBalance > 0) { // Only positive balances (receivable)
+            const entry = partyAgg.get(party.id);
+            if (entry) {
+              entry.totalOutstanding += party.openingBalance;
+            } else {
+              // Create entry for party with only opening balance
+              partyAgg.set(party.id, {
+                partyId: party.id,
+                totalOutstanding: party.openingBalance,
+                invoices: [],
+                lastPaidDateParty: null
+              });
+            }
+          }
+        });
+
         // Compute per-party derived metrics
         // Last paid date (any payment for party)
         const lastPaidDateByParty = new Map();

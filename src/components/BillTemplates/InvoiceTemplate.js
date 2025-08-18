@@ -131,13 +131,13 @@ function InvoiceTemplate({
   // Get page dimensions
   const pageDims = PAGE_DIMENSIONS[pageSize]?.[orientation] || PAGE_DIMENSIONS.a4.portrait;
   const pageStyle = {
-    width: `${pageDims.width}mm`,
+    width: '100%',
+    maxWidth: `${pageDims.width}mm`,
     minHeight: `${pageDims.height}mm`,
-    maxWidth: '100%',
     margin: '0 auto',
     background: 'white',
     boxSizing: 'border-box',
-    padding: '24px',
+    padding: '16px',
     position: 'relative',
     overflow: 'hidden',
     borderRadius: '8px',
@@ -157,11 +157,11 @@ function InvoiceTemplate({
           <div>Invoice Number: {previewMode ? 'XXX-XXX/XXXX' : billData.invoiceNumber}</div>
           <div>Date: {previewMode ? 'YYYY-MM-DD' : billData.date}</div>
         </div>
-        {companyDetails.logoUrl && <img src={companyDetails.logoUrl} alt="Logo" className="h-16 w-16 object-contain" loading="eager" />}
+        {companyDetails.logoUrl && <img src={`${window.location.origin}/img?u=${encodeURIComponent(companyDetails.logoUrl)}`} alt="Logo" className="h-16 w-16 object-contain" loading="eager" />}
       </div>
 
       {/* Billed By / Billed To */}
-      <div className="grid grid-cols-2 gap-4 mb-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
         <div>
           <div className="font-bold">Billed By:</div>
           <div>{companyDetails.name || companyDetails.firmName}</div>
@@ -179,7 +179,8 @@ function InvoiceTemplate({
       </div>
 
       {/* Item Table */}
-      <table className="w-full border mb-4">
+      <div className="overflow-x-auto">
+      <table className="w-full min-w-[640px] border mb-4">
         <thead>
           <tr className="bg-gray-100">
             <th className="border px-2 py-1">Sr.</th>
@@ -222,6 +223,7 @@ function InvoiceTemplate({
           ))}
         </tbody>
       </table>
+      </div>
 
       {/* Bank & Payment Details + Totals */}
       <div className="flex flex-col md:flex-row gap-4 mb-4 bank-totals-flex-row">
@@ -234,7 +236,7 @@ function InvoiceTemplate({
           {/* QR Code and Payment Link */}
           <div className="mt-4 flex flex-col items-center">
             {companyDetails.upiQrUrl ? (
-              <img src={companyDetails.upiQrUrl} alt="UPI QR" className="w-20 h-20 object-contain mb-2 border" loading="eager" />
+              <img src={`${window.location.origin}/img?u=${encodeURIComponent(companyDetails.upiQrUrl)}`} alt="UPI QR" className="w-20 h-20 object-contain mb-2 border" loading="eager" />
             ) : (
               <div className="w-20 h-20 bg-gray-200 flex items-center justify-center text-xs text-gray-500 mb-2">QR</div>
             )}
@@ -315,8 +317,8 @@ function InvoiceTemplate({
         </div>
         <div className="text-xs text-gray-700 text-right flex flex-col items-end justify-end" style={{minHeight:'64px'}}>
           <div className="flex flex-row items-end gap-2">
-            {bankDetails.sealUrl && <img src={bankDetails.sealUrl} alt="Company Seal" loading="eager" crossOrigin="anonymous" style={{height:'40px', maxWidth:'80px', objectFit:'contain', display:'block', printColorAdjust:'exact', WebkitPrintColorAdjust:'exact', visibility:'visible !important', background:'none !important', border:'none !important'}} className="print:visible" />}
-            {bankDetails.signUrl && <img src={bankDetails.signUrl} alt="Company Sign" loading="eager" crossOrigin="anonymous" style={{height:'40px', maxWidth:'80px', objectFit:'contain', display:'block', printColorAdjust:'exact', WebkitPrintColorAdjust:'exact', visibility:'visible !important', background:'none !important', border:'none !important'}} className="print:visible" />}
+            {bankDetails.sealUrl && <img src={`${window.location.origin}/img?u=${encodeURIComponent(bankDetails.sealUrl)}`} alt="Company Seal" loading="eager" style={{height:'40px', maxWidth:'80px', objectFit:'contain', display:'block', printColorAdjust:'exact', WebkitPrintColorAdjust:'exact', visibility:'visible !important', background:'none !important', border:'none !important'}} className="print:visible" />}
+            {bankDetails.signUrl && <img src={`${window.location.origin}/img?u=${encodeURIComponent(bankDetails.signUrl)}`} alt="Company Sign" loading="eager" style={{height:'40px', maxWidth:'80px', objectFit:'contain', display:'block', printColorAdjust:'exact', WebkitPrintColorAdjust:'exact', visibility:'visible !important', background:'none !important', border:'none !important'}} className="print:visible" />}
           </div>
           <span className="mt-1">Company Seal & Sign</span>
         </div>

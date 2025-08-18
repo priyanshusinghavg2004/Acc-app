@@ -9,6 +9,9 @@ import ReceiptTemplate from './BillTemplates/ReceiptTemplate';
 import ActionButtons from './ActionButtons';
 
 import { useLocation } from 'react-router-dom';
+import ShareButton from './Reports/ShareButton';
+import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { app } from '../firebase.config';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 import { useTableSort, SortableHeader } from '../utils/tableSort';
@@ -1578,7 +1581,27 @@ function Sales({ db, userId, isAuthReady, appId }) {
   // Update handleInvoicePrint and handleInvoiceDownload to properly handle print:hidden elements:
   const handleInvoicePrint = () => {
     if (invoiceRef.current) {
-      const printContents = invoiceRef.current.innerHTML;
+      const temp = document.createElement('div');
+      temp.innerHTML = invoiceRef.current.innerHTML;
+      const inlineImages = async (root) => {
+        const imgs = Array.from(root.querySelectorAll('img'));
+        await Promise.all(imgs.map(async (img) => {
+          try {
+            const src = img.getAttribute('src');
+            if (!src || src.startsWith('data:')) return;
+            const proxied = src.startsWith('/img?') || src.includes('/img?') ? src : `${window.location.origin}/img?u=${encodeURIComponent(src)}`;
+            const resp = await fetch(proxied, { mode: 'cors' });
+            const blob = await resp.blob();
+            const dataUrl = await new Promise((resolve) => { const r = new FileReader(); r.onloadend = () => resolve(r.result); r.readAsDataURL(blob); });
+            img.setAttribute('src', dataUrl); img.removeAttribute('crossorigin');
+          } catch (_) {}
+        }));
+      };
+      // Inline images to avoid CORS issues during print
+      // Note: printing will proceed after images are inlined
+      // eslint-disable-next-line no-void
+      void inlineImages(temp);
+      const printContents = temp.innerHTML;
       const printWindow = window.open('', '', 'height=800,width=1000');
       printWindow.document.write('<html><head><title>Invoice</title>');
       printWindow.document.write('<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss/dist/tailwind.min.css">');
@@ -1600,22 +1623,41 @@ function Sales({ db, userId, isAuthReady, appId }) {
       printWindow.document.write('@media print { [class*="print:hidden"] { display: none !important; } }');
       printWindow.document.write('@media print { button { display: none !important; } }');
       printWindow.document.write('@media print { .sticky { position: static !important; } }');
+      printWindow.document.write('@media print { img { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }');
       printWindow.document.write('</style>');
       printWindow.document.write('</head><body style="background:white;">');
       printWindow.document.write(printContents);
       printWindow.document.write('</body></html>');
       printWindow.document.close();
       printWindow.focus();
-      setTimeout(() => {
-        printWindow.print();
-        printWindow.close();
-      }, 500);
+      // Ensure images are loaded before printing
+      const ensureImages = () => {
+        try {
+          const imgs = Array.from(printWindow.document.images || []);
+          imgs.forEach(img => { try { img.setAttribute('crossorigin', 'anonymous'); } catch (_) {} });
+          if (imgs.length === 0) return Promise.resolve();
+          return Promise.all(imgs.map(img => new Promise(resolve => {
+            if (img.complete) return resolve();
+            img.addEventListener('load', resolve, { once: true });
+            img.addEventListener('error', resolve, { once: true });
+          })));
+        } catch (_) {
+          return Promise.resolve();
+        }
+      };
+      printWindow.onload = async () => {
+        await ensureImages();
+        setTimeout(() => {
+          printWindow.print();
+          printWindow.close();
+        }, 100);
+      };
     }
   };
 
   const handleInvoiceDownload = () => {
     if (invoiceRef.current) {
-      import('html2pdf.js').then(html2pdf => {
+      import('html2pdf.js').then(async html2pdf => {
         // Create a temporary container to clone the content and hide print:hidden elements
         const tempContainer = document.createElement('div');
         tempContainer.innerHTML = invoiceRef.current.innerHTML;
@@ -1625,17 +1667,142 @@ function Sales({ db, userId, isAuthReady, appId }) {
         hiddenElements.forEach(el => {
           el.style.display = 'none';
         });
+
+        // Inline images to data URLs to bypass CORS
+        const imgs = Array.from(tempContainer.querySelectorAll('img'));
+        for (const img of imgs) {
+          try {
+            const src = img.getAttribute('src'); if (!src) continue;
+            const proxied = src.startsWith('/img?') || src.includes('/img?') ? src : `${window.location.origin}/img?u=${encodeURIComponent(src)}`;
+            const resp = await fetch(proxied, { mode: 'cors' }); const blob = await resp.blob();
+            const dataUrl = await new Promise((resolve) => { const r = new FileReader(); r.onloadend = () => resolve(r.result); r.readAsDataURL(blob); });
+            img.setAttribute('src', dataUrl); img.removeAttribute('crossorigin');
+          } catch (_) {}
+        }
         
         const fmt = (d) => { try { const x = new Date(d); const day = String(x.getDate()); const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][x.getMonth()]; const yr = x.getFullYear(); return `${day}${mon}${yr}`; } catch { return d; } };
         const fy = (()=>{ try { const d = new Date(invoiceBill?.invoiceDate || invoiceBill?.date || new Date()); let y = d.getFullYear(); if (d.getMonth()<3) y-=1; return `${String(y).slice(-2)}-${String(y+1).slice(-2)}`; } catch { return ''; }})();
-        html2pdf.default().from(tempContainer).set({
+        const worker = html2pdf.default().from(tempContainer).set({
           margin: 0.5,
           filename: `${(docTypeOptions.find(opt => opt.value === docType)?.label || 'Invoice').toUpperCase()}_${invoiceBill?.number || 'Bill'}_${fmt(invoiceBill?.invoiceDate || invoiceBill?.date)}.pdf`,
-          html2canvas: { scale: 2 },
+          html2canvas: { scale: 2, useCORS: true, allowTaint: false },
           jsPDF: { unit: 'in', format: 'a4', orientation: 'portrait' }
-        }).save();
+        });
+        // Generate blob for sharing
+        const pdfBlob = await worker.outputPdf('blob');
+        const shared = await shareBlobViaSystem(pdfBlob, `${(docTypeOptions.find(opt => opt.value === docType)?.label || 'Invoice')}_${invoiceBill?.number || 'Bill'}.pdf`, 'application/pdf');
+        if (!shared) {
+          // Fallback to saving locally as before
+          await worker.save();
+        }
       });
     }
+  };
+
+  // Share: link to open this bill directly in preview (same as reports flow)
+  const handleInvoiceShareLink = async () => {
+    try {
+      if (!invoiceBill || !invoiceRef.current) return;
+      // Render a static HTML for public viewing (no app chrome)
+      const container = document.createElement('html');
+      const head = document.createElement('head');
+      head.innerHTML = '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Document</title><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss/dist/tailwind.min.css">';
+      const body = document.createElement('body');
+      const doc = document.createElement('div');
+      doc.style.background = 'white';
+      doc.style.margin = '0 auto';
+      doc.style.padding = '0';
+      doc.innerHTML = invoiceRef.current.innerHTML;
+      // Strip interactive controls
+      Array.from(doc.querySelectorAll('button')).forEach(b => b.remove());
+      // Keep images as-is (reports flow keeps minimal HTML and uploads)
+      body.appendChild(doc);
+      container.appendChild(head);
+      container.appendChild(body);
+
+      const blob = new Blob([container.outerHTML || container.innerHTML], { type: 'text/html' });
+      const storage = getStorage(app);
+      const token = Math.random().toString(36).slice(2);
+      const path = `publicDocs/${userId || 'anon'}/${invoiceBill.id}-${token}.html`;
+      const sref = storageRef(storage, path);
+      await uploadBytes(sref, blob, { contentType: 'text/html' });
+      const storageUrl = await getDownloadURL(sref);
+      const hostingBase = 'https://acctoo.com';
+      const wrapped = `${hostingBase}/doc-viewer.html?u=${encodeURIComponent(storageUrl)}`;
+      if (navigator.share) {
+        await navigator.share({ title: (docTypeOptions.find(opt => opt.value === docType)?.label || 'Document'), text: (docTypeOptions.find(opt => opt.value === docType)?.label || 'Document'), url: wrapped });
+      } else {
+        await navigator.clipboard.writeText(wrapped);
+        alert('Public link copied to clipboard');
+      }
+    } catch (e) {
+      console.error('Share link failed:', e);
+    }
+  };
+
+  // Share: Image (PNG attachment) same behavior as reports
+  const handleInvoiceShareImage = async () => {
+    try {
+      if (!invoiceBill || !invoiceRef.current) return;
+      const html2canvas = await import('html2canvas');
+      const canvas = await html2canvas.default(invoiceRef.current, { scale: 2, useCORS: true, allowTaint: false, backgroundColor: '#ffffff' });
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+      const label = (docTypeOptions.find(opt => opt.value === docType)?.label || 'Document');
+      const shared = await shareBlobViaSystem(blob, `${label}_${invoiceBill?.number || 'Bill'}.png`, 'image/png');
+      if (!shared) {
+        // fallback download
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `${label}_${invoiceBill?.number || 'Bill'}.png`;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+    } catch (e) {
+      console.error('Share image failed:', e);
+    }
+  };
+
+  // Share: Excel (CSV attachment) same behavior as reports
+  const handleInvoiceShareExcel = async () => {
+    try {
+      if (!invoiceBill) return;
+      const label = (docTypeOptions.find(opt => opt.value === docType)?.label || 'Document');
+      let csv = '';
+      if (company?.firmName) csv += `${company.firmName}\n`;
+      if (company?.address) csv += `${company.address}\n`;
+      if (company?.gstin) csv += `GSTIN: ${company.gstin}\n`;
+      csv += `\n${label},${invoiceBill?.number || ''}\n`;
+      csv += `Date,${invoiceBill?.invoiceDate || invoiceBill?.date || ''}\n`;
+      csv += '\nItems\n';
+      const rows = (invoiceBill?.rows || invoiceBill?.items || []);
+      csv += 'S.No,Item,Qty,Rate,Amount\n';
+      rows.forEach((r, idx) => {
+        const qty = r.quantity ?? r.qty ?? '';
+        const rate = r.rate ?? r.price ?? '';
+        const amount = r.amount ?? r.total ?? '';
+        const name = r.description ?? r.itemName ?? '';
+        csv += `${idx+1},"${String(name).replace(/"/g,'""')}",${qty},${rate},${amount}\n`;
+      });
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const shared = await shareBlobViaSystem(blob, `${label}_${invoiceBill?.number || 'Bill'}.csv`, 'text/csv');
+      if (!shared) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = `${label}_${invoiceBill?.number || 'Bill'}.csv`; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+      }
+    } catch (e) {
+      console.error('Share CSV failed:', e);
+    }
+  };
+
+  const shareBlobViaSystem = async (blob, suggestedName, mime) => {
+    try {
+      const file = new File([blob], suggestedName, { type: mime });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: suggestedName, text: 'Sharing document' });
+        return true;
+      }
+    } catch (_) {}
+    return false;
   };
 
   const handleInvoiceWheel = (e) => {
@@ -2157,6 +2324,15 @@ function Sales({ db, userId, isAuthReady, appId }) {
          onPrint={handleInvoicePrint}
          showPdfButton={true}
          onPdf={handleInvoiceDownload}
+         extraActions={
+           <ShareButton
+             onExportPDF={handleInvoiceDownload}
+             onExportExcel={handleInvoiceShareExcel}
+             onExportImage={handleInvoiceShareImage}
+             onShareLink={handleInvoiceShareLink}
+             disabled={!invoiceBill}
+           />
+         }
          showZoomControls={true}
          zoom={invoiceZoom}
          onZoomIn={() => setInvoiceZoom(z => Math.min(2, z + 0.1))}

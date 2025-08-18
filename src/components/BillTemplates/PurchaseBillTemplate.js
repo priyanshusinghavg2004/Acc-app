@@ -62,11 +62,11 @@ function PurchaseBillTemplate({ billData = {}, companyDetails = {}, partyDetails
   const terms = companyDetails.purchaseTerms || '';
 
   return (
-    <div className="p-8 bg-white rounded shadow max-w-3xl mx-auto text-sm print:p-0 print:shadow-none print:bg-white">
+    <div className="p-4 md:p-8 bg-white rounded shadow max-w-3xl w-full mx-auto text-sm print:p-0 print:shadow-none print:bg-white">
       {/* Header */}
       <div className="flex justify-between items-center mb-4">
         <div className="flex items-center gap-3">
-          {companyDetails.logoUrl && <img src={companyDetails.logoUrl} alt="Logo" className="h-16 w-auto" />}
+          {companyDetails.logoUrl && <img src={`${window.location.origin}/img?u=${encodeURIComponent(companyDetails.logoUrl)}`} alt="Logo" className="h-16 w-auto" />}
           <div>
             <div className="text-xl font-bold uppercase">{companyDetails.firmName}</div>
             <div>{companyDetails.address}{companyDetails.city ? ', ' + companyDetails.city : ''}{companyDetails.pincode ? ' - ' + companyDetails.pincode : ''}</div>
@@ -82,7 +82,7 @@ function PurchaseBillTemplate({ billData = {}, companyDetails = {}, partyDetails
         </div>
       </div>
       {/* Parties */}
-      <div className="flex flex-row justify-between mb-2">
+      <div className="flex flex-col md:flex-row justify-between gap-4 mb-2">
         <div>
           <div className="font-semibold">Billed To (Buyer):</div>
           <div>{companyDetails.firmName}</div>
@@ -102,7 +102,7 @@ function PurchaseBillTemplate({ billData = {}, companyDetails = {}, partyDetails
       </div>
       {/* Item Table */}
       <div className="overflow-x-auto mt-4 mb-4">
-        <table className="w-full border border-gray-300">
+        <table className="w-full min-w-[640px] border border-gray-300">
           <thead className="bg-gray-100">
             <tr>
               <th className="border px-2 py-1">Sr.</th>
@@ -200,13 +200,13 @@ function PurchaseBillTemplate({ billData = {}, companyDetails = {}, partyDetails
       <div className="flex flex-row items-end justify-end gap-8 mt-8 mb-2">
         {companyDetails.sealUrl && (
           <div className="flex flex-col items-center mr-4">
-            <img src={companyDetails.sealUrl} alt="Seal" className="h-16 mb-1" />
+            <img src={`${window.location.origin}/img?u=${encodeURIComponent(companyDetails.sealUrl)}`} alt="Seal" className="h-16 mb-1" />
             <div className="text-xs text-gray-500">Company Seal</div>
           </div>
         )}
         {companyDetails.signUrl && (
           <div className="flex flex-col items-center">
-            <img src={companyDetails.signUrl} alt="Sign" className="h-16 mb-1" />
+            <img src={`${window.location.origin}/img?u=${encodeURIComponent(companyDetails.signUrl)}`} alt="Sign" className="h-16 mb-1" />
             <div className="text-xs text-gray-500">Authorised Signatory</div>
           </div>
         )}

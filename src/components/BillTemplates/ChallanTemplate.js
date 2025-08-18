@@ -82,13 +82,13 @@ function ChallanTemplate({
   // Get page dimensions
   const pageDims = PAGE_DIMENSIONS[pageSize]?.[orientation] || PAGE_DIMENSIONS.a4.portrait;
   const pageStyle = {
-    width: `${pageDims.width}mm`,
+    width: '100%',
+    maxWidth: `${pageDims.width}mm`,
     minHeight: `${pageDims.height}mm`,
-    maxWidth: '100%',
     margin: '0 auto',
     background: 'white',
     boxSizing: 'border-box',
-    padding: '24px',
+    padding: '16px',
     position: 'relative',
     overflow: 'hidden',
     borderRadius: '8px',
@@ -108,7 +108,7 @@ function ChallanTemplate({
       </div>
 
       {/* Billed By / Billed To */}
-      <div className="grid grid-cols-2 gap-4 mb-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
         <div>
           <div className="font-bold">Billed By:</div>
           <div>{companyDetails.name || companyDetails.firmName}</div>
@@ -126,7 +126,8 @@ function ChallanTemplate({
       </div>
 
       {/* Item Table */}
-      <table className="w-full border mb-4">
+      <div className="overflow-x-auto">
+      <table className="w-full min-w-[640px] border mb-4">
         <thead>
           <tr className="bg-gray-100">
             <th className="border px-2 py-1">Sr.</th>
@@ -161,6 +162,7 @@ function ChallanTemplate({
           ))}
         </tbody>
       </table>
+      </div>
 
       {/* Bank & Payment Details + Totals */}
       <div className="flex flex-col md:flex-row gap-4 mb-4 bank-totals-flex-row">

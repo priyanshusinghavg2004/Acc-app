@@ -19,7 +19,7 @@ export const verifyCaptcha = async (captchaToken) => {
 // Login with reCAPTCHA verification
 export const loginWithCaptcha = async (email, password, captchaToken) => {
   try {
-    const loginWithCaptchaFunction = httpsCallable(functions, 'loginWithCaptcha');
+    const loginWithCaptchaFunction = httpsCallable(functions, 'auth_loginWithCaptcha');
     const result = await loginWithCaptchaFunction({ 
       email, 
       password, 
@@ -29,6 +29,48 @@ export const loginWithCaptcha = async (email, password, captchaToken) => {
   } catch (error) {
     console.error('Login with captcha error:', error);
     throw new Error(error.message || 'Login failed');
+  }
+};
+
+// Signup with reCAPTCHA verification
+export const signupWithCaptcha = async (email, password, companyName, phone, captchaToken) => {
+  try {
+    const signupWithCaptchaFunction = httpsCallable(functions, 'auth_signupWithCaptcha');
+    const result = await signupWithCaptchaFunction({ 
+      email, 
+      password, 
+      companyName, 
+      phone, 
+      captchaToken 
+    });
+    return result.data;
+  } catch (error) {
+    console.error('Signup with captcha error:', error);
+    throw new Error(error.message || 'Signup failed');
+  }
+};
+
+// Send email verification
+export const sendEmailVerification = async (email) => {
+  try {
+    const sendEmailVerificationFunction = httpsCallable(functions, 'auth_sendEmailVerification');
+    const result = await sendEmailVerificationFunction({ email });
+    return result.data;
+  } catch (error) {
+    console.error('Send email verification error:', error);
+    throw new Error(error.message || 'Failed to send verification email');
+  }
+};
+
+// Check email verification status
+export const checkEmailVerification = async () => {
+  try {
+    const checkEmailVerificationFunction = httpsCallable(functions, 'auth_checkEmailVerification');
+    const result = await checkEmailVerificationFunction({});
+    return result.data;
+  } catch (error) {
+    console.error('Check email verification error:', error);
+    throw new Error(error.message || 'Failed to check verification status');
   }
 };
 

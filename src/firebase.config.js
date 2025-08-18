@@ -1,6 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
+import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
 import browserSupport from './utils/browserSupport';
 
 // Your web app's Firebase configuration
@@ -18,6 +19,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
+const functionsClient = getFunctions(app, 'asia-south1');
 
 // Conditionally initialize messaging only if browser supports it
 let messaging = null;
@@ -43,4 +45,20 @@ const initializeMessaging = async () => {
 // Initialize messaging
 initializeMessaging();
 
-export { db, auth, messaging, app }; 
+// Optional: connect Functions emulator when explicitly enabled
+try {
+  const shouldUseEmulator =
+    typeof process !== 'undefined' &&
+    process.env &&
+    process.env.REACT_APP_USE_FUNCTIONS_EMULATOR === '1';
+
+  if (shouldUseEmulator) {
+    connectFunctionsEmulator(functionsClient, 'localhost', 5001);
+    // eslint-disable-next-line no-console
+    console.info('Using Functions emulator at localhost:5001');
+  }
+} catch (e) {
+  // ignore
+}
+
+export { db, auth, messaging, app, functionsClient }; 

@@ -1,3 +1,4 @@
+import Backoffice from './components/Backoffice';
 import React, { useState, useEffect, useRef } from 'react';
 import { HashRouter as Router, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import Dashboard from './components/Dashboard';
@@ -23,6 +24,7 @@ import OfflineIndicator from './components/OfflineIndicator';
 import MobileBottomNav from './components/MobileBottomNav';
 import Settings from './components/Settings';
 import TourGuide from './components/TourGuide';
+import ReCaptchaComponent from './components/ReCaptchaComponent';
 
 import { db, auth } from './firebase.config';
 import { 
@@ -44,6 +46,7 @@ import {
   getDocs
 } from 'firebase/firestore';
 import { getCompanyInfo } from './utils/companyUtils';
+import { getSettingsDoc } from './utils/appArtifacts';
 import './utils/runMigration';
 
 function App() {
@@ -56,6 +59,7 @@ function App() {
   const [registerEmail, setRegisterEmail] = useState('');
   const [registerPassword, setRegisterPassword] = useState('');
   const [registerCompany, setRegisterCompany] = useState('');
+  const [registerPhone, setRegisterPhone] = useState('');
   const [registerError, setRegisterError] = useState('');
   const [showCompanyDetailsWizard, setShowCompanyDetailsWizard] = useState(false);
   // const [companyWizardStep, setCompanyWizardStep] = useState(1);
@@ -249,16 +253,27 @@ function App() {
     
     const fetchUserAndCompanyInfo = async () => {
       try {
-        // Get user document
-        const userDoc = await getDoc(doc(db, 'users', user.uid));
-        if (userDoc.exists()) {
-          const userData = userDoc.data();
+        // Get user settings document
+        const settingsSnap = await getDoc(getSettingsDoc(user.uid));
+        if (settingsSnap.exists()) {
+          const userData = settingsSnap.data();
           setUserInfo(userData);
           
           // Load company info if user has company ID
           if (userData.companyId) {
             const companyData = await getCompanyInfo(userData.companyId, appId);
             setCompanyInfo(companyData);
+          }
+        } else {
+          // Ensure a default settings document exists for the user
+          try {
+            await setDoc(getSettingsDoc(user.uid), {
+              email: user.email || '',
+              createdAt: serverTimestamp(),
+              status: 'active'
+            }, { merge: true });
+          } catch (seedErr) {
+            console.error('Error creating default user settings:', seedErr);
           }
         }
       } catch (error) {
@@ -289,28 +304,96 @@ function App() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [avatarDropdownOpen]);
 
-  // Simple login with email and password
+  // Enhanced login with reCAPTCHA and email verification
+  const [loginCaptchaToken, setLoginCaptchaToken] = useState(null);
+  
+  const handleLoginCaptchaChange = (token) => {
+    setLoginCaptchaToken(token);
+    setLoginError('');
+  };
+
+  const handleLoginCaptchaExpired = () => {
+    setLoginCaptchaToken(null);
+    setLoginError('reCAPTCHA expired. Please verify again.');
+  };
+
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoginError('');
+    
+    // Basic validation
+    if (!loginEmail.trim()) {
+      setLoginError('Email is required.');
+      return;
+    }
+    if (!loginPassword.trim()) {
+      setLoginError('Password is required.');
+      return;
+    }
+    if (!loginCaptchaToken) {
+      setLoginError('Please complete the reCAPTCHA verification.');
+      return;
+    }
 
     try {
-      await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
+      // Use Firebase Auth directly for now (since reCAPTCHA is working)
+      const userCredential = await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
+      const user = userCredential.user;
+      
+      // Check if user has completed company details setup
+      const userDoc = await getDoc(getSettingsDoc(user.uid));
+      
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        
+        // If user has company details, redirect to dashboard
+        if (userData.companyName) {
+          // User is fully set up, proceed to dashboard
+          console.log('User logged in successfully:', user.uid);
+          setLoginError('✅ Login successful! Redirecting...');
+        } else {
+          // User exists but no company details, redirect to company setup
+          console.log('User needs company setup:', user.uid);
+          setLoginError('✅ Login successful! Please complete company setup.');
+        }
+      } else {
+        // User document doesn't exist, this shouldn't happen for existing users
+        console.error('User document not found for:', user.uid);
+        setLoginError('User account error. Please contact support.');
+        return;
+      }
+      
     } catch (err) {
       console.error('Login error:', err);
       if (err.code === 'auth/user-not-found') {
-        setLoginError('No account found with this email address.');
+        setLoginError('No account found with this email. Please register first.');
       } else if (err.code === 'auth/wrong-password') {
         setLoginError('Incorrect password. Please try again.');
       } else if (err.code === 'auth/invalid-email') {
         setLoginError('Invalid email address format.');
+      } else if (err.code === 'auth/user-disabled') {
+        setLoginError('Account has been disabled. Please contact support.');
+      } else if (err.code === 'auth/too-many-requests') {
+        setLoginError('Too many failed attempts. Please try again later.');
       } else {
-        setLoginError('Login failed. Please check your credentials and try again.');
+        setLoginError(err.message || 'Login failed. Please check your credentials and try again.');
       }
     }
   };
 
-  // Simple registration with email and password
+  // Enhanced registration with reCAPTCHA and email verification
+  const [registerCaptchaToken, setRegisterCaptchaToken] = useState(null);
+  
+  const handleRegisterCaptchaChange = (token) => {
+    setRegisterCaptchaToken(token);
+    setRegisterError('');
+  };
+
+  const handleRegisterCaptchaExpired = () => {
+    setRegisterCaptchaToken(null);
+    setRegisterError('reCAPTCHA expired. Please verify again.');
+  };
+
   const handleRegister = async (e) => {
     e.preventDefault();
     setRegisterError('');
@@ -332,25 +415,45 @@ function App() {
       setRegisterError('Company Name is required.');
       return;
     }
+    if (!registerCaptchaToken) {
+      setRegisterError('Please complete the reCAPTCHA verification.');
+      return;
+    }
 
     try {
-      // Create user account
+      // Use Firebase Auth directly for registration
       const newUser = await createUserWithEmailAndPassword(auth, registerEmail, registerPassword);
       
       // Store the new user's UID for later use
       setNewUserId(newUser.user.uid);
       
-      // Create user document in Firestore
-      const userRef = doc(db, 'users', newUser.user.uid);
+      // Create user settings document in Firestore
+      const userRef = getSettingsDoc(newUser.user.uid);
       await setDoc(userRef, {
         email: registerEmail,
         companyName: registerCompany,
+        phone: registerPhone || '',
+        contact: registerPhone || '',
         createdAt: serverTimestamp(),
         status: 'active'
       });
+
+      // Seed minimal company details so Company Details page shows the name immediately
+      try {
+        const companyDocRef = doc(db, `artifacts/${appId}/users/${newUser.user.uid}/companyDetails`, 'myCompany');
+        await setDoc(companyDocRef, {
+          firmName: registerCompany,
+          email: registerEmail,
+          contactNumber: registerPhone || '',
+          createdAt: serverTimestamp()
+        }, { merge: true });
+      } catch (seedErr) {
+        console.error('Error seeding initial company details:', seedErr);
+      }
       
       setRegisterError('✅ Registration successful! You can now login.');
       setShowRegister(false);
+      setRegisterCaptchaToken(null);
       
     } catch (err) {
       console.error('Registration error:', err);
@@ -361,7 +464,7 @@ function App() {
       } else if (err.code === 'auth/invalid-email') {
         setRegisterError('Invalid email address. Please check your email format.');
       } else {
-        setRegisterError('Registration failed. Please try again.');
+        setRegisterError(err.message || 'Registration failed. Please try again.');
       }
     }
   };
@@ -415,6 +518,16 @@ function App() {
                       />
                     </div>
                     <div className="mb-4">
+                      <label className="block text-sm font-medium mb-1">Phone (optional)</label>
+                      <input
+                        type="tel"
+                        value={registerPhone}
+                        onChange={e => setRegisterPhone(e.target.value)}
+                        className="w-full border rounded p-2"
+                        placeholder="e.g., +91-9876543210"
+                      />
+                    </div>
+                    <div className="mb-4">
                       <label className="block text-sm font-medium mb-1">Email</label>
                       <input 
                         type="email" 
@@ -438,8 +551,25 @@ function App() {
                         minLength={6}
                       />
                     </div>
-                    <button type="submit" className="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded hover:bg-blue-700">
-                      Register
+                    
+                    {/* reCAPTCHA for Registration */}
+                    <div className="mb-4 flex justify-center">
+                      <ReCaptchaComponent
+                        onCaptchaChange={handleRegisterCaptchaChange}
+                        onCaptchaExpired={handleRegisterCaptchaExpired}
+                      />
+                    </div>
+                    
+                    <button 
+                      type="submit" 
+                      disabled={!registerCaptchaToken}
+                      className={`w-full font-bold py-2 px-4 rounded ${
+                        !registerCaptchaToken
+                          ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                          : 'bg-blue-600 text-white hover:bg-blue-700'
+                      }`}
+                    >
+                      {!registerCaptchaToken ? 'Complete reCAPTCHA to Register' : 'Register'}
                     </button>
                     <div className="mt-4 text-center">
                       <button type="button" className="text-blue-600 underline" onClick={() => setShowRegister(false)}>
@@ -473,11 +603,25 @@ function App() {
                         placeholder="Enter your password"
                       />
                     </div>
+                    
+                    {/* reCAPTCHA for Login */}
+                    <div className="mb-4 flex justify-center">
+                      <ReCaptchaComponent
+                        onCaptchaChange={handleLoginCaptchaChange}
+                        onCaptchaExpired={handleLoginCaptchaExpired}
+                      />
+                    </div>
+                    
                     <button 
                       type="submit" 
-                      className="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded hover:bg-blue-700"
+                      disabled={!loginCaptchaToken}
+                      className={`w-full font-bold py-2 px-4 rounded ${
+                        !loginCaptchaToken
+                          ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                          : 'bg-blue-600 text-white hover:bg-blue-700'
+                      }`}
                     >
-                      Login
+                      {!loginCaptchaToken ? 'Complete reCAPTCHA to Login' : 'Login'}
                     </button>
                     <div className="mt-4 text-center">
                       <button type="button" className="text-blue-600 underline block" onClick={() => setShowRegister(true)}>
@@ -549,6 +693,7 @@ function App() {
         setActiveTourId={setActiveTourId}
 
         registerEmail={registerEmail}
+        registerPhone={registerPhone}
         newUserId={newUserId}
         showHelp={showHelp}
         setShowHelp={setShowHelp}
@@ -582,6 +727,7 @@ function AppContent({
   activeTourId,
   setActiveTourId,
   registerEmail,
+  registerPhone,
   newUserId,
   showHelp,
   setShowHelp,
@@ -719,12 +865,12 @@ function AppContent({
             try {
               const parsed = JSON.parse(storedData);
               return {
-                contact: parsed.contact || user?.contact || '',
+                contact: parsed.contact || user?.contact || registerPhone || '',
                 email: parsed.email || registerEmail || user?.email || ''
               };
             } catch (e) {}
           }
-          return { contact: user?.contact || '', email: registerEmail || user?.email || '' };
+          return { contact: user?.contact || registerPhone || '', email: registerEmail || user?.email || '' };
         })()}
         onComplete={() => {
           setShowCompanyDetailsWizard(false);
@@ -1002,15 +1148,13 @@ function AppContent({
                       📊 Export Data
                     </button>
 
-                    <button
+                    <Link
+                      to="/settings"
                       className="w-full text-left px-4 py-2 text-gray-900 hover:bg-gray-100 text-sm"
-                      onClick={() => {
-                        setShowSettings(true);
-                        setAvatarDropdownOpen(false);
-                      }}
+                      onClick={() => setAvatarDropdownOpen(false)}
                     >
                       ⚙️ Settings
-                    </button>
+                    </Link>
 
 
                     <button
@@ -1248,15 +1392,13 @@ function AppContent({
                     📊 Export Data
                   </button>
 
-                  <button
+                  <Link
+                    to="/settings"
                     className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded transition-colors duration-150"
-                    onClick={() => {
-                      setShowSettings(true);
-                      setMobileMenuOpen(false);
-                    }}
+                    onClick={() => setMobileMenuOpen(false)}
                   >
                     ⚙️ Settings
-                  </button>
+                  </Link>
 
                   <button
                     className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded transition-colors duration-150"
@@ -1374,6 +1516,9 @@ function AppContent({
                 setShowSettings={setShowSettings}
               />
             } />
+            <Route path="/settings" element={<Settings />} />
+
+            <Route path="/backoffice" element={<Backoffice />} />
 
 
           </Routes>
@@ -1433,9 +1578,10 @@ function AppContent({
       />
       
                     {/* Settings */}
-              {showSettings && (
+              {/* Settings modal removed in favor of page route */}
+              {/* {showSettings && (
                 <Settings onClose={() => setShowSettings(false)} />
-              )}
+              )} */}
 
 
       

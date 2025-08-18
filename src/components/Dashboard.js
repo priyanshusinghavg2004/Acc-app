@@ -495,8 +495,8 @@ useEffect(() => {
         });
         // Calculate outstanding for each party
         partiesList.forEach(party => {
-            let receivable = 0;
-            let payable = 0;
+            let receivable = party.openingBalance > 0 ? party.openingBalance : 0; // Start with positive opening balance
+            let payable = party.openingBalance < 0 ? Math.abs(party.openingBalance) : 0; // Start with negative opening balance
             // Sales (receivable)
             salesBills.forEach(bill => {
                 if ((bill.party || bill.customerId) === party.id) {

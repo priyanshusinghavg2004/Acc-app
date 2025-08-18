@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { collection, query, where, orderBy, getDocs, doc, getDoc } from 'firebase/firestore';
 import { useTableSort, SortableHeader } from '../../utils/tableSort';
 import { useTablePagination } from '../../utils/tablePagination';
 import PaginationControls from '../../utils/PaginationControls';
 import { formatCurrency, formatDate } from './CommonComponents';
 import GlobalExportButtons from '../GlobalExportButtons';
+import { globalModalManager } from '../Modal';
 
 const InvoiceCollectionReport = ({ db, userId, appId, dateRange, selectedParty, parties, loading, setLoading, companyDetails }) => {
   const [collectionData, setCollectionData] = useState([]);
@@ -12,6 +13,7 @@ const InvoiceCollectionReport = ({ db, userId, appId, dateRange, selectedParty, 
   const [quickSummaryInvoice, setQuickSummaryInvoice] = useState(null);
   const [invoicePayments, setInvoicePayments] = useState([]);
   const [allPayments, setAllPayments] = useState([]);
+  const receiptModalIdRef = useRef(`receipt-modal-${Math.random().toString(36).slice(2)}`);
 
   // Map party id -> name for quick lookup
   const partyIdToName = useMemo(() => {
@@ -94,30 +96,30 @@ const InvoiceCollectionReport = ({ db, userId, appId, dateRange, selectedParty, 
         // Process collection data
         const collectionEntries = filteredSales.map(sale => {
           const invoiceAmount = parseFloat(sale.totalAmount || sale.grandTotal || sale.amount || sale.invoiceAmount || 0);
+          const invoiceId = sale.id;
+          const invoiceNo = sale.invoiceNo || sale.billNo || sale.invoiceNumber || '';
 
-          // Find payments for this invoice by allocations or direct linkage
-          const matchesByAlloc = payments.filter(p => Array.isArray(p.allocations) && p.allocations.some(a =>
-            (a.billId === sale.id || a.billNumber === (sale.invoiceNo || sale.billNo || sale.invoiceNumber)) &&
-            (a.billType ? a.billType === 'invoice' : true)
-          ));
-          const matchesByDirect = payments.filter(p => p.invoiceId === sale.id || p.invoiceNumber === (sale.invoiceNo || sale.billNo || sale.invoiceNumber));
-
-          // Merge unique payments
-          const mergedMap = new Map();
-          [...matchesByAlloc, ...matchesByDirect].forEach(p => mergedMap.set(p.id, p));
-          const relatedPayments = Array.from(mergedMap.values());
-
-          // Sum allocated amounts for this invoice
-          const allocatedPaid = relatedPayments.reduce((sum, p) => {
-            const allocSum = (p.allocations || [])
-              .filter(a => (a.billId === sale.id || a.billNumber === (sale.invoiceNo || sale.billNo || sale.invoiceNumber)) && (a.billType ? a.billType === 'invoice' : true))
+          // Filter payments that truly belong to this bill number/id
+          const relatedPaymentsDetailed = (payments || []).map(p => {
+            const allocations = Array.isArray(p.allocations) ? p.allocations : [];
+            const allocatedToThis = allocations
+              .filter(a => {
+                const billMatch = (a.billId === invoiceId) || (a.billNumber === invoiceNo);
+                const typeOk = a.billType ? a.billType === 'invoice' : true;
+                return billMatch && typeOk;
+              })
               .reduce((s, a) => s + (parseFloat(a.allocatedAmount) || 0), 0);
-            return sum + allocSum;
-          }, 0);
+            const isDirect = (p.invoiceId === invoiceId) || (p.invoiceNumber === invoiceNo);
+            const relates = allocatedToThis > 0 || isDirect;
+            return { p, allocatedToThis, isDirect, relates };
+          }).filter(x => x.relates);
 
-          // Fallback to payment amount if no allocations found
-          const directPaid = relatedPayments.reduce((sum, p) => sum + (parseFloat(p.amount || 0)), 0);
-          const paidAmount = allocatedPaid > 0 ? allocatedPaid : directPaid;
+          // Compute paid amount using allocation sum plus direct-only receipts if no allocation
+          const allocatedSum = relatedPaymentsDetailed.reduce((s, x) => s + (x.allocatedToThis || 0), 0);
+          const directOnlySum = relatedPaymentsDetailed
+            .filter(x => x.isDirect && (x.allocatedToThis || 0) === 0)
+            .reduce((s, x) => s + (parseFloat(x.p.totalAmount || x.p.amount || 0)), 0);
+          const paidAmount = allocatedSum + directOnlySum;
 
           const balance = invoiceAmount - paidAmount;
           const status = balance <= 0 ? 'Paid' : balance < invoiceAmount ? 'Partially Paid' : 'Unpaid';
@@ -141,7 +143,7 @@ const InvoiceCollectionReport = ({ db, userId, appId, dateRange, selectedParty, 
             paidAmount,
             balance,
             status,
-            paymentsApplied: relatedPayments.length
+            paymentsApplied: relatedPaymentsDetailed.length
           };
         });
 
@@ -172,33 +174,25 @@ const InvoiceCollectionReport = ({ db, userId, appId, dateRange, selectedParty, 
     setQuickSummaryInvoice(invoice);
     
     try {
-      // Fetch payments for this specific invoice by both id and invoice number
-      const basePath = `artifacts/${appId}/users/${userId}`;
-      const qById = query(
-        collection(db, `${basePath}/payments`),
-        where('invoiceId', '==', invoice.id)
-      );
-      const qByNumber = query(
-        collection(db, `${basePath}/payments`),
-        where('invoiceNumber', '==', invoice.invoiceNo)
-      );
-      
-      const [snapById, snapByNumber] = await Promise.all([
-        getDocs(qById),
-        getDocs(qByNumber)
-      ]);
-      
-      const byId = snapById.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      const byNumber = snapByNumber.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      
-      // Merge and de-duplicate by id
-      const merged = [...byId, ...byNumber].reduce((acc, p) => {
-        acc[p.id] = p;
-        return acc;
-      }, {});
-      const payments = Object.values(merged);
-      
-      setInvoicePayments(payments);
+      // Use in-memory payments to ensure same logic as table
+      const invoiceId = invoice.id;
+      const invoiceNo = invoice.invoiceNo;
+      const relevant = (allPayments || []).map(p => {
+        const allocations = Array.isArray(p.allocations) ? p.allocations : [];
+        const allocatedToThis = allocations
+          .filter(a => {
+            const billMatch = (a.billId === invoiceId) || (a.billNumber === invoiceNo);
+            const typeOk = a.billType ? a.billType === 'invoice' : true;
+            return billMatch && typeOk;
+          })
+          .reduce((s, a) => s + (parseFloat(a.allocatedAmount) || 0), 0);
+        const isDirect = (p.invoiceId === invoiceId) || (p.invoiceNumber === invoiceNo);
+        const relates = allocatedToThis > 0 || isDirect;
+        return relates ? { ...p, allocatedAmount: allocatedToThis } : null;
+      }).filter(Boolean)
+        .sort((a, b) => new Date(a.paymentDate || a.date || '') - new Date(b.paymentDate || b.date || ''));
+
+      setInvoicePayments(relevant);
       setShowReceiptPreview(true);
     } catch (error) {
       console.error('Error fetching invoice payments:', error);
@@ -206,6 +200,22 @@ const InvoiceCollectionReport = ({ db, userId, appId, dateRange, selectedParty, 
       setShowReceiptPreview(true);
     }
   };
+
+  // Register custom receipt modal with global LIFO ESC manager
+  useEffect(() => {
+    if (showReceiptPreview) {
+      const onClose = () => {
+        setShowReceiptPreview(false);
+        setQuickSummaryInvoice(null);
+        setInvoicePayments([]);
+      };
+      globalModalManager.register(receiptModalIdRef.current, onClose);
+      return () => {
+        globalModalManager.unregister(receiptModalIdRef.current);
+      };
+    }
+    return undefined;
+  }, [showReceiptPreview]);
 
   // Prepare export data for GlobalExportButtons
   const getExportData = () => sortedData;
@@ -364,6 +374,7 @@ const InvoiceCollectionReport = ({ db, userId, appId, dateRange, selectedParty, 
             <button 
               className="absolute top-2 right-2 text-gray-500 hover:text-gray-800 text-xl" 
               onClick={() => {
+                globalModalManager.unregister(receiptModalIdRef.current);
                 setShowReceiptPreview(false);
                 setQuickSummaryInvoice(null);
                 setInvoicePayments([]);

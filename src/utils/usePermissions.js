@@ -1,12 +1,23 @@
 import { useState, useEffect } from 'react';
-import { doc, getDoc } from 'firebase/firestore';
-import { getAuth } from 'firebase/auth';
+import { getDoc } from 'firebase/firestore';
+import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { db } from '../firebase.config';
+import { getSettingsDoc, getBackofficeAdminDoc } from './appArtifacts';
 
-export const usePermissions = (db, userId) => {
+export const usePermissions = () => {
     const [userPermissions, setUserPermissions] = useState([]);
     const [loading, setLoading] = useState(true);
     const [userRole, setUserRole] = useState(null);
+    const [systemRole, setSystemRole] = useState(null);
+    const [userId, setUserId] = useState(null);
+
+    useEffect(() => {
+        const auth = getAuth();
+        const unsub = onAuthStateChanged(auth, (u) => {
+            setUserId(u ? u.uid : null);
+        });
+        return () => unsub();
+    }, []);
 
     useEffect(() => {
         if (!db || !userId) {
@@ -16,11 +27,23 @@ export const usePermissions = (db, userId) => {
 
         const loadUserPermissions = async () => {
             try {
-                const userDoc = await getDoc(doc(db, 'users', userId));
+                const userDoc = await getDoc(getSettingsDoc(userId));
                 if (userDoc.exists()) {
                     const userData = userDoc.data();
                     setUserPermissions(userData.permissions || []);
-                    setUserRole(userData.companyRole);
+                    setUserRole(userData.companyRole || null);
+                }
+                // Check new backoffice role document
+                const backofficeDoc = await getDoc(getBackofficeAdminDoc(userId));
+                if (backofficeDoc.exists()) {
+                    const bo = backofficeDoc.data();
+                    setSystemRole(bo.role || 'superAdmin');
+                } else {
+                    // Fallback to legacy systemRole in settings
+                    if (userDoc.exists()) {
+                        const userData = userDoc.data();
+                        if (userData.systemRole) setSystemRole(userData.systemRole);
+                    }
                 }
                 setLoading(false);
             } catch (error) {
@@ -30,7 +53,7 @@ export const usePermissions = (db, userId) => {
         };
 
         loadUserPermissions();
-    }, [db, userId]);
+    }, [userId]);
 
     const hasPermission = (permissionId) => {
         // Owners and admins have all permissions
@@ -50,9 +73,16 @@ export const usePermissions = (db, userId) => {
         return permissionIds.every(permissionId => hasPermission(permissionId));
     };
 
+    const isAdmin = userRole === 'owner' || userRole === 'admin' || !!systemRole;
+    const isSystemAdmin = !!systemRole;
+
     return {
+        userId,
         userPermissions,
         userRole,
+        systemRole,
+        isAdmin,
+        isSystemAdmin,
         loading,
         hasPermission,
         hasAnyPermission,
@@ -79,7 +109,7 @@ export const PERMISSIONS = {
 
 // Permission check component
 export const PermissionGate = ({ permission, children, fallback = null }) => {
-    const { hasPermission, loading } = usePermissions(permission);
+    const { hasPermission, loading } = usePermissions();
 
     if (loading) {
         return <div className="text-center py-4">Loading...</div>;
@@ -119,3 +149,24 @@ export const AdminOnly = ({ children, fallback = null }) => {
 
     return children;
 }; 
+
+// System admin only component
+export const SystemAdminOnly = ({ children, fallback = null }) => {
+    const { isSystemAdmin, loading } = usePermissions();
+
+    if (loading) {
+        return <div className="text-center py-4">Loading...</div>;
+    }
+
+    if (!isSystemAdmin) {
+        return fallback || (
+            <div className="text-center py-8">
+                <div className="text-red-500 text-6xl mb-4">🔒</div>
+                <h3 className="text-lg font-semibold text-gray-800 mb-2">System Admin Access Required</h3>
+                <p className="text-gray-600">This backoffice is restricted to system administrators.</p>
+            </div>
+        );
+    }
+
+    return children;
+};

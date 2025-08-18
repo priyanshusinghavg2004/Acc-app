@@ -33,7 +33,7 @@ const PurchaseReceiptTemplate = forwardRef(({ receipt, bill, company, party, rec
   };
   
   return (
-    <div ref={ref} className="bg-white p-8 rounded shadow max-w-lg mx-auto text-gray-900 font-sans" style={{ minHeight: '297mm', width: '210mm' }}>
+    <div ref={ref} className="bg-white p-4 md:p-8 rounded shadow max-w-lg w-full mx-auto text-gray-900 font-sans">
       {/* Header */}
       <div className="text-center mb-6">
         <h1 className="text-3xl font-bold text-gray-800 mb-2">PAYMENT RECEIPT</h1>
@@ -49,7 +49,7 @@ const PurchaseReceiptTemplate = forwardRef(({ receipt, bill, company, party, rec
       
       {/* Receipt Details */}
       <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <span className="font-semibold text-gray-700">Date:</span>
             <div className="text-lg">{formatDate(receipt.date)}</div>
@@ -73,7 +73,7 @@ const PurchaseReceiptTemplate = forwardRef(({ receipt, bill, company, party, rec
             </div>
           </div>
           
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <span className="font-semibold text-gray-700">Payment Mode:</span>
               <div className="text-lg">{receipt.mode || receipt.paymentMethod || 'Cash'}</div>

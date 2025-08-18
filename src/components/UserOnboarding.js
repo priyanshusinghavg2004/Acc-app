@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { doc, updateDoc, getDoc } from 'firebase/firestore';
+import { updateDoc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase.config';
+import { getSettingsDoc } from '../utils/appArtifacts';
 
 const UserOnboarding = ({ user, onComplete }) => {
   const [currentStep, setCurrentStep] = useState(0);
@@ -106,7 +107,7 @@ const UserOnboarding = ({ user, onComplete }) => {
       }
 
       try {
-        const userDoc = doc(db, 'users', user.uid);
+        const userDoc = getSettingsDoc(user.uid);
         const userData = await getDoc(userDoc);
         
         if (userData.exists() && userData.data().onboardingCompleted) {
@@ -188,7 +189,7 @@ const UserOnboarding = ({ user, onComplete }) => {
   const completeOnboarding = async () => {
     try {
       if (user && user.uid) {
-        const userDoc = doc(db, 'users', user.uid);
+        const userDoc = getSettingsDoc(user.uid);
         await updateDoc(userDoc, {
           onboardingCompleted: true,
           onboardingCompletedAt: new Date()
